@@ -24,6 +24,12 @@ test:
 test-race:
 	go test -race ./...
 
+# Integration tests are gated behind the `integration` build tag and are NOT
+# run by `test`/`test-race`. They require a host with ZFS (zfs/zpool binaries,
+# loaded kernel module, root) and a `tank/data@c` dataset to copy from.
+integration:
+	go test -tags integration -v ./...
+
 test-docker:
 	docker build -t zfsbackup-test . && docker run --rm zfsbackup-test
 

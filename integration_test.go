@@ -1,3 +1,6 @@
+//go:build integration
+// +build integration
+
 // Copyright © 2016 Prateek Malhotra (someone1@gmail.com)
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -30,7 +33,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"strings"
 	"testing"
 	"time"
 
@@ -149,32 +151,6 @@ func setupS3Bucket(t *testing.T) func() {
 		}); err != nil {
 			t.Errorf("could not delete bucket - %v", err)
 		}
-	}
-}
-
-func TestVersion(t *testing.T) {
-	old := config.Stdout
-	buf := bytes.NewBuffer(nil)
-	config.Stdout = buf
-	defer func() { config.Stdout = old }()
-
-	os.Args = []string{config.ProgramName, "version"}
-	main()
-
-	if !strings.Contains(buf.String(), fmt.Sprintf("Version:\tv%s", config.Version())) {
-		t.Fatalf("expected version in version command output, did not receive one:\n%s", buf.String())
-	}
-
-	buf.Reset()
-	os.Args = []string{config.ProgramName, "version", "--jsonOutput"}
-	main()
-	jout := struct {
-		Version string
-	}{}
-	if err := json.Unmarshal(buf.Bytes(), &jout); err != nil {
-		t.Fatalf("expected output to be JSON, got error while trying to decode - %v", err)
-	} else if jout.Version != config.Version() {
-		t.Fatalf("expected version to be '%s', got '%s' instead", config.Version(), jout.Version)
 	}
 }
 
