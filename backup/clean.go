@@ -40,7 +40,7 @@ import (
 // If cleanLocal is true, then local manifests not found in the destination are ignored and deleted. This function will optionally
 // delete broken backup sets in the destination if the --force flag is provided.
 // nolint:funlen,gocyclo // Difficult to break this up
-func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal bool) error {
+func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool) error {
 	ctx, cancel := context.WithCancel(pctx)
 	defer cancel()
 
@@ -99,6 +99,10 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal bool) error 
 	} else {
 		for _, manifest := range localOnlyFiles {
 			manifestPath := filepath.Join(localCachePath, manifest)
+			if dryRun {
+				log.AppLogger.Noticef("Would delete local manifest %s.", manifestPath)
+				continue
+			}
 			err := os.Remove(manifestPath)
 			if err != nil {
 				log.AppLogger.Errorf("Could not delete local manifest %s due to error - %v", manifestPath, err)
@@ -161,9 +165,13 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal bool) error 
 					}
 					// nolint:gosec // MD5 not used for cryptographic purposes here
 					manifestPath := filepath.Join(localCachePath, fmt.Sprintf("%x", md5.Sum([]byte(tempManifest.ObjectName))))
-					err = os.Remove(manifestPath)
-					if err != nil {
-						log.AppLogger.Errorf("Could not delete local manifest %s due to error - %v. Continuing.", manifestPath, err)
+					if dryRun {
+						log.AppLogger.Noticef("Would delete local cached manifest %s.", manifestPath)
+					} else {
+						err = os.Remove(manifestPath)
+						if err != nil {
+							log.AppLogger.Errorf("Could not delete local manifest %s due to error - %v. Continuing.", manifestPath, err)
+						}
 					}
 
 					// Delete all volumes already processed in the manifest
@@ -179,6 +187,15 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal bool) error 
 				}
 			}
 		}
+	}
+
+	if dryRun {
+		log.AppLogger.Noticef("Dry-run: would delete %d objects in destination.", len(allObjects))
+		for _, obj := range allObjects {
+			log.AppLogger.Noticef("Would delete %s.", filepath.Join(target, obj))
+		}
+		log.AppLogger.Noticef("Done.")
+		return nil
 	}
 
 	log.AppLogger.Noticef("Starting to delete %d objects in destination.", len(allObjects))

@@ -27,6 +27,7 @@ import (
 )
 
 var cleanLocal bool
+var cleanDryRun bool
 
 // cleanCmd represents the clean command
 var cleanCmd = &cobra.Command{
@@ -37,7 +38,7 @@ var cleanCmd = &cobra.Command{
 	PreRunE:       validateCleanFlags,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		jobInfo.Destinations = []string{args[0]}
-		return backup.Clean(cmd.Context(), &jobInfo, cleanLocal)
+		return backup.Clean(cmd.Context(), &jobInfo, cleanLocal, cleanDryRun)
 	},
 }
 
@@ -45,6 +46,7 @@ func init() {
 	RootCmd.AddCommand(cleanCmd)
 
 	cleanCmd.Flags().BoolVarP(&cleanLocal, "cleanLocal", "", false, "Delete any files found in the local cache that shouldn't be there.")
+	cleanCmd.Flags().BoolVarP(&cleanDryRun, "dry-run", "n", false, "Do not delete anything; only log what would be deleted.")
 	cleanCmd.Flags().BoolVarP(&jobInfo.Force, "force", "", false,
 		"This will force the deletion of broken backup sets (sets where volumes expected in the manifest file are not found). Use with caution.",
 	)
