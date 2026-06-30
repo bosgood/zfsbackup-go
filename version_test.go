@@ -48,11 +48,14 @@ func TestVersion(t *testing.T) {
 	os.Args = []string{config.ProgramName, "version", "--jsonOutput"}
 	main()
 	jout := struct {
-		Version string
+		Version   string
+		GitCommit string
 	}{}
 	if err := json.Unmarshal(buf.Bytes(), &jout); err != nil {
 		t.Fatalf("expected output to be JSON, got error while trying to decode - %v", err)
 	} else if jout.Version != config.Version() {
 		t.Fatalf("expected version to be '%s', got '%s' instead", config.Version(), jout.Version)
+	} else if jout.GitCommit == "" {
+		t.Fatalf("expected a git commit in version output, got an empty string")
 	}
 }

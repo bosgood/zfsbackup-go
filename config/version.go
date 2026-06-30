@@ -20,7 +20,10 @@
 
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"runtime/debug"
+)
 
 const (
 	// VersionNumber represents the current version of zfsbackup
@@ -29,7 +32,28 @@ const (
 	ProgramName = "zfsbackup"
 )
 
+// GitCommit is the git SHA the binary was built from. It may be set at build
+// time via -ldflags "-X github.com/someone1/zfsbackup-go/config.GitCommit=...".
+// When unset, GitCommitSHA falls back to the VCS info embedded by `go build`.
+var GitCommit string
+
 // Version will return the current version of zfsbackup
 func Version() string {
 	return fmt.Sprintf("%.2g", VersionNumber)
+}
+
+// GitCommitSHA returns the git commit the binary was built from, or "unknown"
+// if it could not be determined.
+func GitCommitSHA() string {
+	if GitCommit != "" {
+		return GitCommit
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" {
+				return setting.Value
+			}
+		}
+	}
+	return "unknown"
 }

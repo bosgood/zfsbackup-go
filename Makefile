@@ -34,7 +34,7 @@ test-docker:
 	docker build -t zfsbackup-test . && docker run --rm zfsbackup-test
 
 build:
-	${GOPATH}/bin/gox -ldflags="-w -s" -osarch=${TARGETS}
+	${GOPATH}/bin/gox -ldflags="-w -s -X github.com/someone1/zfsbackup-go/config.GitCommit=${COMMIT_HASH}" -osarch=${TARGETS}
 
 build-dev:
-	${GOPATH}/bin/gox -osarch=${TARGETS} -output="{{.Dir}}_{{.OS}}_{{.Arch}}-${COMMIT_HASH}"
+	${GOPATH}/bin/gox -ldflags="-X github.com/someone1/zfsbackup-go/config.GitCommit=${COMMIT_HASH}" -osarch=${TARGETS} -output="{{.Dir}}_{{.OS}}_{{.Arch}}-${COMMIT_HASH}"
