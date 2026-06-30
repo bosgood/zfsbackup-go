@@ -46,8 +46,12 @@ import (
 	"github.com/someone1/zfsbackup-go/log"
 )
 
-// AWSS3BackendPrefix is the URI prefix used for the AWSS3Backend.
-const AWSS3BackendPrefix = "s3"
+const (
+	// AWSS3BackendPrefix is the URI prefix used for the AWSS3Backend.
+	AWSS3BackendPrefix = "s3"
+	// AWSS3PageSize is the maximum page size for listing objects in S3.
+	AWSS3PageSize = 1000
+)
 
 // AWSS3Backend integrates with Amazon Web Services' S3.
 type AWSS3Backend struct {
@@ -352,16 +356,22 @@ func (a *AWSS3Backend) Close() error {
 // List will iterate through all objects in the configured AWS S3 bucket and return
 // a list of keys, filtering by the provided prefix.
 func (a *AWSS3Backend) List(ctx context.Context, prefix string) ([]string, error) {
-	resp, err := a.client.ListObjectsV2WithContext(ctx, &s3.ListObjectsV2Input{
-		Bucket:  aws.String(a.bucketName),
-		MaxKeys: aws.Int64(1000),
-		Prefix:  aws.String(a.prefix + prefix),
-	})
+	fetchPage := func(token *string) (*s3.ListObjectsV2Output, error) {
+		return a.client.ListObjectsV2WithContext(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(a.bucketName),
+			MaxKeys:           aws.Int64(AWSS3PageSize),
+			Prefix:            aws.String(a.prefix + prefix),
+			ContinuationToken: token,
+		})
+	}
+
+	// Initial page
+	resp, err := fetchPage(nil)
 	if err != nil {
 		return nil, err
 	}
 
-	l := make([]string, 0, 1000)
+	l := make([]string, 0, AWSS3PageSize)
 	for {
 		for _, obj := range resp.Contents {
 			l = append(l, strings.TrimPrefix(*obj.Key, a.prefix))
@@ -371,12 +381,8 @@ func (a *AWSS3Backend) List(ctx context.Context, prefix string) ([]string, error
 			break
 		}
 
-		resp, err = a.client.ListObjectsV2WithContext(ctx, &s3.ListObjectsV2Input{
-			Bucket:            aws.String(a.bucketName),
-			MaxKeys:           aws.Int64(1000),
-			Prefix:            aws.String(a.prefix + prefix),
-			ContinuationToken: resp.NextContinuationToken,
-		})
+		// Next page
+		resp, err = fetchPage(resp.NextContinuationToken)
 		if err != nil {
 			return nil, fmt.Errorf("s3 backend: could not list bucket due to error - %v", err)
 		}
