@@ -20,6 +20,10 @@ FROM golang:1.23-bookworm
 
 WORKDIR /src
 
+# Install gox, the cross-compilation tool used by the Makefile build targets.
+# It lands in $GOPATH/bin (/go/bin), which is on PATH, so `make build` works.
+RUN go install github.com/mitchellh/gox@v1.0.1
+
 # Download dependencies first so they are cached independently of source edits.
 COPY go.mod go.sum ./
 RUN go mod download
