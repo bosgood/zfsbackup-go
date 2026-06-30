@@ -24,6 +24,9 @@ test:
 test-race:
 	go test -race ./...
 
+test-docker:
+	docker build -t zfsbackup-test . && docker run --rm zfsbackup-test
+
 build:
 	${GOPATH}/bin/gox -ldflags="-w -s" -osarch=${TARGETS}
 
