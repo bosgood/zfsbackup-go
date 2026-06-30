@@ -45,6 +45,7 @@ type mockS3Client struct {
 	s3iface.S3API
 
 	headcallcount int
+	listPrefix    string
 }
 
 type mockS3Uploader struct {
@@ -118,6 +119,15 @@ func (m *mockS3Client) ListObjectsV2WithContext(
 	token := ""
 	if in.ContinuationToken != nil {
 		token = *in.ContinuationToken
+	}
+
+	// S3 requires the Prefix on a continuation request to match the original
+	// request. Record it on the first page and enforce equality on subsequent
+	// pages so a dropped path prefix is caught.
+	if token == "" {
+		m.listPrefix = aws.StringValue(in.Prefix)
+	} else if aws.StringValue(in.Prefix) != m.listPrefix {
+		return nil, errTest
 	}
 
 	if v, ok := responses[token]; ok {
@@ -418,6 +428,15 @@ func TestS3List(t *testing.T) {
 			},
 			errTest: errTestErrTest,
 			prefix:  s3BadKey,
+		},
+		{
+			// With a bucket path prefix, the continuation request must carry the
+			// full "a.prefix + prefix" - otherwise everything past the first page
+			// is silently dropped (regression test).
+			conf: &BackendConfig{
+				TargetURI: AWSS3BackendPrefix + "://goodbucket/someprefix",
+			},
+			errTest: nilErrTest,
 		},
 	}
 

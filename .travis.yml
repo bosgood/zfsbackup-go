@@ -54,7 +54,7 @@ install:
 script:
   - make build
   - chmod +x ./integration_test.sh && ./integration_test.sh
-  - sudo -E TMPDIR=$TMPDIR $(which go) test -race -v -coverprofile=coverage.out -covermode=atomic -coverpkg=$(go list ./... | grep -v '/vendor/' | paste -sd, -) ./...  
+  - sudo -E TMPDIR=$TMPDIR $(which go) test -tags integration -race -v -coverprofile=coverage.out -covermode=atomic -coverpkg=$(go list ./... | grep -v '/vendor/' | paste -sd, -) ./...
   - make lint
 
 after_success:
