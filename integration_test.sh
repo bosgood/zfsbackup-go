@@ -6,7 +6,7 @@ mkdir -p $SCRATCHDIR/integrationtest
 TARGET="file://$SCRATCHDIR/integrationtest/"
 USER="test@example.com"
 
-echo "Basic send/recieve test with encryption and compression"
+echo "Basic send/receive test with encryption and compression"
 go build ./
 
 sudo ./zfsbackup-go send \
