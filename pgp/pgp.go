@@ -25,83 +25,124 @@ import (
 	"os"
 	"strings"
 
-	"golang.org/x/crypto/openpgp"
+	openpgp "github.com/ProtonMail/go-crypto/openpgp/v2"
+	"github.com/ProtonMail/gopenpgp/v3/crypto"
 
 	"github.com/someone1/zfsbackup-go/log"
 )
 
 var (
-	pubRing openpgp.EntityList
-	secRing openpgp.EntityList
+	pubKeys  []*crypto.Key
+	privKeys []*crypto.Key
 )
 
-// GetPublicKeyByEmail will return the key from the pubpoic PGP ring (if available) matching
-// the provided email address.
-func GetPublicKeyByEmail(email string) *openpgp.Entity {
-	return getKeyByEmail(pubRing, email)
+// GetPublicKeyByEmail returns the key from the public PGP ring (if available)
+// matching the provided email address.
+func GetPublicKeyByEmail(email string) *crypto.Key {
+	return findKeyByEmail(pubKeys, email)
 }
 
-// GetPrivateKeyByEmail will return the key from the secret PGP ring (if available) matching
-// the provided email address.
-func GetPrivateKeyByEmail(email string) *openpgp.Entity {
-	return getKeyByEmail(secRing, email)
+// GetPrivateKeyByEmail returns the key from the secret PGP ring (if available)
+// matching the provided email address. The returned key may be locked.
+func GetPrivateKeyByEmail(email string) *crypto.Key {
+	return findKeyByEmail(privKeys, email)
 }
 
-// GetCombinedKeyRing will return both the public and secret key rings combined
-func GetCombinedKeyRing() openpgp.KeyRing {
-	return append(pubRing, secRing...)
+// ReplacePrivateKey swaps a previously-returned locked key with its unlocked
+// counterpart in the in-memory secret ring so subsequent lookups receive the
+// unlocked key.
+func ReplacePrivateKey(old, unlocked *crypto.Key) {
+	for i, k := range privKeys {
+		if k == old {
+			privKeys[i] = unlocked
+			return
+		}
+	}
 }
 
-// PromptFunc is used to satisfy the openpgp package's requirements
-func PromptFunc(keys []openpgp.Key, symmetric bool) ([]byte, error) {
-	panic("secret keys should have been decrypted already")
-}
-
-func getKeyByEmail(keyring openpgp.EntityList, email string) *openpgp.Entity {
-	for _, entity := range keyring {
+func findKeyByEmail(keys []*crypto.Key, email string) *crypto.Key {
+	for _, k := range keys {
+		entity := k.GetEntity()
+		if entity == nil {
+			continue
+		}
 		for _, ident := range entity.Identities {
-			if ident.UserId.Email == email {
-				return entity
+			if ident.UserId != nil && ident.UserId.Email == email {
+				return k
 			}
 		}
 	}
-
 	return nil
 }
 
-// LoadPublicRing will open and parse the PGP keyring from the file path provided.
+// LoadPublicRing opens and parses the PGP public keyring from the given path.
 func LoadPublicRing(path string) error {
-	pubringFile, err := os.Open(path)
+	keys, err := readKeysFromFile(path)
 	if err != nil {
 		return err
 	}
-	pubRing, err = openpgp.ReadArmoredKeyRing(pubringFile)
-	return err
+	pubKeys = keys
+	return nil
 }
 
-// LoadPrivateRing will open and parse the PGP keyring from the file path provided.
+// LoadPrivateRing opens and parses the PGP private keyring from the given path.
+// Keys may be locked; they are not unlocked here.
 func LoadPrivateRing(path string) error {
-	privringFile, err := os.Open(path)
+	keys, err := readKeysFromFile(path)
 	if err != nil {
 		return err
 	}
-	secRing, err = openpgp.ReadArmoredKeyRing(privringFile)
-
-	return err
+	privKeys = keys
+	return nil
 }
 
-// PrintPGPDebugInformation will output a debug log entry listing the keys it has read in from each keyring.
+func readKeysFromFile(path string) ([]*crypto.Key, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	entities, err := openpgp.ReadArmoredKeyRing(f)
+	if err != nil {
+		return nil, err
+	}
+
+	keys := make([]*crypto.Key, 0, len(entities))
+	for _, e := range entities {
+		k, err := crypto.NewKeyFromEntity(e)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, nil
+}
+
+// PrintPGPDebugInformation logs the keys it has read in from each keyring.
 func PrintPGPDebugInformation() {
 	debugStr := make([]string, 0, 4)
 	debugStr = append(debugStr, "PGP Debug Info:\nLoaded Private Keys:")
-	for _, key := range secRing {
-		debugStr = append(debugStr, fmt.Sprintf("\t%v\n\t%v", key.PrimaryKey.KeyIdString(), key.Identities))
+	for _, k := range privKeys {
+		debugStr = append(debugStr, fmt.Sprintf("\t%s\n\t%v", k.GetHexKeyID(), identitiesOf(k)))
 	}
 
 	debugStr = append(debugStr, "\nLoaded Public Keys:")
-	for _, key := range pubRing {
-		debugStr = append(debugStr, fmt.Sprintf("\t%v\n\t%v", key.PrimaryKey.KeyIdString(), key.Identities))
+	for _, k := range pubKeys {
+		debugStr = append(debugStr, fmt.Sprintf("\t%s\n\t%v", k.GetHexKeyID(), identitiesOf(k)))
 	}
 
 	log.AppLogger.Debugf("%s", strings.Join(debugStr, "\n"))
+}
+
+func identitiesOf(k *crypto.Key) []string {
+	entity := k.GetEntity()
+	if entity == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(entity.Identities))
+	for name := range entity.Identities {
+		ids = append(ids, name)
+	}
+	return ids
 }

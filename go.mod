@@ -1,11 +1,13 @@
 module github.com/someone1/zfsbackup-go
 
-go 1.18
+go 1.23.0
 
 require (
 	cloud.google.com/go/storage v1.27.0
 	github.com/Azure/azure-sdk-for-go v66.0.0+incompatible
 	github.com/Azure/azure-storage-blob-go v0.11.0
+	github.com/ProtonMail/go-crypto v1.4.1
+	github.com/ProtonMail/gopenpgp/v3 v3.4.1
 	github.com/aws/aws-sdk-go v1.44.104
 	github.com/cenkalti/backoff v2.2.1+incompatible
 	github.com/dustin/go-humanize v1.0.0
@@ -18,8 +20,8 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/sftp v1.13.5
 	github.com/spf13/cobra v1.5.0
-	golang.org/x/crypto v0.0.0-20220919173607-35f4265a4bc0
-	golang.org/x/sync v0.0.0-20220907140024-f12130a52804
+	golang.org/x/crypto v0.41.0
+	golang.org/x/sync v0.16.0
 	google.golang.org/api v0.97.0
 )
 
@@ -35,7 +37,7 @@ require (
 	github.com/Azure/go-autorest/autorest/to v0.3.0 // indirect
 	github.com/Azure/go-autorest/logger v0.2.1 // indirect
 	github.com/Azure/go-autorest/tracing v0.6.0 // indirect
-	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/cloudflare/circl v1.6.2 // indirect
 	github.com/dnaeon/go-vcr v1.1.0 // indirect
 	github.com/form3tech-oss/jwt-go v3.2.2+incompatible // indirect
 	github.com/gofrs/uuid v4.3.0+incompatible // indirect
@@ -52,11 +54,11 @@ require (
 	github.com/mattn/go-ieproxy v0.0.9 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	go.opencensus.io v0.23.0 // indirect
-	golang.org/x/net v0.0.0-20220921203646-d300de134e69 // indirect
+	golang.org/x/net v0.42.0 // indirect
 	golang.org/x/oauth2 v0.0.0-20220909003341-f21342109be1 // indirect
-	golang.org/x/sys v0.0.0-20220919091848-fb04ddd9f9c8 // indirect
-	golang.org/x/term v0.0.0-20220919170432-7a66f970e087 // indirect
-	golang.org/x/text v0.3.7 // indirect
+	golang.org/x/sys v0.35.0 // indirect
+	golang.org/x/term v0.34.0 // indirect
+	golang.org/x/text v0.28.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/genproto v0.0.0-20220921223823-23cae91e6737 // indirect

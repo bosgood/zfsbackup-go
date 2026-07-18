@@ -31,11 +31,11 @@ import (
 	"runtime"
 	"strings"
 
+	pgpcrypto "github.com/ProtonMail/gopenpgp/v3/crypto"
 	humanize "github.com/dustin/go-humanize"
 	"github.com/juju/ratelimit"
 	"github.com/op/go-logging"
 	"github.com/spf13/cobra"
-	"golang.org/x/crypto/openpgp"
 	"golang.org/x/crypto/ssh/terminal"
 
 	"github.com/someone1/zfsbackup-go/config"
@@ -215,32 +215,30 @@ func processFlags(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func getAndDecryptPrivateKey(email string) (*openpgp.Entity, error) {
-	var entity *openpgp.Entity
-	if entity = pgp.GetPrivateKeyByEmail(email); entity == nil {
+func getAndDecryptPrivateKey(email string) (*pgpcrypto.Key, error) {
+	key := pgp.GetPrivateKeyByEmail(email)
+	if key == nil {
 		log.AppLogger.Errorf("Could not find private key for %s", email)
 		return nil, errInvalidInput
 	}
 
-	if entity.PrivateKey != nil && entity.PrivateKey.Encrypted {
-		validatePassphrase()
-		if err := entity.PrivateKey.Decrypt(passphrase); err != nil {
-			log.AppLogger.Errorf("Error decrypting private key: %v", err)
-			return nil, errInvalidInput
-		}
+	locked, err := key.IsLocked()
+	if err != nil {
+		log.AppLogger.Errorf("Error inspecting private key: %v", err)
+		return nil, errInvalidInput
+	}
+	if !locked {
+		return key, nil
 	}
 
-	for _, subkey := range entity.Subkeys {
-		if subkey.PrivateKey != nil && subkey.PrivateKey.Encrypted {
-			validatePassphrase()
-			if err := subkey.PrivateKey.Decrypt(passphrase); err != nil {
-				log.AppLogger.Errorf("Error decrypting subkey's private key: %v", err)
-				return nil, errInvalidInput
-			}
-		}
+	validatePassphrase()
+	unlocked, err := key.Unlock(passphrase)
+	if err != nil {
+		log.AppLogger.Errorf("Error decrypting private key: %v", err)
+		return nil, errInvalidInput
 	}
-
-	return entity, nil
+	pgp.ReplacePrivateKey(key, unlocked)
+	return unlocked, nil
 }
 
 func loadSendKeys() error {

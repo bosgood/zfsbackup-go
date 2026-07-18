@@ -23,7 +23,6 @@ package files
 import (
 	"bufio"
 	"context"
-	"crypto"
 	"crypto/md5"  // nolint:gosec // MD5 not used for cryptographic purposes here
 	"crypto/sha1" // nolint:gosec // SHA1 not used for cryptographic purposes here
 	"crypto/sha256"
@@ -38,16 +37,14 @@ import (
 	"sync"
 	"time"
 
+	pgpcrypto "github.com/ProtonMail/gopenpgp/v3/crypto"
 	"github.com/dustin/go-humanize"
 	"github.com/juju/ratelimit"
 	gzip "github.com/klauspost/pgzip"
 	"github.com/miolini/datacounter"
-	"golang.org/x/crypto/openpgp"
-	"golang.org/x/crypto/openpgp/packet"
 
 	"github.com/someone1/zfsbackup-go/config"
 	"github.com/someone1/zfsbackup-go/log"
-	"github.com/someone1/zfsbackup-go/pgp"
 )
 
 var (
@@ -94,8 +91,9 @@ type VolumeInfo struct {
 	rw  io.ReadCloser
 	cmd *exec.Cmd
 	// PGP objects
-	pgpw io.WriteCloser
-	pgpr *openpgp.MessageDetails
+	pgpw      io.WriteCloser
+	pgpr      *pgpcrypto.VerifyDataReader
+	verifySig bool
 	// Detail Objects
 	counter   *datacounter.WriterCounter
 	usingPipe bool
@@ -123,14 +121,16 @@ func (v *VolumeInfo) Read(p []byte) (int, error) {
 		return 0, fmt.Errorf("nothing to read from")
 	}
 	i, err := v.r.Read(p)
-	if err == io.EOF && v.pgpr != nil {
-		if v.pgpr.IsSigned {
-			if v.pgpr.SignatureError != nil {
-				return i, v.pgpr.SignatureError
-			}
-			if v.pgpr.SignedBy == nil {
-				return i, fmt.Errorf("did not have ths key signature to verify the message with")
-			}
+	if err == io.EOF && v.pgpr != nil && v.verifySig {
+		result, verr := v.pgpr.VerifySignature()
+		if verr != nil {
+			return i, verr
+		}
+		if sigErr := result.SignatureError(); sigErr != nil {
+			return i, sigErr
+		}
+		if result.SignedByKey() == nil {
+			return i, fmt.Errorf("did not have the key signature to verify the message with")
 		}
 	}
 	return i, err
@@ -203,19 +203,38 @@ func (v *VolumeInfo) Extract(ctx context.Context, j *JobInfo, isManifest bool) e
 		v.isOpened = true
 	}
 
+	var err error
+
 	if j.EncryptKey != nil || j.SignKey != nil {
-		pgpConfig := new(packet.Config)
-		pgpConfig.DefaultCompressionAlgo = packet.CompressionNone // We will do our own, thank you very much!
-		pgpConfig.DefaultCipher = packet.CipherAES256
-		pgpReader, perr := openpgp.ReadMessage(v.r, pgp.GetCombinedKeyRing(), pgp.PromptFunc, pgpConfig)
-		if perr != nil {
-			return perr
+		var pgpReader *pgpcrypto.VerifyDataReader
+		if j.EncryptKey != nil {
+			decBuilder := pgpcrypto.PGP().Decryption().DecryptionKey(j.EncryptKey)
+			if j.SignKey != nil {
+				decBuilder = decBuilder.VerificationKey(j.SignKey)
+			}
+			decHandle, derr := decBuilder.New()
+			if derr != nil {
+				return derr
+			}
+			pgpReader, err = decHandle.DecryptingReader(v.r, pgpcrypto.Bytes)
+			if err != nil {
+				return err
+			}
+		} else {
+			verifyHandle, verr := pgpcrypto.PGP().Verify().VerificationKey(j.SignKey).New()
+			if verr != nil {
+				return verr
+			}
+			pgpReader, err = verifyHandle.VerifyingReader(nil, v.r, pgpcrypto.Bytes)
+			if err != nil {
+				return err
+			}
 		}
 		v.pgpr = pgpReader
-		v.r = pgpReader.UnverifiedBody
+		v.verifySig = j.SignKey != nil
+		v.r = pgpReader
 	}
 
-	var err error
 	compressor := j.Compressor
 	if isManifest {
 		compressor = InternalCompressor
@@ -415,21 +434,27 @@ func prepareVolume(ctx context.Context, j *JobInfo, pipe, isManifest bool) (*Vol
 
 	// Prepare the Encryption/Signing writer, if required
 	if j.EncryptKey != nil || j.SignKey != nil {
-		pgpConfig := new(packet.Config)
-		pgpConfig.DefaultCompressionAlgo = packet.CompressionNone // We will do our own, thank you very much!
-		pgpConfig.DefaultCipher = packet.CipherAES256
-		pgpConfig.DefaultHash = crypto.SHA256
-		pgpConfig.RSABits = 2048
-		fileHints := new(openpgp.FileHints)
-		fileHints.IsBinary = true
-
 		var pgpWriter io.WriteCloser
 		if j.EncryptKey != nil {
-			if pgpWriter, err = openpgp.Encrypt(v.w, []*openpgp.Entity{j.EncryptKey}, j.SignKey, fileHints, pgpConfig); err != nil {
+			encBuilder := pgpcrypto.PGP().Encryption().Recipient(j.EncryptKey)
+			if j.SignKey != nil {
+				encBuilder = encBuilder.SigningKey(j.SignKey)
+			}
+			encHandle, eerr := encBuilder.New()
+			if eerr != nil {
+				return nil, eerr
+			}
+			pgpWriter, err = encHandle.EncryptingWriter(v.w, pgpcrypto.Bytes)
+			if err != nil {
 				return nil, err
 			}
 		} else {
-			if pgpWriter, err = openpgp.Sign(v.w, j.SignKey, fileHints, pgpConfig); err != nil {
+			signHandle, serr := pgpcrypto.PGP().Sign().SigningKey(j.SignKey).New()
+			if serr != nil {
+				return nil, serr
+			}
+			pgpWriter, err = signHandle.SigningWriter(v.w, pgpcrypto.Bytes)
+			if err != nil {
 				return nil, err
 			}
 		}

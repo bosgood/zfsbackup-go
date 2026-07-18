@@ -27,7 +27,7 @@ import (
 	"time"
 
 	humanize "github.com/dustin/go-humanize"
-	"golang.org/x/crypto/openpgp"
+	"github.com/ProtonMail/gopenpgp/v3/crypto"
 
 	"github.com/someone1/zfsbackup-go/log"
 )
@@ -80,8 +80,8 @@ type JobInfo struct {
 	MaxRetryTime       time.Duration   `json:"-"`
 	MaxParallelUploads int             `json:"-"`
 	MaxFileBuffer      int             `json:"-"`
-	EncryptKey         *openpgp.Entity `json:"-"`
-	SignKey            *openpgp.Entity `json:"-"`
+	EncryptKey         *crypto.Key     `json:"-"`
+	SignKey            *crypto.Key     `json:"-"`
 	ParentSnap         *JobInfo        `json:"-"`
 	UploadChunkSize    int             `json:"-"`
 }
