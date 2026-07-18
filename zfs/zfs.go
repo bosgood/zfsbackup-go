@@ -166,6 +166,31 @@ func GetZFSSendCommand(ctx context.Context, j *files.JobInfo) *exec.Cmd {
 	return cmd
 }
 
+// GetZFSSendDryRun estimates the number of bytes the configured send would
+// stream, using zfs send's dry-run (-n) parseable (-P) output. It sends no data.
+func GetZFSSendDryRun(ctx context.Context, j *files.JobInfo) (uint64, error) {
+	// Reuse the normal send command and inject -n -P right after the "send" verb.
+	base := GetZFSSendCommand(ctx, j)
+	zfsArgs := append([]string{"send", "-n", "-P"}, base.Args[2:]...)
+	cmd := exec.CommandContext(ctx, ZFSPath, zfsArgs...)
+	out := new(bytes.Buffer)
+	errB := new(bytes.Buffer)
+	cmd.Stdout = out
+	cmd.Stderr = errB
+	log.AppLogger.Debugf("Estimating ZFS send size with command \"%s\"", strings.Join(cmd.Args, " "))
+	if err := cmd.Run(); err != nil {
+		return 0, fmt.Errorf("%s (%v)", strings.TrimSpace(errB.String()), err)
+	}
+	// The parseable output includes a line of the form "size\t<bytes>".
+	for _, line := range strings.Split(out.String(), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == "size" {
+			return strconv.ParseUint(fields[1], 10, 64)
+		}
+	}
+	return 0, fmt.Errorf("could not parse size estimate from zfs send dry-run output")
+}
+
 // GetZFSReceiveCommand will return the recv command to use for the given JobInfo
 func GetZFSReceiveCommand(ctx context.Context, j *files.JobInfo) *exec.Cmd {
 	// Prepare the zfs send command

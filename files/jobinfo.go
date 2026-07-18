@@ -63,6 +63,13 @@ type JobInfo struct {
 	Full            bool          `json:"-"`
 	Incremental     bool          `json:"-"`
 	FullIfOlderThan time.Duration `json:"-"`
+	// When set, full backups are anchored on the newest snapshot whose name ends
+	// with FullSnapshotSuffix (e.g. "_monthly") and incremental backups target the
+	// newest snapshot whose name ends with IncrementalSnapshotSuffix (e.g. "_daily").
+	// This lets fullIfOlderThan chain off snapshots that survive long enough to
+	// outlive the full window, instead of ephemeral snapshots that get pruned.
+	FullSnapshotSuffix        string `json:"-"`
+	IncrementalSnapshotSuffix string `json:"-"`
 
 	// ZFS Receive options
 	Force       bool   `json:"-"`

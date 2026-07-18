@@ -113,6 +113,165 @@ func TestRetryUploadChainer(t *testing.T) {
 	}
 }
 
+func snap(name string, t time.Time) files.SnapshotInfo {
+	return files.SnapshotInfo{Name: name, CreationTime: t}
+}
+
+// fullManifest models a full backup manifest (no incremental source).
+func fullManifest(s files.SnapshotInfo) *files.JobInfo {
+	return &files.JobInfo{BaseSnapshot: s}
+}
+
+// incrManifest models an incremental backup manifest (target + source).
+func incrManifest(target, source files.SnapshotInfo) *files.JobInfo {
+	return &files.JobInfo{BaseSnapshot: target, IncrementalSnapshot: source}
+}
+
+// nolint:funlen // table-driven test
+func TestSelectSmartSnapshots(t *testing.T) {
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	day := func(n int) time.Time { return base.Add(time.Duration(n) * 24 * time.Hour) }
+	const window = 720 * time.Hour // 30 days
+	const off = -1 * time.Minute    // "unset" fullIfOlderThan
+
+	testCases := []struct {
+		name        string
+		jobInfo     files.JobInfo
+		snapshots   []files.SnapshotInfo
+		destBackups [][]*files.JobInfo
+		wantErr     error
+		wantBase    string
+		wantIncr    string // empty => full backup (no incremental source)
+	}{
+		{
+			name:        "fullIfOlderThan: no prior full does a full",
+			jobInfo:     files.JobInfo{FullIfOlderThan: window},
+			snapshots:   []files.SnapshotInfo{snap("s2", day(2)), snap("s1", day(1))},
+			destBackups: [][]*files.JobInfo{{}},
+			wantBase:    "s2",
+		},
+		{
+			name:        "fullIfOlderThan: recent full does an incremental",
+			jobInfo:     files.JobInfo{FullIfOlderThan: window},
+			snapshots:   []files.SnapshotInfo{snap("s2", day(2)), snap("s1", day(1))},
+			destBackups: [][]*files.JobInfo{{fullManifest(snap("s1", day(1)))}},
+			wantBase:    "s2",
+			wantIncr:    "s1",
+		},
+		{
+			name:        "fullIfOlderThan: last full older than window does a full",
+			jobInfo:     files.JobInfo{FullIfOlderThan: window},
+			snapshots:   []files.SnapshotInfo{snap("s2", day(40)), snap("s1", day(0))},
+			destBackups: [][]*files.JobInfo{{fullManifest(snap("s1", day(0)))}},
+			wantBase:    "s2",
+		},
+		{
+			name:    "suffix: no prior full anchors on newest monthly, not hourly",
+			jobInfo: files.JobInfo{FullIfOlderThan: window, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_daily"},
+			snapshots: []files.SnapshotInfo{
+				snap("autosnap_hourly", day(10).Add(2*time.Hour)),
+				snap("autosnap_daily", day(10)),
+				snap("autosnap_monthly", day(1)),
+			},
+			destBackups: [][]*files.JobInfo{{}},
+			wantBase:    "autosnap_monthly",
+		},
+		{
+			name:    "suffix: incremental targets newest daily, ignoring hourly",
+			jobInfo: files.JobInfo{FullIfOlderThan: window, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_daily"},
+			snapshots: []files.SnapshotInfo{
+				snap("day5_hourly", day(5).Add(3*time.Hour)),
+				snap("day5_daily", day(5)),
+				snap("day1_monthly", day(1)),
+			},
+			destBackups: [][]*files.JobInfo{{fullManifest(snap("day1_monthly", day(1)))}},
+			wantBase:    "day5_daily",
+			wantIncr:    "day1_monthly",
+		},
+		{
+			name:    "suffix: rolls onto a newer monthly once window elapses",
+			jobInfo: files.JobInfo{FullIfOlderThan: window, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_daily"},
+			snapshots: []files.SnapshotInfo{
+				snap("day32_hourly", day(32).Add(time.Hour)),
+				snap("day32_monthly", day(32)),
+				snap("day20_daily", day(20)),
+				snap("day1_monthly", day(1)),
+			},
+			destBackups: [][]*files.JobInfo{{
+				incrManifest(snap("day20_daily", day(20)), snap("day1_monthly", day(1))),
+				fullManifest(snap("day1_monthly", day(1))),
+			}},
+			wantBase: "day32_monthly",
+		},
+		{
+			name:    "suffix: pruned incremental source falls back to a full",
+			jobInfo: files.JobInfo{FullIfOlderThan: window, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_daily"},
+			snapshots: []files.SnapshotInfo{
+				snap("day10_monthly", day(10)),
+				snap("day9_daily", day(9)),
+				snap("day1_monthly", day(1)),
+				// day5_daily (the last incremental source) has been pruned locally.
+			},
+			destBackups: [][]*files.JobInfo{{
+				incrManifest(snap("day5_daily", day(5)), snap("day1_monthly", day(1))),
+				fullManifest(snap("day1_monthly", day(1))),
+			}},
+			wantBase: "day10_monthly",
+		},
+		{
+			name:    "fullIfOlderThan: nothing newer than last backup is a no-op",
+			jobInfo: files.JobInfo{FullIfOlderThan: window},
+			snapshots: []files.SnapshotInfo{
+				snap("s_day5", day(5)),
+				snap("s_day1", day(1)),
+			},
+			destBackups: [][]*files.JobInfo{{
+				incrManifest(snap("s_day5", day(5)), snap("s_day1", day(1))),
+				fullManifest(snap("s_day1", day(1))),
+			}},
+			wantErr: ErrNoOp,
+		},
+		{
+			name:    "explicit full with suffix anchors on newest monthly",
+			jobInfo: files.JobInfo{Full: true, FullIfOlderThan: off, FullSnapshotSuffix: "_monthly"},
+			snapshots: []files.SnapshotInfo{
+				snap("autosnap_hourly", day(10).Add(2*time.Hour)),
+				snap("autosnap_daily", day(10)),
+				snap("autosnap_monthly", day(1)),
+			},
+			destBackups: [][]*files.JobInfo{{}},
+			wantBase:    "autosnap_monthly",
+		},
+		{
+			name:        "explicit incremental increments from last backup",
+			jobInfo:     files.JobInfo{Incremental: true, FullIfOlderThan: off},
+			snapshots:   []files.SnapshotInfo{snap("s2", day(2)), snap("s1", day(1))},
+			destBackups: [][]*files.JobInfo{{fullManifest(snap("s1", day(1)))}},
+			wantBase:    "s2",
+			wantIncr:    "s1",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ji := tc.jobInfo
+			err := selectSmartSnapshots(&ji, tc.snapshots, tc.destBackups)
+			if err != tc.wantErr {
+				t.Fatalf("got err %v, want %v", err, tc.wantErr)
+			}
+			if tc.wantErr != nil {
+				return
+			}
+			if ji.BaseSnapshot.Name != tc.wantBase {
+				t.Errorf("BaseSnapshot = %q, want %q", ji.BaseSnapshot.Name, tc.wantBase)
+			}
+			if ji.IncrementalSnapshot.Name != tc.wantIncr {
+				t.Errorf("IncrementalSnapshot = %q, want %q", ji.IncrementalSnapshot.Name, tc.wantIncr)
+			}
+		})
+	}
+}
+
 func prepareTestVols() (payload []byte, goodVol, badVol *files.VolumeInfo, err error) {
 	payload = make([]byte, 10*1024*1024)
 	if _, err = rand.Read(payload); err != nil {

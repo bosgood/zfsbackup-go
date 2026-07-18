@@ -175,7 +175,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 					}
 
 					// Delete all volumes already processed in the manifest
-					for i := 0; i < vidx; i++ {
+					for range vidx {
 						allObjects = append(allObjects, manifest.Volumes[i].ObjectName)
 					}
 					break
@@ -211,7 +211,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	close(deleteChan)
 
 	// Let's not slam the endpoint with a lot of concurrent requests, pick a sensible default and stick to it
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		group.Go(func() error {
 			for {
 				select {

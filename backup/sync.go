@@ -24,7 +24,6 @@ import (
 	"context"
 	"crypto/md5" // nolint:gosec // MD5 not used for cryptographic purposes here
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,7 +85,7 @@ func syncCache(ctx context.Context, j *files.JobInfo, localCache string, backend
 	}
 
 	// Check what manifests we have locally, and if we are missing any, download them
-	manifestFiles, ferr := ioutil.ReadDir(localCache)
+	manifestFiles, ferr := os.ReadDir(localCache)
 	if ferr != nil {
 		return nil, nil, fmt.Errorf("could not list files from the local cache dir due to error - %v", ferr)
 	}

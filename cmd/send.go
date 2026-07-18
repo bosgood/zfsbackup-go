@@ -41,6 +41,7 @@ var (
 	fullIncremental string
 	maxUploadSpeed  uint64
 	passphrase      []byte
+	sendDryRun      bool
 )
 
 // sendCmd represents the send command
@@ -63,7 +64,7 @@ var sendCmd = &cobra.Command{
 			log.AppLogger.Infof("Will be signed from %s", jobInfo.SignFrom)
 		}
 
-		return backup.Backup(cmd.Context(), &jobInfo)
+		return backup.Backup(cmd.Context(), &jobInfo, sendDryRun)
 	},
 }
 
@@ -79,6 +80,7 @@ func init() {
 	sendCmd.Flags().StringVarP(&fullIncremental, "intermediary", "I", "", "See the -I flag on zfs send for more information")
 	sendCmd.Flags().BoolVarP(&jobInfo.Properties, "properties", "p", false, "See the -p flag on zfs send for more information.")
 	sendCmd.Flags().BoolVarP(&jobInfo.Raw, "raw", "w", false, "See the -w flag on zfs send for more information.")
+	sendCmd.Flags().BoolVarP(&sendDryRun, "dry-run", "n", false, "Do not upload anything; only validate and log what would be backed up.")
 
 	// Specific to download only
 	sendCmd.Flags().Uint64Var(
@@ -125,6 +127,20 @@ func init() {
 		-1*time.Minute,
 		"set this flag to do an incremental backup of the most recent snapshot from the most recent snapshot found in the target unless the "+
 			"it's been greater than the time specified in this flag, then do a full backup.",
+	)
+	sendCmd.Flags().StringVar(
+		&jobInfo.FullSnapshotSuffix,
+		"fullSnapshotSuffix",
+		"",
+		"When set, full backups (including those triggered by fullIfOlderThan) are taken from the newest snapshot whose name ends with this "+
+			"suffix (e.g. \"_monthly\"). Use this to anchor fulls on long-lived snapshots that outlive the fullIfOlderThan window.",
+	)
+	sendCmd.Flags().StringVar(
+		&jobInfo.IncrementalSnapshotSuffix,
+		"incrementalSnapshotSuffix",
+		"",
+		"When set, incremental backups target the newest snapshot whose name ends with this suffix (e.g. \"_daily\"), ignoring more frequent "+
+			"snapshots (e.g. hourly) that would otherwise be picked and pruned before the next run.",
 	)
 	sendCmd.Flags().StringVar(
 		&jobInfo.Compressor,
@@ -200,6 +216,9 @@ func ResetSendJobInfo() {
 	jobInfo.Full = false
 	jobInfo.Incremental = false
 	jobInfo.FullIfOlderThan = -1 * time.Minute
+	jobInfo.FullSnapshotSuffix = ""
+	jobInfo.IncrementalSnapshotSuffix = ""
+	sendDryRun = false
 
 	jobInfo.MaxFileBuffer = 5
 	jobInfo.MaxParallelUploads = 4
