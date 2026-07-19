@@ -1,6 +1,6 @@
 module github.com/someone1/zfsbackup-go
 
-go 1.26
+go 1.25
 
 require (
 	cloud.google.com/go/storage v1.27.0
