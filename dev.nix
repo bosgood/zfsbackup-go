@@ -26,9 +26,14 @@
   repo ? "zfsbackup-go",
 
   version ? builtins.substring 0 12 rev,
+
+  # go.mod requires go >= 1.26, and the build sandbox has no network, so
+  # GOTOOLCHAIN can't fetch one — the toolchain must come from nixpkgs.
+  # Falls back to the default `go` on channels new enough not to need it.
+  go ? pkgs.go_1_26 or pkgs.go,
 }:
 
-pkgs.buildGoModule {
+(pkgs.buildGoModule.override { inherit go; }) {
   pname = "zfsbackup-go";
   inherit version;
 
