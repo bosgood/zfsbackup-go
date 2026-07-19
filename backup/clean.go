@@ -175,7 +175,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 					}
 
 					// Delete all volumes already processed in the manifest
-					for range vidx {
+					for i := range vidx {
 						allObjects = append(allObjects, manifest.Volumes[i].ObjectName)
 					}
 					break
