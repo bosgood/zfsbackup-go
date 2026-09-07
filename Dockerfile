@@ -14,9 +14,9 @@
 # self-skip when their env vars (AWS_S3_CUSTOM_ENDPOINT, AZURE_CUSTOM_ENDPOINT,
 # GCS_FAKE_SERVER, B2_*) are unset.
 #
-# go.mod declares `go 1.18`; this image is newer and backward compatible
-# (verified building/testing the module under Go 1.25).
-FROM golang:1.23-bookworm
+# go.mod declares `go 1.25`, and the official golang images set GOTOOLCHAIN=local,
+# so this image must be >= that. Keep the two in sync when bumping either one.
+FROM golang:1.25-bookworm
 
 WORKDIR /src
 

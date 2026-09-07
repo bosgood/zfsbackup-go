@@ -33,6 +33,14 @@ integration:
 test-docker:
 	docker build -t zfsbackup-test . && docker run --rm zfsbackup-test
 
+# Run a single test against the supported toolchain without rebuilding the
+# image, e.g. `make test-one RUN=TestSelectSmartSnapshots PKG=./backup/`.
+GO_IMAGE=golang:1.25-bookworm
+RUN?=.
+PKG?=./...
+test-one:
+	docker run --rm -v "$(CURDIR)":/src -w /src $(GO_IMAGE) go test -run '$(RUN)' -v $(PKG)
+
 build:
 	${GOPATH}/bin/gox -ldflags="-w -s -X github.com/someone1/zfsbackup-go/config.GitCommit=${COMMIT_HASH}" -osarch=${TARGETS}
 
