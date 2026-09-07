@@ -224,14 +224,21 @@ func selectSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo
 		// The incremental source (the most recent backup) must still exist locally
 		// to send from it. If it has been pruned, fall back to a full backup.
 		if !validateSnapShotExistsFromSnaps(lastBackup[0], snapshots, true) {
-			if fullBase == nil {
-				return fmt.Errorf("no snapshots found matching the full backup criteria")
+			// Anchor the recovery full on the newest full-candidate, but only when it
+			// is newer than the full already at the destination. Object names derive
+			// from the volume and snapshot names alone (no timestamp), so re-running a
+			// full for a snapshot the destination already holds overwrites that backup
+			// in place and never moves forward. incrBase is newer than every snapshot
+			// already backed up, so it is always a collision-free anchor.
+			recoveryBase := incrBase
+			if fullBase != nil && fullBase.CreationTime.After(lastFull.CreationTime) {
+				recoveryBase = fullBase
 			}
 			log.AppLogger.Infof(
 				"Incremental source %s (from %v) is no longer present locally, performing full backup from %s.",
-				lastBackup[0].Name, lastBackup[0].CreationTime, fullBase.Name,
+				lastBackup[0].Name, lastBackup[0].CreationTime, recoveryBase.Name,
 			)
-			jobInfo.BaseSnapshot = *fullBase
+			jobInfo.BaseSnapshot = *recoveryBase
 			return nil
 		}
 		jobInfo.IncrementalSnapshot = *lastBackup[0]

@@ -250,6 +250,39 @@ func TestSelectSmartSnapshots(t *testing.T) {
 			wantBase:    "s2",
 			wantIncr:    "s1",
 		},
+		{
+			// Regression: the recovery full must not re-use a snapshot the
+			// destination already holds a full for. Object names carry no
+			// timestamp, so doing so overwrites that backup in place and the
+			// job never makes forward progress.
+			name:    "suffix: pruned source with no newer monthly anchors on the daily",
+			jobInfo: files.JobInfo{FullIfOlderThan: window, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_daily"},
+			snapshots: []files.SnapshotInfo{
+				snap("day10_daily", day(10)),
+				snap("day9_daily", day(9)),
+				snap("day1_monthly", day(1)),
+				// day5_daily (the last incremental source) has been pruned locally.
+			},
+			destBackups: [][]*files.JobInfo{{
+				incrManifest(snap("day5_daily", day(5)), snap("day1_monthly", day(1))),
+				fullManifest(snap("day1_monthly", day(1))),
+			}},
+			wantBase: "day10_daily",
+		},
+		{
+			// Pins the hasNewerFullBase guard: the window has elapsed but there is
+			// no newer full-candidate, so keep taking incrementals rather than
+			// re-uploading the full that is already at the destination.
+			name:    "suffix: window elapsed but no newer monthly stays incremental",
+			jobInfo: files.JobInfo{FullIfOlderThan: window, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_daily"},
+			snapshots: []files.SnapshotInfo{
+				snap("day40_daily", day(40)),
+				snap("day1_monthly", day(1)),
+			},
+			destBackups: [][]*files.JobInfo{{fullManifest(snap("day1_monthly", day(1)))}},
+			wantBase:    "day40_daily",
+			wantIncr:    "day1_monthly",
+		},
 	}
 
 	for _, tc := range testCases {
