@@ -324,9 +324,13 @@ func reportDryRun(ctx context.Context, jobInfo *files.JobInfo) error {
 			jobInfo.IncrementalSnapshot.Name, jobInfo.IncrementalSnapshot.CreationTime,
 		)
 	}
+	destinations := make([]string, len(jobInfo.Destinations))
+	for i := range jobInfo.Destinations {
+		destinations[i] = redactURI(jobInfo.Destinations[i])
+	}
 	log.AppLogger.Noticef(
 		"Dry-run: would upload to %d destination(s): %s",
-		len(jobInfo.Destinations), strings.Join(jobInfo.Destinations, ", "),
+		len(destinations), strings.Join(destinations, ", "),
 	)
 	log.AppLogger.Noticef("Dry-run: ZFS send command: %s", strings.Join(zfs.GetZFSSendCommand(ctx, jobInfo).Args, " "))
 

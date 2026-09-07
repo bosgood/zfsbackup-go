@@ -337,3 +337,33 @@ func prepareTestVols() (payload []byte, goodVol, badVol *files.VolumeInfo, err e
 
 	return payload, goodVol, badVol, err
 }
+
+func TestRedactURI(t *testing.T) {
+	testCases := []struct {
+		in   string
+		want string
+	}{
+		{"s3://bucket/prefix", "s3://bucket/prefix"},
+		{"file:///tmp/backups", "file:///tmp/backups"},
+		{"ssh://user@example.org/path", "ssh://user@example.org/path"},
+		{"ssh://user:hunter2@example.org/path", "ssh://user:xxxxx@example.org/path"},
+	}
+	for _, tc := range testCases {
+		if got := redactURI(tc.in); got != tc.want {
+			t.Errorf("redactURI(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestJoinURI guards against filepath.Join, which collapses the "//" in a scheme.
+func TestJoinURI(t *testing.T) {
+	if got, want := joinURI("s3://bucket/prefix", "obj"), "s3://bucket/prefix/obj"; got != want {
+		t.Errorf("joinURI = %q, want %q", got, want)
+	}
+	if got, want := joinURI("s3://bucket/prefix/", "obj"), "s3://bucket/prefix/obj"; got != want {
+		t.Errorf("joinURI with trailing slash = %q, want %q", got, want)
+	}
+	if got, want := joinURI("ssh://u:pw@host/p", "obj"), "ssh://u:xxxxx@host/p/obj"; got != want {
+		t.Errorf("joinURI did not redact = %q, want %q", got, want)
+	}
+}

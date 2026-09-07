@@ -192,7 +192,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	if dryRun {
 		log.AppLogger.Noticef("Dry-run: would delete %d objects in destination.", len(allObjects))
 		for _, obj := range allObjects {
-			log.AppLogger.Noticef("Would delete %s.", filepath.Join(target, obj))
+			log.AppLogger.Noticef("Would delete %s.", joinURI(target, obj))
 		}
 		log.AppLogger.Noticef("Done.")
 		return nil
@@ -236,7 +236,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 						return berr
 					}
 
-					log.AppLogger.Debugf("Deleted %s.", filepath.Join(target, objectPath))
+					log.AppLogger.Debugf("Deleted %s.", joinURI(target, objectPath))
 				}
 			}
 		})
