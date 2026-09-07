@@ -16,7 +16,7 @@
 #
 # go.mod declares `go 1.18`; this image is newer and backward compatible
 # (verified building/testing the module under Go 1.25).
-FROM golang:1.23-bookworm
+FROM golang:1.25-bookworm
 
 WORKDIR /src
 

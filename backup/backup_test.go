@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"io"
 	"io/ioutil"
 	"os"
@@ -115,6 +116,12 @@ func TestRetryUploadChainer(t *testing.T) {
 
 func snap(name string, t time.Time) files.SnapshotInfo {
 	return files.SnapshotInfo{Name: name, CreationTime: t}
+}
+
+// bookmark models a ZFS bookmark, which is a valid incremental source but can
+// never be a backup base.
+func bookmark(name string, t time.Time) files.SnapshotInfo {
+	return files.SnapshotInfo{Name: name, CreationTime: t, Bookmark: true}
 }
 
 // fullManifest models a full backup manifest (no incremental source).
@@ -250,13 +257,87 @@ func TestSelectSmartSnapshots(t *testing.T) {
 			wantBase:    "s2",
 			wantIncr:    "s1",
 		},
+		{
+			// A full backup is due, but the full suffix matches no snapshot at
+			// all (typo, or the snapshotting tool stopped producing them). This
+			// must fail rather than silently extending the incremental chain.
+			name: "suffix: full due but no full candidate at all errors",
+			jobInfo: files.JobInfo{
+				FullIfOlderThan: window, FullSnapshotSuffix: "_monthy", IncrementalSnapshotSuffix: "_daily",
+			},
+			snapshots: []files.SnapshotInfo{
+				snap("autosnap_d90_daily", day(90)),
+				snap("autosnap_d1_monthly", day(1)),
+			},
+			destBackups: [][]*files.JobInfo{{fullManifest(snap("autosnap_d1_monthly", day(1)))}},
+			wantErr:     ErrNoFullCandidate,
+		},
+		{
+			// A full is due but the next monthly has not been taken yet, so the
+			// newest full candidate is the one already backed up. Defer the full
+			// and keep incrementing (the code logs a notice in this case).
+			name: "suffix: full due but no newer full candidate defers to an incremental",
+			jobInfo: files.JobInfo{
+				FullIfOlderThan: window, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_daily",
+			},
+			snapshots: []files.SnapshotInfo{
+				snap("autosnap_d40_daily", day(40)),
+				snap("autosnap_d1_monthly", day(1)),
+			},
+			destBackups: [][]*files.JobInfo{{fullManifest(snap("autosnap_d1_monthly", day(1)))}},
+			wantBase:    "autosnap_d40_daily",
+			wantIncr:    "autosnap_d1_monthly",
+		},
+		{
+			// --increment must degrade to a full when its source was pruned,
+			// matching the fullIfOlderThan path, instead of selecting a snapshot
+			// that no longer exists and failing later in `zfs send`.
+			name: "increment: pruned source falls back to a full",
+			jobInfo: files.JobInfo{
+				Incremental: true, FullIfOlderThan: off,
+				FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_daily",
+			},
+			snapshots: []files.SnapshotInfo{
+				snap("autosnap_d10_daily", day(10)),
+				snap("autosnap_d1_monthly", day(1)),
+			},
+			destBackups: [][]*files.JobInfo{{fullManifest(snap("autosnap_d5_daily", day(5)))}},
+			wantBase:    "autosnap_d1_monthly",
+			wantIncr:    "", // fell back to a full
+		},
+		{
+			name: "increment: pruned source with no full candidate errors",
+			jobInfo: files.JobInfo{
+				Incremental: true, FullIfOlderThan: off,
+				FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_daily",
+			},
+			snapshots:   []files.SnapshotInfo{snap("autosnap_d10_daily", day(10))},
+			destBackups: [][]*files.JobInfo{{fullManifest(snap("autosnap_d5_daily", day(5)))}},
+			wantErr:     ErrNoFullCandidate,
+		},
+		{
+			// A bookmark of the pruned source keeps the incremental chain alive.
+			name: "increment: bookmarked source keeps the incremental",
+			jobInfo: files.JobInfo{
+				Incremental: true, FullIfOlderThan: off,
+				FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_daily",
+			},
+			snapshots: []files.SnapshotInfo{
+				snap("autosnap_d10_daily", day(10)),
+				bookmark("autosnap_d5_daily", day(5)),
+				snap("autosnap_d1_monthly", day(1)),
+			},
+			destBackups: [][]*files.JobInfo{{fullManifest(snap("autosnap_d5_daily", day(5)))}},
+			wantBase:    "autosnap_d10_daily",
+			wantIncr:    "autosnap_d5_daily",
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ji := tc.jobInfo
 			err := selectSmartSnapshots(&ji, tc.snapshots, tc.destBackups)
-			if err != tc.wantErr {
+			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("got err %v, want %v", err, tc.wantErr)
 			}
 			if tc.wantErr != nil {
