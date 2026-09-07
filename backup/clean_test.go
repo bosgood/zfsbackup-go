@@ -85,3 +85,59 @@ func TestCleanDryRun(t *testing.T) {
 		t.Fatalf("expected stray object %s to be deleted, got stat error - %v", strayPath, serr)
 	}
 }
+
+// TestCleanDryRunLocalManifests covers the --cleanLocal branch: a dry run must
+// leave local-only cached manifests alone, and a real run must delete them.
+func TestCleanDryRunLocalManifests(t *testing.T) {
+	cacheDir, err := ioutil.TempDir("", "zfsbackup-clean-cache")
+	if err != nil {
+		t.Fatalf("could not create temp cache dir - %v", err)
+	}
+	defer os.RemoveAll(cacheDir)
+
+	oldWorkingDir := config.WorkingDir
+	config.WorkingDir = cacheDir
+	defer func() { config.WorkingDir = oldWorkingDir }()
+
+	targetDir, err := ioutil.TempDir("", "zfsbackup-clean-target")
+	if err != nil {
+		t.Fatalf("could not create temp target dir - %v", err)
+	}
+	defer os.RemoveAll(targetDir)
+
+	target := "file://" + targetDir
+	jobInfo := &files.JobInfo{
+		ManifestPrefix:     "manifests",
+		Destinations:       []string{target},
+		MaxParallelUploads: 1,
+		MaxBackoffTime:     5 * time.Second,
+		MaxRetryTime:       1 * time.Minute,
+	}
+
+	// A cached manifest with no counterpart in the destination is exactly what
+	// --cleanLocal removes.
+	localCachePath, cerr := getCacheDir(target)
+	if cerr != nil {
+		t.Fatalf("could not resolve cache dir - %v", cerr)
+	}
+	strayManifest := filepath.Join(localCachePath, "0123456789abcdef")
+	if werr := ioutil.WriteFile(strayManifest, []byte("stale"), 0600); werr != nil {
+		t.Fatalf("could not write stray cached manifest - %v", werr)
+	}
+
+	// Dry-run: the cached manifest must survive.
+	if err := Clean(context.Background(), jobInfo, true, true); err != nil {
+		t.Fatalf("dry-run Clean returned error - %v", err)
+	}
+	if _, serr := os.Stat(strayManifest); serr != nil {
+		t.Fatalf("dry-run should not have deleted %s, stat error - %v", strayManifest, serr)
+	}
+
+	// Real run: it must be gone.
+	if err := Clean(context.Background(), jobInfo, true, false); err != nil {
+		t.Fatalf("Clean returned error - %v", err)
+	}
+	if _, serr := os.Stat(strayManifest); !os.IsNotExist(serr) {
+		t.Fatalf("expected %s to be deleted, got stat error - %v", strayManifest, serr)
+	}
+}

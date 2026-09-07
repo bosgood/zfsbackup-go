@@ -24,14 +24,18 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"io"
 	"io/ioutil"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/someone1/zfsbackup-go/backends"
 	"github.com/someone1/zfsbackup-go/files"
+	"github.com/someone1/zfsbackup-go/zfs"
 )
 
 // Truly a useless backend
@@ -132,14 +136,15 @@ func TestSelectSmartSnapshots(t *testing.T) {
 	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	day := func(n int) time.Time { return base.Add(time.Duration(n) * 24 * time.Hour) }
 	const window = 720 * time.Hour // 30 days
-	const off = -1 * time.Minute    // "unset" fullIfOlderThan
+	const off = -1 * time.Minute   // "unset" fullIfOlderThan
 
 	testCases := []struct {
 		name        string
 		jobInfo     files.JobInfo
 		snapshots   []files.SnapshotInfo
 		destBackups [][]*files.JobInfo
-		wantErr     error
+		wantErr     error  // sentinel error, matched with errors.Is
+		wantErrCont string // substring of a non-sentinel error message
 		wantBase    string
 		wantIncr    string // empty => full backup (no incremental source)
 	}{
@@ -283,17 +288,85 @@ func TestSelectSmartSnapshots(t *testing.T) {
 			wantBase:    "day40_daily",
 			wantIncr:    "day1_monthly",
 		},
+		{
+			name:      "multi-destination: in sync does an incremental",
+			jobInfo:   files.JobInfo{FullIfOlderThan: window},
+			snapshots: []files.SnapshotInfo{snap("s2", day(2)), snap("s1", day(1))},
+			destBackups: [][]*files.JobInfo{
+				{fullManifest(snap("s1", day(1)))},
+				{fullManifest(snap("s1", day(1)))},
+			},
+			wantBase: "s2",
+			wantIncr: "s1",
+		},
+		{
+			name:      "multi-destination: differing last full is out of sync",
+			jobInfo:   files.JobInfo{FullIfOlderThan: window},
+			snapshots: []files.SnapshotInfo{snap("s3", day(3)), snap("s2", day(2)), snap("s1", day(1))},
+			destBackups: [][]*files.JobInfo{
+				{fullManifest(snap("s1", day(1)))},
+				{fullManifest(snap("s2", day(2)))},
+			},
+			wantErrCont: "out of sync",
+		},
+		{
+			name:      "multi-destination: differing last backup refuses the incremental",
+			jobInfo:   files.JobInfo{FullIfOlderThan: window},
+			snapshots: []files.SnapshotInfo{snap("s4", day(4)), snap("s3", day(3)), snap("s2", day(2)), snap("s1", day(1))},
+			destBackups: [][]*files.JobInfo{
+				{incrManifest(snap("s2", day(2)), snap("s1", day(1))), fullManifest(snap("s1", day(1)))},
+				{incrManifest(snap("s3", day(3)), snap("s1", day(1))), fullManifest(snap("s1", day(1)))},
+			},
+			wantErrCont: "do not match",
+		},
+		{
+			name:        "suffix typo matching no snapshot is an error",
+			jobInfo:     files.JobInfo{FullIfOlderThan: window, FullSnapshotSuffix: "_montly", IncrementalSnapshotSuffix: "_daily"},
+			snapshots:   []files.SnapshotInfo{snap("day1_daily", day(1))},
+			destBackups: [][]*files.JobInfo{{}},
+			wantErrCont: "full backup criteria",
+		},
+		{
+			name:        "explicit full with no matching suffix is an error",
+			jobInfo:     files.JobInfo{Full: true, FullIfOlderThan: off, FullSnapshotSuffix: "_monthly"},
+			snapshots:   []files.SnapshotInfo{snap("day1_daily", day(1))},
+			destBackups: [][]*files.JobInfo{{}},
+			wantErrCont: "full backup criteria",
+		},
+		{
+			name:        "explicit incremental with no matching suffix is an error",
+			jobInfo:     files.JobInfo{Incremental: true, FullIfOlderThan: off, IncrementalSnapshotSuffix: "_daily"},
+			snapshots:   []files.SnapshotInfo{snap("day1_monthly", day(1))},
+			destBackups: [][]*files.JobInfo{{fullManifest(snap("day1_monthly", day(1)))}},
+			wantErrCont: "incremental backup criteria",
+		},
+		{
+			name:        "no snapshots at all is an error",
+			jobInfo:     files.JobInfo{FullIfOlderThan: window},
+			snapshots:   nil,
+			destBackups: [][]*files.JobInfo{{}},
+			wantErrCont: "no snapshots found",
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ji := tc.jobInfo
 			err := selectSmartSnapshots(&ji, tc.snapshots, tc.destBackups)
-			if err != tc.wantErr {
-				t.Fatalf("got err %v, want %v", err, tc.wantErr)
-			}
-			if tc.wantErr != nil {
+			if tc.wantErr != nil || tc.wantErrCont != "" {
+				if err == nil {
+					t.Fatalf("got nil error, want one")
+				}
+				if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+					t.Fatalf("got err %v, want %v", err, tc.wantErr)
+				}
+				if tc.wantErrCont != "" && !strings.Contains(err.Error(), tc.wantErrCont) {
+					t.Fatalf("got err %q, want it to contain %q", err, tc.wantErrCont)
+				}
 				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
 			if ji.BaseSnapshot.Name != tc.wantBase {
 				t.Errorf("BaseSnapshot = %q, want %q", ji.BaseSnapshot.Name, tc.wantBase)
@@ -336,6 +409,86 @@ func prepareTestVols() (payload []byte, goodVol, badVol *files.VolumeInfo, err e
 	err = badVol.DeleteVolume()
 
 	return payload, goodVol, badVol, err
+}
+
+// fakeZFS installs a stub `zfs` binary for the duration of the test. It answers
+// the two commands reportDryRun issues: the snapshot listing (`zfs list`) and the
+// size estimate (`zfs send -n -P`). Anything else exits non-zero.
+func fakeZFS(t *testing.T, listing string) {
+	t.Helper()
+
+	dir, err := ioutil.TempDir("", "zfsbackup-fake-zfs")
+	if err != nil {
+		t.Fatalf("could not create temp dir - %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	listPath := filepath.Join(dir, "snapshots")
+	if werr := ioutil.WriteFile(listPath, []byte(listing), 0600); werr != nil {
+		t.Fatalf("could not write snapshot listing - %v", werr)
+	}
+
+	script := "#!/bin/sh\ncase \"$1\" in\nlist) cat " + listPath + " ;;\nsend) printf 'size\\t123456\\n' ;;\n*) exit 1 ;;\nesac\n"
+	zfsPath := filepath.Join(dir, "zfs")
+	// nolint:gosec // the stub must be executable
+	if werr := ioutil.WriteFile(zfsPath, []byte(script), 0700); werr != nil {
+		t.Fatalf("could not write fake zfs - %v", werr)
+	}
+
+	old := zfs.ZFSPath
+	zfs.ZFSPath = zfsPath
+	t.Cleanup(func() { zfs.ZFSPath = old })
+}
+
+// TestBackupDryRun verifies that Backup with dryRun=true validates the selected
+// snapshots and writes nothing to the destination.
+func TestBackupDryRun(t *testing.T) {
+	const creation = 1700000000
+	fakeZFS(t, "tank/data@snap1\t1700000000\tsnapshot\n")
+
+	targetDir, err := ioutil.TempDir("", "zfsbackup-dryrun-target")
+	if err != nil {
+		t.Fatalf("could not create temp target dir - %v", err)
+	}
+	defer os.RemoveAll(targetDir)
+
+	jobInfo := &files.JobInfo{
+		VolumeName:   "tank/data",
+		Destinations: []string{"file://" + targetDir},
+		BaseSnapshot: files.SnapshotInfo{Name: "snap1", CreationTime: time.Unix(creation, 0)},
+	}
+
+	if berr := Backup(context.Background(), jobInfo, true); berr != nil {
+		t.Fatalf("dry-run Backup returned error - %v", berr)
+	}
+
+	entries, rerr := ioutil.ReadDir(targetDir)
+	if rerr != nil {
+		t.Fatalf("could not read target dir - %v", rerr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("dry-run wrote %d file(s) to the destination, want 0", len(entries))
+	}
+}
+
+// TestBackupDryRunMissingSnapshot verifies the dry-run fails loudly when the
+// selected base snapshot is not present locally.
+func TestBackupDryRunMissingSnapshot(t *testing.T) {
+	fakeZFS(t, "tank/data@other\t1700000000\tsnapshot\n")
+
+	jobInfo := &files.JobInfo{
+		VolumeName:   "tank/data",
+		Destinations: []string{"file:///nonexistent"},
+		BaseSnapshot: files.SnapshotInfo{Name: "snap1", CreationTime: time.Unix(1700000000, 0)},
+	}
+
+	err := Backup(context.Background(), jobInfo, true)
+	if err == nil {
+		t.Fatal("got nil error for a missing base snapshot, want one")
+	}
+	if !strings.Contains(err.Error(), "base snapshot does not exist") {
+		t.Fatalf("got err %q, want it to name the missing base snapshot", err)
+	}
 }
 
 func TestRedactURI(t *testing.T) {
