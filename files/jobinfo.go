@@ -32,7 +32,17 @@ import (
 	"github.com/someone1/zfsbackup-go/log"
 )
 
-var disallowedSeps = regexp.MustCompile(`^[\w\-:\.]+`) // Disallowed by ZFS
+// disallowedSeps matches a separator that is built only from characters ZFS
+// permits in a dataset path. Object names are formed by joining the volume name
+// and the snapshot names with the separator, so such a separator makes the
+// result ambiguous. With an empty separator, an incremental "a" -> "b" of
+// tank/data and a full backup of tank/data@atob both give "tank/dataatob"; the
+// second backup then silently overwrites the first at the destination. The
+// empty string matches because * permits zero characters.
+//
+// A separator is safe when at least one of its characters cannot occur in a ZFS
+// dataset path, because no snapshot name can then absorb it.
+var disallowedSeps = regexp.MustCompile(`^[\w\-:./]*$`)
 
 // JobInfo represents the relevant information for a job that can be used to read
 // in details of that job at a later time.
@@ -201,7 +211,7 @@ func (j *JobInfo) ValidateSendFlags() error {
 
 	if disallowedSeps.MatchString(j.Separator) {
 		return fmt.Errorf(
-			"The separator provided (%s) should not be used as it can conflict with allowed characters in zfs components",
+			"The separator provided (%q) should not be used as it can conflict with allowed characters in zfs components",
 			j.Separator,
 		)
 	}

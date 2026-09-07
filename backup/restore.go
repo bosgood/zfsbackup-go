@@ -494,7 +494,10 @@ func receiveStream(ctx context.Context, cmd *exec.Cmd, j *files.JobInfo, c <-cha
 				eerr := vol.Extract(ctx, j, false)
 				if eerr != nil {
 					log.AppLogger.Errorf("Error while trying to read from volume %s - %v", vol.ObjectName, eerr)
-					return err
+					// Must be eerr, not err: err is the outer cmd.Start() error and is
+					// nil here, so returning it would report a failed decompress or
+					// decrypt as a successful restore of a truncated stream.
+					return eerr
 				}
 				_, eerr = io.Copy(cout, vol)
 				if eerr != nil {
