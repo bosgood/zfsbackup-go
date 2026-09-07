@@ -334,8 +334,11 @@ func reportDryRun(ctx context.Context, jobInfo *files.JobInfo) error {
 	)
 	log.AppLogger.Noticef("Dry-run: ZFS send command: %s", strings.Join(zfs.GetZFSSendCommand(ctx, jobInfo).Args, " "))
 
+	// Surface this at Warning, not Debug: a failing estimate usually means the real
+	// send would fail too, and it is the only check here that validates the chosen
+	// base/incremental pair rather than each snapshot's mere existence.
 	if size, err := zfs.GetZFSSendDryRun(ctx, jobInfo); err != nil {
-		log.AppLogger.Debugf("Dry-run: could not estimate ZFS send size - %v", err)
+		log.AppLogger.Warningf("Dry-run: could not estimate ZFS send size - %v", err)
 	} else {
 		log.AppLogger.Noticef("Dry-run: estimated ZFS stream size: %d (%s)", size, humanize.IBytes(size))
 	}
