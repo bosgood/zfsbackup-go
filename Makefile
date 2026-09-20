@@ -41,6 +41,12 @@ PKG?=./...
 test-one:
 	docker run --rm -v "$(CURDIR)":/src -w /src $(GO_IMAGE) go test -run '$(RUN)' -v $(PKG)
 
+# Report files that `gofmt -s` would rewrite, using the pinned toolchain. The
+# `fmt` target above iterates over an undefined DIRS and so checks nothing.
+fmt-check:
+	docker run --rm -v "$(CURDIR)":/src -w /src $(GO_IMAGE) \
+		sh -c 'out=$$(gofmt -s -l . | grep -v ^vendor/); [ -z "$$out" ] || { echo "$$out"; echo "^ gofmt -s would rewrite these files"; exit 1; }'
+
 build:
 	${GOPATH}/bin/gox -ldflags="-w -s -X github.com/someone1/zfsbackup-go/config.GitCommit=${COMMIT_HASH}" -osarch=${TARGETS}
 
