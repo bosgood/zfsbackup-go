@@ -38,6 +38,14 @@
   files, so it catches a test that references a helper landing in a later commit. Delete the checkouts
   after; they are ~30MB each because `vendor/` is checked in.
 
+- `make fmt-check` runs `gofmt -s -l` in the pinned image and fails on any file it would rewrite.
+  The pre-existing `fmt` target loops over an UNDEFINED `DIRS` variable, so it checks nothing -- do not
+  trust it.
+- To assert on user-facing log output in a test, use `captureLogs(t)` in `backup/backup_test.go`. It swaps
+  `log.AppLogger`'s backend for a `bytes.Buffer` via `logging.MultiLogger(logging.NewLogBackend(buf, "", 0))`
+  and restores stderr on cleanup. A fresh leveled backend defaults to DEBUG, so every level is captured
+  (module levels set by `logging.SetLevel` live on the DEFAULT backend and do not apply).
+
 - `dev.nix` (repo root) builds/installs from a pinned git rev via `fetchFromGitHub` + `buildGoModule`; `vendorHash = null` because `vendor/` is checked in. Bump `rev`, set `hash` to `lib.fakeHash`, rebuild, paste the "got:" hash.
 
 ## Patterns That Don't Work
@@ -55,6 +63,16 @@
 - ZFS integration tests are gated behind `//go:build integration` (`make integration`); not run by default `make test`.
 - Smart-backup snapshot selection lives in `backup/backup.go`. The decision core is `selectSmartSnapshots(jobInfo, snapshots, destBackups)` — a PURE function (no ZFS/backend I/O; existence checks use `validateSnapShotExistsFromSnaps` against the passed-in snapshot list). `ProcessSmartOptions` just fetches snapshots + per-destination manifests and delegates to it. Unit-test the pure function directly (see `TestSelectSmartSnapshots`); no docker/zfs needed.
 - `--fullSnapshotSuffix` / `--incrementalSnapshotSuffix` (JobInfo.FullSnapshotSuffix / IncrementalSnapshotSuffix): with sanoid-style names (`autosnap_<date>_daily|_monthly`, type is a SUFFIX), anchor fulls on `_monthly` (survives the fullIfOlderThan window) and incrementals on `_daily`. Without them, behavior = historical "newest matching prefix for everything".
+- `--snapshotPrefix` (JobInfo.SnapshotPrefix, upstream commit ec89e86) is applied in EXACTLY ONE place:
+  `newestMatchingSnapshot` in backup/backup.go, via `snapshotMatches(s, prefix, suffix)`. It picks the BASE
+  snapshot only. It does NOT scope `getBackupsForTarget` (manifests filter on VolumeName alone), so the
+  incremental SOURCE (`lastBackup[0]`/`lastComparableSnapshots[0]`) can be a non-prefixed snapshot from a
+  different job writing to the same volume+destination. Verified empirically 2026-09-07.
+  Also: `SnapshotPrefix` is serialized into the manifest but never read back; `usingSmartOption()` ignores it
+  (prefix is silently a no-op on the explicit `vol@snap` path); `ResetSendJobInfo` does NOT reset it (leaks
+  across integration-test runs, unlike Full/Incremental/*SnapshotSuffix); and there is ZERO test coverage
+  (`grep SnapshotPrefix **/*_test.go` -> nothing).
+
 - Prior `fullIfOlderThan` bug: incremental path validated the last FULL's base snapshot (`lastComparableSnapshots[0]`, the oldest/first-pruned link) instead of the actual incremental SOURCE (`lastBackup[0]`). When local snapshot retention < the full window, the full's base got pruned and every run forced a spurious full. Fixed to validate `lastBackup[0]`; a pruned source now falls back to a full from the full-candidate.
 - Backup `--dry-run`/`-n` (standalone `sendDryRun` var, passed as 3rd arg to `backup.Backup(ctx, jobInfo, dryRun)` — mirrors `Clean`'s dryRun param). Short-circuits to `reportDryRun` BEFORE the lock/pipeline: validates base+incremental snapshots exist (read-only), then Noticef-logs backup type, snapshots, destinations, the `zfs send` command line, and a best-effort size estimate. Size estimate = `zfs.GetZFSSendDryRun` which runs `zfs send -n -P` and parses the `size\t<bytes>` line. The snapshot decision is already computed in PreRunE (`ProcessSmartOptions`) so dry-run just reports it.
 
@@ -83,3 +101,40 @@
 - FIXED 2026-09-07: `backup/restore.go` receiveStream returned `err` (the nil outer `cmd.Start()` error) instead
   of `eerr` after a failed `vol.Extract`, so a bad decompress/decrypt reported a SUCCESSFUL restore of a
   truncated stream. Test: `backup/restore_test.go` `TestReceiveStreamReportsExtractError`.
+
+## Branch: `origin/clean-dry-run2` (compared 2026-09-07)
+It is ONE squashed commit (1383460 "previous attempt") off the same merge-base (5702819). It is an EARLIER
+attempt, not a newer one. `clean-dry-run` is ahead on everything else (redactURI/joinURI, separator regex,
+receiveStream `eerr`, zfs helper split, `make test-one`, cbbf0e8 full-skip, 36c4c51 recovery-base anchor).
+Only `backup/backup.go` holds anything we lack:
+- DONE 53eb732+: full is due (`fullIfOlderThan` exceeded) but `fullBase == nil` -> our branch (backup.go:200-202)
+  silently keeps doing incrementals FOREVER. Reachable when a full already exists at the destination and the
+  user later sets a wrong `--fullSnapshotSuffix`. cdr2 returns a wrapped error instead.
+- DONE 53eb732+: full is due but the newest full candidate is already backed up -> our branch is silent.
+  cdr2 logs a Noticef that the `fullIfOlderThan` guarantee is not being met.
+- JUDGMENT CALL, NOT A BUG: cdr2 adds a pruned-source fallback-to-full on the EXPLICIT `--incremental` path
+  (backup.go:168-180). Today that case already fails cleanly in `Backup` ("selected incremental snapshot does
+  not exist", backup.go:402-409). Auto-promoting to a full can upload TBs the user did not ask for.
+- DO NOT TAKE: cdr2's `fallbackToFull` helper anchors only on `fullBase`. That REGRESSES 36c4c51 (a recovery
+  full on a snapshot the destination already holds overwrites that backup in place, no forward progress).
+- OPTIONAL: `ErrNoFullCandidate` / `ErrNoIncrementalCandidate` sentinels (enables `errors.Is`).
+
+## Open Defects — `send --dry-run` audit (2026-09-07)
+Ranked. None fixed yet; feature otherwise works and unit tests pass.
+1. HIGH: dry-run is NOT destination-read-only. PreRunE (`cmd/send.go:316`) runs `ProcessSmartOptions` ->
+   `getBackupsForTarget` -> `syncCache` -> `backend.PreDownload` (`backup/sync.go:140`). The S3 backend's
+   PreDownload issues `RestoreObject` for GLACIER manifests (3-day, billable) and then BLOCKS for hours.
+   Only on smart paths that read the destination; `--full` skips it (commit cbbf0e8).
+2. MED: dry-run never calls `prepareBackend` (real path only, `backup/backup.go:468`), so it never validates
+   destination credentials/write access. `--full` + explicit `vol@snap` dry-runs touch no backend at all.
+3. MED: `--jsonOutput` prints NOTHING for a dry run. Real send writes JSON to stdout (`backup/backup.go:549`);
+   dry-run returns at `:355` and only logs (go-logging default backend = stderr).
+4. MED: misleading error. `validateSnapShotExists` (`backup/sync.go:162`) returns `(false, nil)` when
+   `zfs list` fails, so "Selected base snapshot does not exist!" also fires for missing zfs / bad dataset.
+   The `verr != nil` branches in `reportDryRun` are dead code.
+5. LOW: `--resume` is ignored. `Backup` returns at `:355` before `tryResume` (`:359`), so the preview can
+   differ from the resumed run (different base snapshot, skipped volumes). No warning is printed.
+6. LOW: README's captured `send --help` block (README.md:187-214) has no `-n, --dry-run`. Same for `clean`.
+7. NIT: `GetZFSSendCommand` logs "Enabling the X flag" at Info; reportDryRun (`:335`) and `GetZFSSendDryRun`
+   (`:340`) each call it -> every line twice at `--logLevel info`.
+8. GAP: no integration-test coverage for dry-run; no test asserting no backend is initialized.
