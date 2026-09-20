@@ -197,15 +197,37 @@ func selectSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo
 		// than the configured window. Age is measured against the most recent
 		// snapshot; the full is anchored on the newest full-candidate (e.g. the
 		// newest "_monthly"), which must be newer than the existing full.
-		ageExceeded := snapshots[0].CreationTime.Sub(lastFull.CreationTime) > jobInfo.FullIfOlderThan
-		hasNewerFullBase := fullBase != nil && fullBase.CreationTime.After(lastFull.CreationTime)
-		if ageExceeded && hasNewerFullBase {
-			log.AppLogger.Infof(
-				"Last full backup (%v) is older than %v; performing full backup from %s.",
-				lastFull.CreationTime, jobInfo.FullIfOlderThan, fullBase.Name,
-			)
-			jobInfo.BaseSnapshot = *fullBase
-			return nil
+		if snapshots[0].CreationTime.Sub(lastFull.CreationTime) > jobInfo.FullIfOlderThan {
+			switch {
+			// Nothing matches the full backup criteria at all, so no full can ever be
+			// taken and FullIfOlderThan can never be honored - the configured prefix or
+			// full suffix is almost certainly wrong. Fail loudly rather than extending
+			// the incremental chain forever without saying so.
+			case fullBase == nil:
+				return fmt.Errorf(
+					"full backup is due (last full %v is older than %v) but no snapshots found matching the full backup criteria",
+					lastFull.CreationTime, jobInfo.FullIfOlderThan,
+				)
+
+			case fullBase.CreationTime.After(lastFull.CreationTime):
+				log.AppLogger.Infof(
+					"Last full backup (%v) is older than %v; performing full backup from %s.",
+					lastFull.CreationTime, jobInfo.FullIfOlderThan, fullBase.Name,
+				)
+				jobInfo.BaseSnapshot = *fullBase
+				return nil
+
+			// A full is due, but the newest full candidate is the one already backed
+			// up (e.g. the next "_monthly" has not been taken yet). Carry on
+			// incrementally, but say so at Notice: the FullIfOlderThan guarantee is
+			// not being met until a newer candidate appears.
+			default:
+				log.AppLogger.Noticef(
+					"Full backup is due (last full %v is older than %v) but no full backup candidate newer than %s "+
+						"exists yet; performing an incremental instead.",
+					lastFull.CreationTime, jobInfo.FullIfOlderThan, fullBase.Name,
+				)
+			}
 		}
 
 		// Otherwise perform an incremental up to the incremental-candidate snapshot.

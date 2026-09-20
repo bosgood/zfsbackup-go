@@ -33,8 +33,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/op/go-logging"
+
 	"github.com/someone1/zfsbackup-go/backends"
 	"github.com/someone1/zfsbackup-go/files"
+	"github.com/someone1/zfsbackup-go/log"
 	"github.com/someone1/zfsbackup-go/zfs"
 )
 
@@ -131,6 +134,20 @@ func incrManifest(target, source files.SnapshotInfo) *files.JobInfo {
 	return &files.JobInfo{BaseSnapshot: target, IncrementalSnapshot: source}
 }
 
+// captureLogs points AppLogger at a buffer for the duration of the test so that
+// user-facing messages can be asserted on. A fresh leveled backend defaults to
+// DEBUG, so every level is captured. Stderr is restored on cleanup.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+
+	buf := new(bytes.Buffer)
+	log.AppLogger.SetBackend(logging.MultiLogger(logging.NewLogBackend(buf, "", 0)))
+	t.Cleanup(func() {
+		log.AppLogger.SetBackend(logging.MultiLogger(logging.NewLogBackend(os.Stderr, "", 0)))
+	})
+	return buf
+}
+
 // nolint:funlen // table-driven test
 func TestSelectSmartSnapshots(t *testing.T) {
 	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
@@ -147,6 +164,7 @@ func TestSelectSmartSnapshots(t *testing.T) {
 		wantErrCont string // substring of a non-sentinel error message
 		wantBase    string
 		wantIncr    string // empty => full backup (no incremental source)
+		wantLogCont string // substring the logged output must contain
 	}{
 		{
 			name:        "fullIfOlderThan: no prior full does a full",
@@ -275,9 +293,10 @@ func TestSelectSmartSnapshots(t *testing.T) {
 			wantBase: "day10_daily",
 		},
 		{
-			// Pins the hasNewerFullBase guard: the window has elapsed but there is
-			// no newer full-candidate, so keep taking incrementals rather than
-			// re-uploading the full that is already at the destination.
+			// The window has elapsed but there is no newer full-candidate, so keep
+			// taking incrementals rather than re-uploading the full that is already
+			// at the destination. Report it: until a newer monthly is taken, the
+			// --fullIfOlderThan guarantee is not being met.
 			name:    "suffix: window elapsed but no newer monthly stays incremental",
 			jobInfo: files.JobInfo{FullIfOlderThan: window, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_daily"},
 			snapshots: []files.SnapshotInfo{
@@ -287,6 +306,7 @@ func TestSelectSmartSnapshots(t *testing.T) {
 			destBackups: [][]*files.JobInfo{{fullManifest(snap("day1_monthly", day(1)))}},
 			wantBase:    "day40_daily",
 			wantIncr:    "day1_monthly",
+			wantLogCont: "no full backup candidate newer than day1_monthly",
 		},
 		{
 			name:      "multi-destination: in sync does an incremental",
@@ -347,10 +367,25 @@ func TestSelectSmartSnapshots(t *testing.T) {
 			destBackups: [][]*files.JobInfo{{}},
 			wantErrCont: "no snapshots found",
 		},
+		{
+			// Regression: a full is due but nothing matches the full criteria, so no
+			// full can ever be taken - typically a mistyped --fullSnapshotSuffix on a
+			// job that already has a full at the destination. Silently extending the
+			// incremental chain hides that --fullIfOlderThan stopped being honored.
+			name:    "suffix: full due with no full candidate is an error",
+			jobInfo: files.JobInfo{FullIfOlderThan: window, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_daily"},
+			snapshots: []files.SnapshotInfo{
+				snap("day40_daily", day(40)),
+				snap("day1_daily", day(1)),
+			},
+			destBackups: [][]*files.JobInfo{{fullManifest(snap("day1_daily", day(1)))}},
+			wantErrCont: "full backup is due",
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLogs(t)
 			ji := tc.jobInfo
 			err := selectSmartSnapshots(&ji, tc.snapshots, tc.destBackups)
 			if tc.wantErr != nil || tc.wantErrCont != "" {
@@ -373,6 +408,9 @@ func TestSelectSmartSnapshots(t *testing.T) {
 			}
 			if ji.IncrementalSnapshot.Name != tc.wantIncr {
 				t.Errorf("IncrementalSnapshot = %q, want %q", ji.IncrementalSnapshot.Name, tc.wantIncr)
+			}
+			if tc.wantLogCont != "" && !strings.Contains(logs.String(), tc.wantLogCont) {
+				t.Errorf("logs = %q, want them to contain %q", logs.String(), tc.wantLogCont)
 			}
 		})
 	}
