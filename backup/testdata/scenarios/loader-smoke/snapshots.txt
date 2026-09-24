@@ -1,0 +1,7 @@
+# zfs list -H -p -t snapshot,bookmark -o name,creation,type -S creation tank/data
+# Rows may drop the dataset, the type or the epoch; a bare sanoid name takes
+# its creation time from the name.
+tank/data@autosnap_2026-09-24_00:00:00_daily	1790208000	snapshot
+tank/data@autosnap_2026-09-01_00:00:00_monthly	1788220800	snapshot
+tank/data#autosnap_2026-08-01_00:00:00_monthly	1785542400	bookmark
+autosnap_2026-07-01_00:00:00_monthly

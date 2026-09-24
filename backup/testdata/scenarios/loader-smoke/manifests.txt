@@ -1,0 +1,4 @@
+# Backups already at the destination, in any order. A full backup is `<base>`,
+# an incremental one is `<source> to <base>`.
+autosnap_2026-07-01_00:00:00_monthly
+autosnap_2026-07-01_00:00:00_monthly to autosnap_2026-08-01_00:00:00_monthly

@@ -103,45 +103,7 @@ func init() {
 		"set this flag to true when you want to try and resume a previously cancled or failed backup. It is up to the caller to ensure the same "+
 			"command line arguments are provided between the original backup and the resumed one.",
 	)
-	sendCmd.Flags().BoolVar(
-		&jobInfo.Full,
-		"full",
-		false,
-		"set this flag to take a full backup of the specified volume using the most recent snapshot.",
-	)
-	sendCmd.Flags().BoolVar(
-		&jobInfo.Incremental,
-		"increment",
-		false,
-		"set this flag to do an incremental backup of the most recent snapshot from the most recent snapshot found in the target.",
-	)
-	sendCmd.Flags().StringVar(
-		&jobInfo.SnapshotPrefix,
-		"snapshotPrefix",
-		"",
-		"Only consider snapshots starting with the given snapshot prefix",
-	)
-	sendCmd.Flags().DurationVar(
-		&jobInfo.FullIfOlderThan,
-		"fullIfOlderThan",
-		-1*time.Minute,
-		"set this flag to do an incremental backup of the most recent snapshot from the most recent snapshot found in the target unless the "+
-			"it's been greater than the time specified in this flag, then do a full backup.",
-	)
-	sendCmd.Flags().StringVar(
-		&jobInfo.FullSnapshotSuffix,
-		"fullSnapshotSuffix",
-		"",
-		"When set, full backups (including those triggered by fullIfOlderThan) are taken from the newest snapshot whose name ends with this "+
-			"suffix (e.g. \"_monthly\"). Use this to anchor fulls on long-lived snapshots that outlive the fullIfOlderThan window.",
-	)
-	sendCmd.Flags().StringVar(
-		&jobInfo.IncrementalSnapshotSuffix,
-		"incrementalSnapshotSuffix",
-		"",
-		"When set, incremental backups target the newest snapshot whose name ends with this suffix (e.g. \"_daily\"), ignoring more frequent "+
-			"snapshots (e.g. hourly) that would otherwise be picked and pruned before the next run.",
-	)
+	backup.AddSmartFlags(sendCmd.Flags(), &jobInfo)
 	sendCmd.Flags().StringVar(
 		&jobInfo.Compressor,
 		"compressor",
