@@ -103,167 +103,21 @@ func newestMatchingSnapshot(snapshots []files.SnapshotInfo, prefix, suffix strin
 	return nil
 }
 
-// selectSmartSnapshots decides the base/incremental snapshots for a "smart"
-// backup. It is pure (performs no I/O) so it can be unit-tested: all ZFS and
-// backend state is passed in. snapshots must be sorted newest-first, and
-// destBackups[i] holds the manifests found at destination i, also newest-first.
-//
-// When FullSnapshotSuffix/IncrementalSnapshotSuffix are set, full backups are
-// anchored on the newest snapshot matching the full suffix (e.g. "_monthly")
-// and incrementals target the newest snapshot matching the incremental suffix
-// (e.g. "_daily"). With both suffixes empty this preserves the historical
-// behavior of using the single newest matching snapshot for everything.
-// nolint:funlen,gocyclo // Difficult to break this up
+// selectSmartSnapshots applies the smart backup plan (see planSmartSnapshots)
+// to jobInfo: it sets BaseSnapshot, and IncrementalSnapshot for an incremental
+// backup. It returns ErrNoOp when there is nothing new to send.
 func selectSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, destBackups [][]*files.JobInfo) error {
-	if len(snapshots) == 0 {
-		return fmt.Errorf("no snapshots found")
+	p, err := planSmartSnapshots(jobInfo, snapshots, destBackups)
+	if err != nil {
+		return err
 	}
-
-	fullBase := newestMatchingSnapshot(snapshots, jobInfo.SnapshotPrefix, jobInfo.FullSnapshotSuffix)
-	incrBase := newestMatchingSnapshot(snapshots, jobInfo.SnapshotPrefix, jobInfo.IncrementalSnapshotSuffix)
-
-	// An explicit full backup always anchors on the full-candidate snapshot.
-	if jobInfo.Full {
-		if fullBase == nil {
-			return fmt.Errorf("no snapshots found matching the full backup criteria")
-		}
-		jobInfo.BaseSnapshot = *fullBase
-		return nil
+	log.AppLogger.Infof("Smart backup plan: %s.", p)
+	if p.Action == PlanNoop {
+		return ErrNoOp
 	}
-
-	// Gather the most recent backup and most recent full backup per destination.
-	lastComparableSnapshots := make([]*files.SnapshotInfo, len(destBackups))
-	lastBackup := make([]*files.SnapshotInfo, len(destBackups))
-	for idx := range destBackups {
-		if len(destBackups[idx]) == 0 {
-			continue
-		}
-		lastBackup[idx] = &destBackups[idx][0].BaseSnapshot
-		if jobInfo.Incremental {
-			lastComparableSnapshots[idx] = &destBackups[idx][0].BaseSnapshot
-		}
-		if jobInfo.FullIfOlderThan != -1*time.Minute {
-			for _, bkp := range destBackups[idx] {
-				if bkp.IncrementalSnapshot.Name == "" {
-					lastComparableSnapshots[idx] = &bkp.BaseSnapshot
-					break
-				}
-			}
-		}
-	}
-
-	var lastNotEqual bool
-	// Verify that all "comparable" snapshots are the same across destinations
-	for i := 1; i < len(lastComparableSnapshots); i++ {
-		if !lastComparableSnapshots[i-1].Equal(lastComparableSnapshots[i]) {
-			return fmt.Errorf("destinations are out of sync, cannot continue with smart option")
-		}
-
-		if !lastNotEqual && !lastBackup[i-1].Equal(lastBackup[i]) {
-			lastNotEqual = true
-		}
-	}
-
-	// Now select the proper job options and continue
-	if jobInfo.Incremental {
-		if incrBase == nil {
-			return fmt.Errorf("no snapshots found matching the incremental backup criteria")
-		}
-		jobInfo.BaseSnapshot = *incrBase
-		if lastComparableSnapshots[0] == nil {
-			return fmt.Errorf("no snapshot to increment from - try doing a full backup instead")
-		}
-		if !incrBase.CreationTime.After(lastComparableSnapshots[0].CreationTime) {
-			return ErrNoOp
-		}
-		jobInfo.IncrementalSnapshot = *lastComparableSnapshots[0]
-		return nil
-	}
-
-	if jobInfo.FullIfOlderThan != -1*time.Minute {
-		lastFull := lastComparableSnapshots[0]
-
-		// No previous full backup found, so do one.
-		if lastFull == nil {
-			if fullBase == nil {
-				return fmt.Errorf("no snapshots found matching the full backup criteria")
-			}
-			log.AppLogger.Infof("No previous full backup found, performing full backup from %s.", fullBase.Name)
-			jobInfo.BaseSnapshot = *fullBase
-			return nil
-		}
-
-		// Roll onto a newer full-candidate snapshot once the last full is older
-		// than the configured window. Age is measured against the most recent
-		// snapshot; the full is anchored on the newest full-candidate (e.g. the
-		// newest "_monthly"), which must be newer than the existing full.
-		if snapshots[0].CreationTime.Sub(lastFull.CreationTime) > jobInfo.FullIfOlderThan {
-			switch {
-			// Nothing matches the full backup criteria at all, so no full can ever be
-			// taken and FullIfOlderThan can never be honored - the configured prefix or
-			// full suffix is almost certainly wrong. Fail loudly rather than extending
-			// the incremental chain forever without saying so.
-			case fullBase == nil:
-				return fmt.Errorf(
-					"full backup is due (last full %v is older than %v) but no snapshots found matching the full backup criteria",
-					lastFull.CreationTime, jobInfo.FullIfOlderThan,
-				)
-
-			case fullBase.CreationTime.After(lastFull.CreationTime):
-				log.AppLogger.Infof(
-					"Last full backup (%v) is older than %v; performing full backup from %s.",
-					lastFull.CreationTime, jobInfo.FullIfOlderThan, fullBase.Name,
-				)
-				jobInfo.BaseSnapshot = *fullBase
-				return nil
-
-			// A full is due, but the newest full candidate is the one already backed
-			// up (e.g. the next "_monthly" has not been taken yet). Carry on
-			// incrementally, but say so at Notice: the FullIfOlderThan guarantee is
-			// not being met until a newer candidate appears.
-			default:
-				log.AppLogger.Noticef(
-					"Full backup is due (last full %v is older than %v) but no full backup candidate newer than %s "+
-						"exists yet; performing an incremental instead.",
-					lastFull.CreationTime, jobInfo.FullIfOlderThan, fullBase.Name,
-				)
-			}
-		}
-
-		// Otherwise perform an incremental up to the incremental-candidate snapshot.
-		if incrBase == nil {
-			return fmt.Errorf("no snapshots found matching the incremental backup criteria")
-		}
-		jobInfo.BaseSnapshot = *incrBase
-
-		if lastNotEqual {
-			return fmt.Errorf("want to do an incremental backup but last incremental backup at destinations do not match")
-		}
-		if !incrBase.CreationTime.After(lastBackup[0].CreationTime) {
-			return ErrNoOp
-		}
-
-		// The incremental source (the most recent backup) must still exist locally
-		// to send from it. If it has been pruned, fall back to a full backup.
-		if !validateSnapShotExistsFromSnaps(lastBackup[0], snapshots, true) {
-			// Anchor the recovery full on the newest full-candidate, but only when it
-			// is newer than the full already at the destination. Object names derive
-			// from the volume and snapshot names alone (no timestamp), so re-running a
-			// full for a snapshot the destination already holds overwrites that backup
-			// in place and never moves forward. incrBase is newer than every snapshot
-			// already backed up, so it is always a collision-free anchor.
-			recoveryBase := incrBase
-			if fullBase != nil && fullBase.CreationTime.After(lastFull.CreationTime) {
-				recoveryBase = fullBase
-			}
-			log.AppLogger.Infof(
-				"Incremental source %s (from %v) is no longer present locally, performing full backup from %s.",
-				lastBackup[0].Name, lastBackup[0].CreationTime, recoveryBase.Name,
-			)
-			jobInfo.BaseSnapshot = *recoveryBase
-			return nil
-		}
-		jobInfo.IncrementalSnapshot = *lastBackup[0]
+	jobInfo.BaseSnapshot = p.Base
+	if p.Action == PlanIncremental {
+		jobInfo.IncrementalSnapshot = p.Source
 	}
 	return nil
 }
@@ -346,21 +200,14 @@ func reportDryRun(ctx context.Context, jobInfo *files.JobInfo) error {
 			jobInfo.IncrementalSnapshot.Name, jobInfo.IncrementalSnapshot.CreationTime,
 		)
 	}
-	destinations := make([]string, len(jobInfo.Destinations))
-	for i := range jobInfo.Destinations {
-		destinations[i] = redactURI(jobInfo.Destinations[i])
-	}
 	log.AppLogger.Noticef(
 		"Dry-run: would upload to %d destination(s): %s",
-		len(destinations), strings.Join(destinations, ", "),
+		len(jobInfo.Destinations), strings.Join(jobInfo.Destinations, ", "),
 	)
 	log.AppLogger.Noticef("Dry-run: ZFS send command: %s", strings.Join(zfs.GetZFSSendCommand(ctx, jobInfo).Args, " "))
 
-	// Surface this at Warning, not Debug: a failing estimate usually means the real
-	// send would fail too, and it is the only check here that validates the chosen
-	// base/incremental pair rather than each snapshot's mere existence.
 	if size, err := zfs.GetZFSSendDryRun(ctx, jobInfo); err != nil {
-		log.AppLogger.Warningf("Dry-run: could not estimate ZFS send size - %v", err)
+		log.AppLogger.Debugf("Dry-run: could not estimate ZFS send size - %v", err)
 	} else {
 		log.AppLogger.Noticef("Dry-run: estimated ZFS stream size: %d (%s)", size, humanize.IBytes(size))
 	}
