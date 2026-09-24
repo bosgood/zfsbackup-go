@@ -61,6 +61,9 @@ type Plan struct {
 	// except with reason source-pruned, where it names the pruned snapshot.
 	Source files.SnapshotInfo
 	Reason string
+	// FullDue is set when the last full is older than --fullIfOlderThan but
+	// no full candidate newer than the last backup exists yet.
+	FullDue bool
 }
 
 func (p Plan) String() string {
@@ -169,12 +172,21 @@ func planSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, 
 	// newest "_monthly"), which must be newer than the most recent backup.
 	// An older candidate was already sent (so the full would re-send it), or
 	// predates the last incremental (which the next incremental continues
-	// from, orphaning the full).
+	// from, orphaning the full). When destinations disagree on the most recent
+	// backup, the one furthest behind decides, so the full brings them back
+	// in step whatever order they are given in.
 	ageExceeded := snapshots[0].CreationTime.Sub(lastFull.CreationTime) > jobInfo.FullIfOlderThan
-	hasNewerFullBase := fullBase != nil && fullBase.CreationTime.After(lastBackup[0].CreationTime)
+	behind := lastBackup[0]
+	for _, b := range lastBackup[1:] {
+		if b.CreationTime.Before(behind.CreationTime) {
+			behind = b
+		}
+	}
+	hasNewerFullBase := fullBase != nil && fullBase.CreationTime.After(behind.CreationTime)
 	if ageExceeded && hasNewerFullBase {
 		return Plan{Action: PlanFull, Base: *fullBase, Reason: reasonWindowElapsed}, nil
 	}
+	fullDue := ageExceeded
 
 	// Otherwise perform an incremental up to the incremental-candidate snapshot.
 	if incrBase == nil {
@@ -184,7 +196,7 @@ func planSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, 
 		return Plan{}, fmt.Errorf("want to do an incremental backup but last incremental backup at destinations do not match")
 	}
 	if !incrBase.CreationTime.After(lastBackup[0].CreationTime) {
-		return Plan{Action: PlanNoop, Reason: reasonNothingNewer}, nil
+		return Plan{Action: PlanNoop, Reason: reasonNothingNewer, FullDue: fullDue}, nil
 	}
 
 	// The incremental source (the most recent backup) must still exist locally
@@ -199,11 +211,11 @@ func planSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, 
 			return Plan{}, fmt.Errorf("no snapshots found matching the full backup criteria")
 		}
 		if !fullBase.CreationTime.After(source.CreationTime) {
-			return Plan{Action: PlanNoop, Source: source, Reason: reasonSourcePruned}, nil
+			return Plan{Action: PlanNoop, Source: source, Reason: reasonSourcePruned, FullDue: fullDue}, nil
 		}
 		return Plan{Action: PlanFull, Base: *fullBase, Source: source, Reason: reasonSourcePruned}, nil
 	}
-	return Plan{Action: PlanIncremental, Base: *incrBase, Source: source, Reason: reasonNewerCandidate}, nil
+	return Plan{Action: PlanIncremental, Base: *incrBase, Source: source, Reason: reasonNewerCandidate, FullDue: fullDue}, nil
 }
 
 // Step is one simulated run.
@@ -252,10 +264,20 @@ func (s *Scenario) Run() *Simulation {
 				taken = at
 			}
 		}
-		sim.Steps = append(sim.Steps, s.run(at, snapshots, dest))
+		sim.Steps = append(sim.Steps, s.run(at, visibleAt(snapshots, at), dest))
 	}
 	sim.Manifests = dest
 	return sim
+}
+
+// visibleAt drops the snapshots created after at from a newest-first list: a
+// run cannot see them yet (from= may be earlier than the newest snapshot).
+func visibleAt(snapshots []files.SnapshotInfo, at time.Time) []files.SnapshotInfo {
+	i := 0
+	for i < len(snapshots) && snapshots[i].CreationTime.After(at) {
+		i++
+	}
+	return snapshots[i:]
 }
 
 // run plans one run and records what it sends at every destination.
@@ -409,6 +431,7 @@ func (sim *Simulation) WriteJSON(w io.Writer, violations []Violation) error {
 		Source        *snapshot  `json:"source,omitempty"`
 		MissingSource *snapshot  `json:"missingSource,omitempty"` // the pruned incremental source (reason source-pruned)
 		Reason        string     `json:"reason,omitempty"`
+		FullDue       bool       `json:"fullDue,omitempty"` // a full is due but waits for a newer candidate
 		Error         string     `json:"error,omitempty"`
 		Snapshots     int        `json:"snapshots"` // on the pool at this run
 	}
@@ -429,7 +452,7 @@ func (sim *Simulation) WriteJSON(w io.Writer, violations []Violation) error {
 	}{Volume: sim.Scenario.Volume, Runs: []run{}, Destinations: [][]backup{}, Violations: []violation{}}
 
 	for _, st := range sim.Steps {
-		r := run{At: at(st.At), Action: string(st.Plan.Action), Reason: st.Plan.Reason, Snapshots: len(st.Snapshots)}
+		r := run{At: at(st.At), Action: string(st.Plan.Action), Reason: st.Plan.Reason, FullDue: st.Plan.FullDue, Snapshots: len(st.Snapshots)}
 		switch {
 		case st.Err != nil:
 			r = run{At: r.At, Action: "error", Error: st.Err.Error(), Snapshots: r.Snapshots}
