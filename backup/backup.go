@@ -112,6 +112,12 @@ func selectSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo
 		return err
 	}
 	log.AppLogger.Infof("Smart backup plan: %s.", p)
+	if p.FullDue {
+		log.AppLogger.Noticef(
+			"The last full backup is older than %v; the next full waits for a full backup candidate newer than the last backup.",
+			jobInfo.FullIfOlderThan,
+		)
+	}
 	if p.Action == PlanNoop {
 		if p.Reason == reasonSourcePruned {
 			log.AppLogger.Warningf(

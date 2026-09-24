@@ -131,6 +131,17 @@ func TestPlanSmartSnapshotsReasons(t *testing.T) {
 	const window = 720 * time.Hour // 30 days
 	const off = -1 * time.Minute   // "unset" fullIfOlderThan
 	monthlyDaily := files.JobInfo{FullIfOlderThan: window, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_daily"}
+	monthlyOnly := files.JobInfo{FullIfOlderThan: window, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_monthly"}
+	// Destinations that share a full but disagree on the last incremental.
+	ahead := []*files.JobInfo{
+		incrManifest(snap("d60_monthly", day(60)), snap("d30_monthly", day(30))),
+		incrManifest(snap("d30_monthly", day(30)), snap("d1_monthly", day(1))),
+		fullManifest(snap("d1_monthly", day(1))),
+	}
+	behind := []*files.JobInfo{
+		incrManifest(snap("d30_monthly", day(30)), snap("d1_monthly", day(1))),
+		fullManifest(snap("d1_monthly", day(1))),
+	}
 
 	testCases := []struct {
 		name        string
@@ -154,6 +165,47 @@ func TestPlanSmartSnapshotsReasons(t *testing.T) {
 			},
 			destBackups: [][]*files.JobInfo{{fullManifest(snap("d1_monthly", day(1)))}},
 			want:        Plan{Action: PlanFull, Base: snap("d32_monthly", day(32)), Reason: "window-elapsed"},
+		},
+		{
+			name:    "window elapsed, but the newest candidate was the last backup",
+			jobInfo: monthlyOnly,
+			snapshots: []files.SnapshotInfo{
+				snap("d40_hourly", day(40)), snap("d31_monthly", day(31)), snap("d1_monthly", day(1)),
+			},
+			destBackups: [][]*files.JobInfo{{
+				incrManifest(snap("d31_monthly", day(31)), snap("d1_monthly", day(1))),
+				fullManifest(snap("d1_monthly", day(1))),
+			}},
+			want: Plan{Action: PlanNoop, Reason: "nothing-newer", FullDue: true},
+		},
+		{
+			name:    "window elapsed, but the newest candidate predates the last backup",
+			jobInfo: monthlyDaily,
+			snapshots: []files.SnapshotInfo{
+				snap("d40_daily", day(40)), snap("d39_daily", day(39)), snap("d31_monthly", day(31)), snap("d1_monthly", day(1)),
+			},
+			destBackups: [][]*files.JobInfo{{
+				incrManifest(snap("d39_daily", day(39)), snap("d1_monthly", day(1))),
+				fullManifest(snap("d1_monthly", day(1))),
+			}},
+			want: Plan{
+				Action: PlanIncremental, Base: snap("d40_daily", day(40)), Source: snap("d39_daily", day(39)),
+				Reason: "newer-candidate", FullDue: true,
+			},
+		},
+		{
+			name:        "diverged destinations: the one behind decides",
+			jobInfo:     monthlyOnly,
+			snapshots:   []files.SnapshotInfo{snap("d60_monthly", day(60)), snap("d30_monthly", day(30)), snap("d1_monthly", day(1))},
+			destBackups: [][]*files.JobInfo{ahead, behind},
+			want:        Plan{Action: PlanFull, Base: snap("d60_monthly", day(60)), Reason: "window-elapsed"},
+		},
+		{
+			name:        "diverged destinations in the other order",
+			jobInfo:     monthlyOnly,
+			snapshots:   []files.SnapshotInfo{snap("d60_monthly", day(60)), snap("d30_monthly", day(30)), snap("d1_monthly", day(1))},
+			destBackups: [][]*files.JobInfo{behind, ahead},
+			want:        Plan{Action: PlanFull, Base: snap("d60_monthly", day(60)), Reason: "window-elapsed"},
 		},
 		{
 			name:    "source pruned",
@@ -243,7 +295,7 @@ func TestPlanSmartSnapshotsReasons(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if got.Action != tc.want.Action || got.Reason != tc.want.Reason ||
+			if got.Action != tc.want.Action || got.Reason != tc.want.Reason || got.FullDue != tc.want.FullDue ||
 				!snapshotsIdentical(got.Base, tc.want.Base) || !snapshotsIdentical(got.Source, tc.want.Source) {
 				t.Errorf("got %+v, want %+v", got, tc.want)
 			}
@@ -258,6 +310,33 @@ func TestPlanSmartSnapshotsReasons(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A run cannot see snapshots created after it, even when a simulation starts
+// before the newest snapshot it was given.
+func TestRunSeesOnlyPastSnapshots(t *testing.T) {
+	aug1 := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	sep1 := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	sc := &Scenario{
+		Volume:      "tank/data",
+		JobInfo:     files.JobInfo{FullIfOlderThan: 4320 * time.Hour, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_monthly"},
+		Snapshots:   []files.SnapshotInfo{snap("autosnap_2026-09-01_00:00:00_monthly", sep1), snap("autosnap_2026-08-01_00:00:00_monthly", aug1)},
+		DestBackups: [][]*files.JobInfo{{}},
+		From:        aug1.AddDate(0, 0, 14),
+		Until:       sep1.AddDate(0, 0, 1),
+	}
+	sim := sc.Run()
+	if first := sim.Steps[0]; len(first.Snapshots) != 1 || first.Plan.Base.Name != "autosnap_2026-08-01_00:00:00_monthly" {
+		t.Errorf("first run saw %v and planned %v, want only the August monthly", first.Snapshots, first.Plan)
+	}
+	for _, st := range sim.Steps[1:] {
+		if st.Plan.Action == PlanNoop {
+			continue
+		}
+		if !st.At.Equal(sep1) || st.Plan.Action != PlanIncremental || st.Plan.Base.Name != "autosnap_2026-09-01_00:00:00_monthly" {
+			t.Errorf("%v planned %v, want only the September monthly, from August's, on September 1st", st.At, st.Plan)
+		}
 	}
 }
 
