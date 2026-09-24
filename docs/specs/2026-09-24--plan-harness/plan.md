@@ -608,3 +608,51 @@ not touch the smart path today.
 - `plan` as a real subcommand is wanted (versus test-only tooling). It is the
   only way to run the year-ahead projection against the live destination on
   the pool host, which is the "first time" check.
+
+## Implementation notes (2026-09-24)
+
+All phases landed, each commit green in `make test-docker`. Where the code
+differs from the plan above:
+
+- **Pruning follows sanoid's real rule.** A snapshot is destroyed once it is
+  older than count x period (hourly 1h, daily 24h, weekly 7d, monthly 31d,
+  yearly 365.25d), oldest first, but never while count or fewer remain. Pools
+  therefore hold count or count+1 of each period, as on the real pool
+  (`hourly=48` shows 49), rather than "down to Keep newest".
+- **Check slack.** `full-cadence` and `restore-depth` add slack for the wait
+  until the next full candidate: one period of the full suffix (`_monthly` →
+  31d), plus one run. `restore-depth` allows
+  `ceil((window + slack) / spacing) + 1` incrementals, where spacing is the
+  larger of the run cadence and the incremental suffix's minimum period
+  (monthly 28d). Without the slack, the fixed monthly/daily year (183-link
+  chains) would fail the plan's `ceil(window/1d)+1 = 181`.
+  `no-orphan-full` only looks at the next incremental; `full-cadence` covers
+  consecutive fulls.
+- **Rendering.** NOOP lines keep their reason (`NOOP x6  nothing-newer`), so
+  `source-pruned` no-ops stand out. Identical consecutive errors collapse like
+  no-ops. Bookmark sources render as `from #name`. Violations tied to no run
+  print without a time.
+- **Fixtures.** `manifests.txt` separates destinations with `---`, and each
+  name takes an optional epoch (`name epoch`), which wins over the snapshot
+  list. A scenario simulates runs iff `until=` is set. A `schedule` file with
+  only `volume=`, `location=` or `checks=` stays a next-run scenario.
+  `--schedule` takes the same comma-separated items. Snapshot lists are
+  stable-sorted newest-first, which leaves a `-S creation` capture unchanged.
+- **CLI.** `plan` uses the existing global `--jsonOutput` rather than a new
+  `--json`. Exit codes come from `cmd.exitCode`: 0 on success or `ErrNoOp`,
+  2 on failed checks, 1 for other `plan` errors, and 255 otherwise (as
+  before). The six smart flags are registered once, by
+  `backup.AddSmartFlags`.
+- **T2.2 correction.** With `--incrementalSnapshotSuffix _daily`, the daily of
+  the 1st is sent as an ordinary incremental (it is the newest `_daily`), not
+  skipped as a no-op.
+- **T4.2.** The pruned-source no-op is a next-run scenario. A simulation
+  through the next monthly would end in a source-pruned full one month after
+  the last full, which `full-cadence` rightly flags.
+- **Tests beyond the plan.** `TestTieOrderIndependence` also covers the two
+  year-long scenarios, where the roll-overs fall on coincident snapshots, and
+  it fails if the variants do not change the pool. The fake zfs refuses sends
+  whose target or source is not in the fixture. `TestE2EExitCodes` also
+  checks `plan` exiting 2.
+- **Fixture epochs.** The plan's sample epochs (1756684801, ...) are for 2025,
+  not 2026. The fixtures compute theirs.
