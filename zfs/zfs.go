@@ -24,6 +24,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os/exec"
@@ -128,28 +129,79 @@ func parseListOutput(r io.Reader) ([]files.SnapshotInfo, error) {
 //
 // and returns the rows in input order. Each row is name[, creation[, type]],
 // separated by tabs (or, when a row has no tabs, by spaces). The dataset prefix
-// of the name (tank/data@, tank/data#) is optional. A row without a creation
-// column takes its creation time from the sanoid timestamp in the name, read in
-// loc (see SnapshotNameTime); a row without a type column is a bookmark when
-// its name contains '#'. Blank lines and '#' comments are skipped.
+// of the name (tank/data@, tank/data#) is optional, but the rows that have one
+// must all name the same dataset. A row without a creation column takes its
+// creation time from the sanoid timestamp in the name, read in loc (see
+// SnapshotNameTime); a row without a type column is a bookmark when its name
+// contains '#'. Blank lines and '#' comments are skipped.
+//
+// A listing that starts with '[' is JSON: an array of rows such as
+// {"name": "tank/data@snap", "creation": 1788220800, "type": "snapshot"},
+// which is `zfs list` output converted to JSON. Only name is required;
+// creation is an epoch, as a number or a string, and other keys (used, refer,
+// ...) are ignored.
 func ParseSnapshotList(r io.Reader, loc *time.Location) ([]files.SnapshotInfo, error) {
-	var snapshots []files.SnapshotInfo
-	scanner := bufio.NewScanner(r)
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	if trimmed := bytes.TrimSpace(data); len(trimmed) > 0 && (trimmed[0] == '[' || trimmed[0] == '{') {
+		return parseJSONSnapshotList(trimmed, loc)
+	}
+
+	var l listing
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for lineNo := 1; scanner.Scan(); lineNo++ {
 		line := StripComment(scanner.Text())
 		if line == "" {
 			continue
 		}
-		snapInfo, err := parseSnapshotRow(line, loc)
-		if err != nil {
+		if err := l.addRow(line, loc); err != nil {
 			return nil, fmt.Errorf("line %d: %v", lineNo, err)
 		}
-		snapshots = append(snapshots, snapInfo)
 	}
-	return snapshots, scanner.Err()
+	return l.snapshots, scanner.Err()
 }
 
-func parseSnapshotRow(line string, loc *time.Location) (files.SnapshotInfo, error) {
+// jsonRow is a row of a JSON snapshot listing. Keys match case-insensitively.
+type jsonRow struct {
+	Name     string          `json:"name"`
+	Creation json.RawMessage `json:"creation"`
+	Type     string          `json:"type"`
+}
+
+func parseJSONSnapshotList(data []byte, loc *time.Location) ([]files.SnapshotInfo, error) {
+	var rows []jsonRow
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return nil, fmt.Errorf(`JSON listing: %v; want an array of rows such as {"name": "tank/data@snap"}`, err)
+	}
+	var l listing
+	for i, row := range rows {
+		if row.Name == "" {
+			return nil, fmt.Errorf("row %d: no name", i+1)
+		}
+		// The epoch may be a number or a string; null or no key means none.
+		creation := string(row.Creation)
+		var s string
+		if json.Unmarshal(row.Creation, &s) == nil {
+			creation = s
+		}
+		if err := l.add(row.Name, creation, row.Type, loc); err != nil {
+			return nil, fmt.Errorf("row %d: %v", i+1, err)
+		}
+	}
+	return l.snapshots, nil
+}
+
+// listing collects the rows of a snapshot listing, which must all be of one
+// dataset.
+type listing struct {
+	dataset   string // of the first row that names one
+	snapshots []files.SnapshotInfo
+}
+
+// addRow adds a text row: name[, creation[, type]].
+func (l *listing) addRow(line string, loc *time.Location) error {
 	var fields []string
 	if strings.Contains(line, "\t") {
 		for _, field := range strings.Split(line, "\t") {
@@ -161,41 +213,54 @@ func parseSnapshotRow(line string, loc *time.Location) (files.SnapshotInfo, erro
 		fields = strings.Fields(line)
 	}
 	if len(fields) > 3 {
-		return files.SnapshotInfo{}, fmt.Errorf("want name[, creation[, type]], got %q", line)
+		return fmt.Errorf("want name[, creation[, type]], got %q", line)
+	}
+	fields = append(fields, "", "") // creation and type are optional
+	return l.add(fields[0], fields[1], fields[2], loc)
+}
+
+// add adds a row. An empty creation comes from the sanoid timestamp in the
+// name; an empty kind makes a name with '#' a bookmark.
+func (l *listing) add(name, creation, kind string, loc *time.Location) error {
+	if i := strings.IndexAny(name, "@#"); i >= 0 {
+		if l.dataset == "" {
+			l.dataset = name[:i]
+		} else if name[:i] != l.dataset {
+			return fmt.Errorf("%s is not in %s like the rows before it: list one dataset", name, l.dataset)
+		}
 	}
 
-	snapInfo := files.SnapshotInfo{Name: fields[0]}
-	snapInfo.Bookmark = strings.Contains(snapInfo.Name, "#")
-	if len(fields) == 3 {
-		switch fields[2] {
-		case "snapshot":
-			snapInfo.Bookmark = false
-		case "bookmark":
-			snapInfo.Bookmark = true
-		default:
-			return files.SnapshotInfo{}, fmt.Errorf("unknown type %q in %q", fields[2], line)
-		}
+	snapInfo := files.SnapshotInfo{Bookmark: strings.Contains(name, "#")}
+	switch kind {
+	case "":
+	case "snapshot":
+		snapInfo.Bookmark = false
+	case "bookmark":
+		snapInfo.Bookmark = true
+	default:
+		return fmt.Errorf("unknown type %q for %s", kind, name)
 	}
 	if snapInfo.Bookmark {
-		snapInfo.Name = snapInfo.Name[strings.Index(snapInfo.Name, "#")+1:]
+		snapInfo.Name = name[strings.Index(name, "#")+1:]
 	} else {
-		snapInfo.Name = snapInfo.Name[strings.Index(snapInfo.Name, "@")+1:]
+		snapInfo.Name = name[strings.Index(name, "@")+1:]
 	}
 
-	if len(fields) == 1 {
-		creation, ok := SnapshotNameTime(snapInfo.Name, loc)
+	if creation == "" {
+		t, ok := SnapshotNameTime(snapInfo.Name, loc)
 		if !ok {
-			return files.SnapshotInfo{}, fmt.Errorf("no creation time for %q: add an epoch column or use a sanoid name", line)
+			return fmt.Errorf("no creation time for %s: add a creation epoch or use a sanoid name", name)
 		}
-		snapInfo.CreationTime = creation
-		return snapInfo, nil
+		snapInfo.CreationTime = t
+	} else {
+		epoch, err := strconv.ParseInt(creation, 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid creation epoch %q for %s", creation, name)
+		}
+		snapInfo.CreationTime = time.Unix(epoch, 0).In(loc)
 	}
-	creation, err := strconv.ParseInt(fields[1], 10, 64)
-	if err != nil {
-		return files.SnapshotInfo{}, fmt.Errorf("invalid creation epoch %q in %q", fields[1], line)
-	}
-	snapInfo.CreationTime = time.Unix(creation, 0).In(loc)
-	return snapInfo, nil
+	l.snapshots = append(l.snapshots, snapInfo)
+	return nil
 }
 
 // SnapshotNameTime returns the time embedded in a sanoid-style snapshot name

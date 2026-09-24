@@ -248,6 +248,59 @@ func TestParseSnapshotList(t *testing.T) {
 			input:   "tank/data@a\t1788220800\tsnapshot\textra\n",
 			wantErr: "want name[, creation[, type]]",
 		},
+		{
+			name:    "rows of two datasets",
+			input:   "tank/data@a\t1788220800\tsnapshot\ntank/other@b\t1788220800\tsnapshot\n",
+			wantErr: "line 2: tank/other@b is not in tank/data",
+		},
+		{
+			name: "JSON rows, input order is kept",
+			input: `
+[
+  {"name": "tank/data@autosnap_2026-08-01_00:00:00_monthly", "used": "0B", "avail": "-", "refer": "207M", "mountpoint": "-"},
+  {"name": "tank/data#autosnap_2026-09-01_00:00:00_monthly", "creation": null},
+  {"NAME": "tank/data@before-upgrade", "CREATION": "1788220800", "TYPE": "snapshot"},
+  {"name": "tank/data#manual", "creation": 1785542400, "type": "bookmark"}
+]
+`,
+			want: []files.SnapshotInfo{
+				{Name: "autosnap_2026-08-01_00:00:00_monthly", CreationTime: aug1},
+				{Name: "autosnap_2026-09-01_00:00:00_monthly", CreationTime: sep1, Bookmark: true},
+				{Name: "before-upgrade", CreationTime: sep1},
+				{Name: "manual", CreationTime: aug1, Bookmark: true},
+			},
+		},
+		{
+			name:  "JSON sanoid names are read in the given location",
+			input: `[{"name": "autosnap_2026-09-24_00:00:00_daily"}]`,
+			loc:   edt,
+			want:  []files.SnapshotInfo{{Name: "autosnap_2026-09-24_00:00:00_daily", CreationTime: sep24.Add(4 * time.Hour)}},
+		},
+		{
+			name:    "JSON row without a name",
+			input:   `[{"name": "tank/data@a", "creation": 1788220800}, {"used": "0B"}]`,
+			wantErr: "row 2: no name",
+		},
+		{
+			name:    "JSON creation that is not an epoch",
+			input:   `[{"name": "tank/data@a", "creation": "Tue Sep  1  0:00 2026"}]`,
+			wantErr: `row 1: invalid creation epoch "Tue Sep  1  0:00 2026" for tank/data@a`,
+		},
+		{
+			name:    "JSON bare non-sanoid name",
+			input:   `[{"name": "tank/data@manual"}]`,
+			wantErr: "row 1: no creation time for tank/data@manual",
+		},
+		{
+			name:    "JSON rows of two datasets",
+			input:   `[{"name": "tank/data@autosnap_2026-09-01_00:00:00_monthly"}, {"name": "tank/other@autosnap_2026-09-01_00:00:00_monthly"}]`,
+			wantErr: "row 2: tank/other@autosnap_2026-09-01_00:00:00_monthly is not in tank/data",
+		},
+		{
+			name:    "JSON object instead of an array",
+			input:   `{"output_version": {"command": "zfs list"}, "datasets": {}}`,
+			wantErr: "want an array of rows",
+		},
 	}
 
 	for _, tc := range testCases {

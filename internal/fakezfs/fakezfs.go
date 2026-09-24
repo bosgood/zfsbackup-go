@@ -25,9 +25,9 @@
 //
 // Configuration is by environment:
 //
-//	FAKEZFS_SNAPSHOTS      snapshot fixture in the format zfs.ParseSnapshotList reads; rows
-//	                       with a dataset prefix belong to that dataset, rows without one to
-//	                       every dataset; bare sanoid names are read in UTC
+//	FAKEZFS_SNAPSHOTS      snapshot fixture in the text format zfs.ParseSnapshotList reads
+//	                       (not JSON); rows with a dataset prefix belong to that dataset,
+//	                       rows without one to every dataset; bare sanoid names are read in UTC
 //	FAKEZFS_STREAM_BYTES   bytes `zfs send` writes (default 65536)
 //	FAKEZFS_DRYRUN_OUTPUT  replaces what `zfs send -n -P` prints
 //	FAKEZFS_LOG            file every invocation's arguments are appended to, one line each

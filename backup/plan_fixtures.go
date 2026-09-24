@@ -63,12 +63,13 @@ type Scenario struct {
 
 // LoadScenario reads a scenario directory:
 //
-//	flags          smart send flags, as passed to `zfsbackup send`
-//	snapshots.txt  the pool's snapshots (see zfs.ParseSnapshotList)
-//	manifests.txt  optional: backups already at the destinations (see ReadManifests)
-//	schedule       optional: settings for ParseScheduleSpec
+//	flags           smart send flags, as passed to `zfsbackup send`
+//	snapshots.txt   the pool's snapshots (see zfs.ParseSnapshotList)
+//	snapshots.json  or the same as JSON, such as a link to a capture in testdata/zfs
+//	manifests.txt   optional: backups already at the destinations (see ReadManifests)
+//	schedule        optional: settings for ParseScheduleSpec
 //
-// Every file ignores blank lines and '#' comments.
+// Every file but snapshots.json ignores blank lines and '#' comments.
 func LoadScenario(dir string) (*Scenario, error) {
 	s := &Scenario{Volume: defaultScenarioVolume}
 
@@ -85,8 +86,12 @@ func LoadScenario(dir string) (*Scenario, error) {
 		s.JobInfo = j
 		return err
 	})
+	var snapshots string
 	if err == nil {
-		err = readScenarioFile(filepath.Join(dir, "snapshots.txt"), true, s.ReadSnapshots)
+		snapshots, err = scenarioSnapshotsFile(dir)
+	}
+	if err == nil {
+		err = readScenarioFile(snapshots, true, s.ReadSnapshots)
 	}
 	if err == nil {
 		s.DestBackups = [][]*files.JobInfo{{}}
@@ -96,6 +101,19 @@ func LoadScenario(dir string) (*Scenario, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// scenarioSnapshotsFile returns the path of a scenario's snapshot listing:
+// snapshots.json if the scenario has one, else snapshots.txt.
+func scenarioSnapshotsFile(dir string) (string, error) {
+	text, js := filepath.Join(dir, "snapshots.txt"), filepath.Join(dir, "snapshots.json")
+	if _, err := os.Lstat(js); os.IsNotExist(err) {
+		return text, nil
+	}
+	if _, err := os.Lstat(text); err == nil {
+		return "", fmt.Errorf("%s: want snapshots.txt or snapshots.json, not both", dir)
+	}
+	return js, nil
 }
 
 func readScenarioFile(path string, required bool, read func(io.Reader) error) error {
