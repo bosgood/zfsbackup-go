@@ -181,6 +181,9 @@ func ResetSendJobInfo() {
 	jobInfo.FullSnapshotSuffix = ""
 	jobInfo.IncrementalSnapshotSuffix = ""
 	sendDryRun = false
+	planSnapshots = ""
+	planManifests = ""
+	planSchedule = ""
 
 	jobInfo.MaxFileBuffer = 5
 	jobInfo.MaxParallelUploads = 4
@@ -256,20 +259,8 @@ func updateJobInfo(args []string) error {
 			jobInfo.IncrementalSnapshot.CreationTime = creationTime
 		}
 	} else {
-		// Some basic checks here
-		onlyOneCheck := 0
-		if jobInfo.Full {
-			onlyOneCheck++
-		}
-		if jobInfo.Incremental {
-			onlyOneCheck++
-		}
-		if jobInfo.FullIfOlderThan != -1*time.Minute {
-			onlyOneCheck++
-		}
-		if onlyOneCheck > 1 {
-			log.AppLogger.Errorf("Please specify only one \"smart\" option at a time")
-			return errInvalidInput
+		if err := validateSmartFlags(); err != nil {
+			return err
 		}
 		if len(parts) != 1 {
 			log.AppLogger.Errorf("When using a smart option, please only specify the volume to backup, do not include any snapshot information.")
@@ -282,6 +273,15 @@ func updateJobInfo(args []string) error {
 		log.AppLogger.Debugf("Utilizing smart option.")
 	}
 
+	return nil
+}
+
+// validateSmartFlags checks that exactly one "smart" option is set.
+func validateSmartFlags() error {
+	if err := backup.ValidateSmartOptions(&jobInfo); err != nil {
+		log.AppLogger.Errorf("%v", err)
+		return errInvalidInput
+	}
 	return nil
 }
 

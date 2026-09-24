@@ -122,6 +122,13 @@ func selectSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo
 	return nil
 }
 
+// BackupsAtTarget lists the backups of volume at the target destination,
+// newest-first, as the smart options see them. It syncs the local manifest
+// cache for the target and only reads from the target.
+func BackupsAtTarget(ctx context.Context, volume, target string, jobInfo *files.JobInfo) ([]*files.JobInfo, error) {
+	return getBackupsForTarget(ctx, volume, target, jobInfo)
+}
+
 // Will list all backups found in the target destination
 func getBackupsForTarget(ctx context.Context, volume, target string, jobInfo *files.JobInfo) ([]*files.JobInfo, error) {
 	// Prepare the backend client

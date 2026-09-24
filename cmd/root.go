@@ -74,7 +74,14 @@ destination of your choosing.`,
 // Execute adds all child commands to the root command sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute(ctx context.Context) {
-	if err := RootCmd.ExecuteContext(ctx); err != nil {
+	cmd, err := RootCmd.ExecuteContextC(ctx)
+	switch {
+	case err == nil:
+	case errors.Is(err, errChecksFailed):
+		os.Exit(2)
+	case cmd == planCmd:
+		os.Exit(1)
+	default:
 		os.Exit(-1)
 	}
 }
