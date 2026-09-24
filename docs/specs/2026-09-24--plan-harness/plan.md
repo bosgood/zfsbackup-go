@@ -656,3 +656,31 @@ differs from the plan above:
   checks `plan` exiting 2.
 - **Fixture epochs.** The plan's sample epochs (1756684801, ...) are for 2025,
   not 2026. The fixtures compute theirs.
+
+After an independent review of the implementation:
+
+- **`no-errors` default check.** A failed run is a violation, so `plan`
+  exits 2 instead of printing `checks: OK`. A scenario can declare
+  deliberate violations with an `expect-violations` file
+  (`out-of-sync-destinations` does).
+- **`no-duplicate-send`** flags any send of a snapshot already backed up at
+  the destination. That catches the original monthly-only bug without the
+  opt-in `coverage:` check.
+- **`full-cadence`** needs a known slack, and bounds a gap above only after a
+  full a run sent, so a full catching up after the initial state is fine.
+  `restore-depth` is linear per run.
+- **Diverged destinations.** The full roll decision compares with the
+  destination furthest behind, so its outcome does not depend on the order
+  of the destinations. `Plan.FullDue` lets `send` say when a full is due but
+  waiting for a newer monthly. Runs only see snapshots created by their time.
+- **CLI.** `Execute` removes the temporary directory of failed commands, which
+  a daily `ErrNoOp` used to leak. `plan` loads keys like a smart `send`,
+  rejects stdin read twice, and rejects schedules with no runs. Live
+  `zfs list` output is parsed strictly (tabs only, names verbatim).
+- **e2e.** Every next-run golden is replayed through the real `send` after its
+  manifests are recreated with manual sends. The year replay checks each
+  send. The binary test checks the default-level `Dry-run:` output and that
+  no temporary directories are left.
+- **Not changed:** a `source-pruned` no-op still exits 0 with a warning. An
+  alternative is an incremental from an older backup still on the pool; that
+  is a design decision for later.
