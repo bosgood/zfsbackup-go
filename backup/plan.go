@@ -21,6 +21,7 @@
 package backup
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -369,6 +370,82 @@ func (sim *Simulation) WriteText(w io.Writer, violations []Violation) error {
 	}
 	_, err := io.WriteString(w, b.String())
 	return err
+}
+
+// WriteJSON writes every run, the destinations after the last run and the
+// check results as one JSON document.
+func (sim *Simulation) WriteJSON(w io.Writer, violations []Violation) error {
+	type snapshot struct {
+		Name     string    `json:"name"`
+		Creation time.Time `json:"creation"`
+		Bookmark bool      `json:"bookmark,omitempty"`
+	}
+	loc := sim.Scenario.location()
+	ref := func(s files.SnapshotInfo) *snapshot {
+		if s.Name == "" {
+			return nil
+		}
+		return &snapshot{Name: s.Name, Creation: s.CreationTime.In(loc), Bookmark: s.Bookmark}
+	}
+	at := func(t time.Time) *time.Time {
+		if t.IsZero() {
+			return nil
+		}
+		t = t.In(loc)
+		return &t
+	}
+	type run struct {
+		At            *time.Time `json:"at,omitempty"` // omitted for a single next run
+		Action        string     `json:"action"`       // full, incremental, noop or error
+		Base          *snapshot  `json:"base,omitempty"`
+		Source        *snapshot  `json:"source,omitempty"`
+		MissingSource *snapshot  `json:"missingSource,omitempty"` // the pruned incremental source (reason source-pruned)
+		Reason        string     `json:"reason,omitempty"`
+		Error         string     `json:"error,omitempty"`
+		Snapshots     int        `json:"snapshots"` // on the pool at this run
+	}
+	type backup struct {
+		Base   *snapshot `json:"base"`
+		Source *snapshot `json:"source,omitempty"`
+	}
+	type violation struct {
+		Check  string     `json:"check"`
+		At     *time.Time `json:"at,omitempty"`
+		Detail string     `json:"detail"`
+	}
+	out := struct {
+		Volume       string      `json:"volume"`
+		Runs         []run       `json:"runs"`
+		Destinations [][]backup  `json:"destinations"` // after the last run, newest-first
+		Violations   []violation `json:"violations"`
+	}{Volume: sim.Scenario.Volume, Runs: []run{}, Destinations: [][]backup{}, Violations: []violation{}}
+
+	for _, st := range sim.Steps {
+		r := run{At: at(st.At), Action: string(st.Plan.Action), Reason: st.Plan.Reason, Snapshots: len(st.Snapshots)}
+		switch {
+		case st.Err != nil:
+			r = run{At: r.At, Action: "error", Error: st.Err.Error(), Snapshots: r.Snapshots}
+		case st.Plan.Action == PlanIncremental:
+			r.Base, r.Source = ref(st.Plan.Base), ref(st.Plan.Source)
+		default:
+			r.Base, r.MissingSource = ref(st.Plan.Base), ref(st.Plan.Source)
+		}
+		out.Runs = append(out.Runs, r)
+	}
+	for _, dest := range sim.Manifests {
+		backups := []backup{}
+		for _, m := range dest {
+			backups = append(backups, backup{Base: ref(m.BaseSnapshot), Source: ref(m.IncrementalSnapshot)})
+		}
+		out.Destinations = append(out.Destinations, backups)
+	}
+	for _, v := range violations {
+		out.Violations = append(out.Violations, violation{Check: v.Check, At: at(v.At), Detail: v.Detail})
+	}
+
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
 }
 
 // describe renders a step's outcome; n > 1 counts collapsed identical steps.
