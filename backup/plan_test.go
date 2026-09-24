@@ -161,6 +161,18 @@ func TestPlanSmartSnapshotsReasons(t *testing.T) {
 			want: Plan{Action: PlanFull, Base: snap("d10_monthly", day(10)), Source: snap("d5_daily", day(5)), Reason: "source-pruned"},
 		},
 		{
+			name:    "source pruned and no newer full candidate",
+			jobInfo: monthlyDaily,
+			snapshots: []files.SnapshotInfo{
+				snap("d12_daily", day(12)), snap("d6_daily", day(6)), snap("d1_monthly", day(1)),
+			},
+			destBackups: [][]*files.JobInfo{{
+				incrManifest(snap("d2_daily", day(2)), snap("d1_monthly", day(1))),
+				fullManifest(snap("d1_monthly", day(1))),
+			}},
+			want: Plan{Action: PlanNoop, Source: snap("d2_daily", day(2)), Reason: "source-pruned"},
+		},
+		{
 			name:        "newer candidate",
 			jobInfo:     monthlyDaily,
 			snapshots:   []files.SnapshotInfo{snap("d2_daily", day(2)), snap("d1_monthly", day(1))},
