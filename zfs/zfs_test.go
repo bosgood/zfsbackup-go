@@ -66,6 +66,7 @@ const fakeFixture = `tank/data@c	300	snapshot
 tank/data#b	200	bookmark
 tank/data@b	200	snapshot
 tank/data@a	100	snapshot
+tank/data@with space	50	snapshot
 tank/other@z	900	snapshot
 `
 
@@ -80,6 +81,7 @@ func TestGetSnapshotsAndBookmarks(t *testing.T) {
 		{Name: "b", CreationTime: time.Unix(200, 0), Bookmark: true},
 		{Name: "b", CreationTime: time.Unix(200, 0)},
 		{Name: "a", CreationTime: time.Unix(100, 0)},
+		{Name: "with space", CreationTime: time.Unix(50, 0)},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %+v, want %+v", got, want)

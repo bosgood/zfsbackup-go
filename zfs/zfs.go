@@ -77,7 +77,7 @@ func GetSnapshotsAndBookmarks(ctx context.Context, target string) ([]files.Snaps
 	if err != nil {
 		return nil, fmt.Errorf("%s (%v)", strings.TrimSpace(errB.String()), err)
 	}
-	snapshots, perr := ParseSnapshotList(rpipe, time.Local)
+	snapshots, perr := parseListOutput(rpipe)
 	if perr != nil {
 		// Drain the rest so zfs does not block on a full pipe before Wait.
 		_, _ = io.Copy(io.Discard, rpipe)
@@ -91,6 +91,35 @@ func GetSnapshotsAndBookmarks(ctx context.Context, target string) ([]files.Snaps
 	}
 
 	return snapshots, nil
+}
+
+// parseListOutput reads what `zfs list -H -p -o name,creation,type` prints:
+// exactly three tab-separated fields per line. Unlike ParseSnapshotList it
+// takes names verbatim, since ZFS names may contain spaces.
+func parseListOutput(r io.Reader) ([]files.SnapshotInfo, error) {
+	var snapshots []files.SnapshotInfo
+	scanner := bufio.NewScanner(r)
+	for lineNo := 1; scanner.Scan(); lineNo++ {
+		fields := strings.Split(scanner.Text(), "\t")
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("zfs list line %d: want name, creation and type, got %q", lineNo, scanner.Text())
+		}
+		creation, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("zfs list line %d: invalid creation %q", lineNo, fields[1])
+		}
+		snapInfo := files.SnapshotInfo{CreationTime: time.Unix(creation, 0)}
+		switch fields[2] {
+		case "bookmark":
+			snapInfo.Name, snapInfo.Bookmark = fields[0][strings.Index(fields[0], "#")+1:], true
+		case "snapshot":
+			snapInfo.Name = fields[0][strings.Index(fields[0], "@")+1:]
+		default:
+			return nil, fmt.Errorf("zfs list line %d: unknown type %q", lineNo, fields[2])
+		}
+		snapshots = append(snapshots, snapInfo)
+	}
+	return snapshots, scanner.Err()
 }
 
 // ParseSnapshotList reads a snapshot listing as printed by
