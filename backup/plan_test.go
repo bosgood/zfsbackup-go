@@ -23,6 +23,7 @@ package backup
 import (
 	"bytes"
 	"flag"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -244,4 +245,72 @@ func TestPlanSmartSnapshotsReasons(t *testing.T) {
 // snapshotsIdentical is SnapshotInfo.Equal plus the bookmark flag.
 func snapshotsIdentical(a, b files.SnapshotInfo) bool {
 	return a.Equal(&b) && a.Bookmark == b.Bookmark
+}
+
+// TestTieOrderIndependence reruns scenarios with every order of the snapshots
+// sanoid takes at the same boundary (the 1st at midnight brings a monthly, a
+// daily and an hourly), in the same second and 1s apart. `zfs list -S
+// creation` guarantees neither, so every run must plan the same kind of
+// backup either way, and the checks must agree.
+func TestTieOrderIndependence(t *testing.T) {
+	for _, name := range []string{"monthly-only-5-months", "monthly-daily-5-months"} {
+		t.Run(name, func(t *testing.T) {
+			var want, wantVariant string
+			pools := make(map[string]bool) // distinct pools seen, to prove the variants differ
+			for _, order := range permutations([]string{"monthly", "daily", "hourly"}) {
+				for _, gap := range []time.Duration{0, time.Second} {
+					sc, err := LoadScenario(filepath.Join("testdata/scenarios", name))
+					if err != nil {
+						t.Fatalf("LoadScenario: %v", err)
+					}
+					sc.Schedule.tieOrder, sc.Schedule.tieGap = order, gap
+					sim := sc.Run()
+					pools[fmt.Sprint(sim.Steps[len(sim.Steps)-1].Snapshots)] = true
+					got := tieIndependentSummary(sim, sim.Check(sc.Checks))
+					variant := fmt.Sprintf("order %v, %v apart", order, gap)
+					if want == "" {
+						want, wantVariant = got, variant
+					} else if got != want {
+						t.Errorf("%s plans differently from %s (- %[2]s, + %[1]s):\n%s", variant, wantVariant, lineDiff(want, got))
+					}
+				}
+			}
+			if len(pools) < 2 {
+				t.Errorf("every variant produced the same pool; the tie order hooks had no effect")
+			}
+		})
+	}
+}
+
+// tieIndependentSummary renders every run and violation, naming snapshots by
+// period only: with coincident snapshots spaced apart their names change.
+func tieIndependentSummary(sim *Simulation, violations []Violation) string {
+	period := func(s files.SnapshotInfo) string {
+		if s.Name == "" {
+			return "-"
+		}
+		return s.Name[strings.LastIndex(s.Name, "_")+1:]
+	}
+	var b strings.Builder
+	for _, st := range sim.Steps {
+		fmt.Fprintf(&b, "%s %s %s %s %s %v\n", sim.formatTime(st.At), st.Plan.Action, st.Plan.Reason, period(st.Plan.Base), period(st.Plan.Source), st.Err)
+	}
+	for _, v := range violations {
+		fmt.Fprintf(&b, "violation %s %s\n", v.Check, sim.formatTime(v.At))
+	}
+	return b.String()
+}
+
+func permutations(items []string) [][]string {
+	if len(items) <= 1 {
+		return [][]string{append([]string(nil), items...)}
+	}
+	var out [][]string
+	for i := range items {
+		rest := append(append([]string(nil), items[:i]...), items[i+1:]...)
+		for _, p := range permutations(rest) {
+			out = append(out, append([]string{items[i]}, p...))
+		}
+	}
+	return out
 }
