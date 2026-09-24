@@ -22,6 +22,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -266,7 +267,11 @@ func updateJobInfo(args []string) error {
 			log.AppLogger.Errorf("When using a smart option, please only specify the volume to backup, do not include any snapshot information.")
 			return errInvalidInput
 		}
-		if err := backup.ProcessSmartOptions(context.Background(), &jobInfo); err != nil {
+		if err := backup.ProcessSmartOptions(context.Background(), &jobInfo); errors.Is(err, backup.ErrNoOp) {
+			// The normal outcome of most runs with --fullIfOlderThan; Execute exits 0.
+			log.AppLogger.Noticef("Nothing new to back up.")
+			return err
+		} else if err != nil {
 			log.AppLogger.Errorf("Error while trying to process smart option - %v", err)
 			return err
 		}

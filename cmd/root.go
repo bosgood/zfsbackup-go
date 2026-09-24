@@ -38,6 +38,7 @@ import (
 	"golang.org/x/crypto/openpgp"
 	"golang.org/x/crypto/ssh/terminal"
 
+	"github.com/someone1/zfsbackup-go/backup"
 	"github.com/someone1/zfsbackup-go/config"
 	"github.com/someone1/zfsbackup-go/files"
 	"github.com/someone1/zfsbackup-go/log"
@@ -74,15 +75,24 @@ destination of your choosing.`,
 // Execute adds all child commands to the root command sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute(ctx context.Context) {
-	cmd, err := RootCmd.ExecuteContextC(ctx)
+	if code := exitCode(RootCmd.ExecuteContextC(ctx)); code != 0 {
+		os.Exit(code)
+	}
+}
+
+// exitCode maps the outcome of a command to the process exit status: 0 on
+// success and when a smart send finds nothing new to back up, 2 when plan's
+// checks fail, 1 for other plan errors and 255 for any other error.
+func exitCode(cmd *cobra.Command, err error) int {
 	switch {
-	case err == nil:
+	case err == nil, errors.Is(err, backup.ErrNoOp):
+		return 0
 	case errors.Is(err, errChecksFailed):
-		os.Exit(2)
+		return 2
 	case cmd == planCmd:
-		os.Exit(1)
+		return 1
 	default:
-		os.Exit(-1)
+		return 255
 	}
 }
 
