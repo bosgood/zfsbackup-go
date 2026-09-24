@@ -263,14 +263,19 @@ func (s *Scenario) run(at time.Time, snapshots []files.SnapshotInfo, dest [][]*f
 	plan, err := planSmartSnapshots(&jobInfo, snapshots, dest)
 	if err == nil && plan.Action != PlanNoop {
 		for i := range dest {
-			manifest := &files.JobInfo{VolumeName: s.Volume, BaseSnapshot: plan.Base}
-			if plan.Action == PlanIncremental {
-				manifest.IncrementalSnapshot = plan.Source
-			}
-			dest[i] = addManifest(dest[i], manifest)
+			dest[i] = addManifest(dest[i], manifestFor(s.Volume, plan))
 		}
 	}
 	return Step{At: at, Snapshots: snapshots, Plan: plan, Err: err}
+}
+
+// manifestFor is the manifest of the backup a plan sends.
+func manifestFor(volume string, p Plan) *files.JobInfo {
+	m := &files.JobInfo{VolumeName: volume, BaseSnapshot: p.Base}
+	if p.Action == PlanIncremental {
+		m.IncrementalSnapshot = p.Source
+	}
+	return m
 }
 
 func (s *Scenario) firstRun() time.Time {
@@ -287,14 +292,17 @@ func (s *Scenario) firstRun() time.Time {
 // nextRun steps by Every (default 24h). Whole days are added on the calendar,
 // so a daily run keeps its wall-clock time across DST changes, like cron.
 func (s *Scenario) nextRun(at time.Time) time.Time {
-	every := s.Every
-	if every <= 0 {
-		every = 24 * time.Hour
+	if every := s.every(); every%(24*time.Hour) != 0 {
+		return at.Add(every)
 	}
-	if every%(24*time.Hour) == 0 {
-		return at.In(s.location()).AddDate(0, 0, int(every/(24*time.Hour)))
+	return at.In(s.location()).AddDate(0, 0, int(s.every()/(24*time.Hour)))
+}
+
+func (s *Scenario) every() time.Duration {
+	if s.Every <= 0 {
+		return 24 * time.Hour
 	}
-	return at.Add(every)
+	return s.Every
 }
 
 // addManifest records a backup at a destination. Sending the same backup again

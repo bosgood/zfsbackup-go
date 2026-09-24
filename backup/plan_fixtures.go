@@ -390,6 +390,11 @@ func (s *Scenario) ParseScheduleSpec(spec string) error {
 		}
 	}
 
+	for _, check := range s.Checks {
+		if !knownCheck(check) {
+			return fmt.Errorf("unknown check %q", check)
+		}
+	}
 	if len(policy) > 0 {
 		schedule, err := ParseSchedule(strings.Join(policy, ","))
 		if err != nil {
