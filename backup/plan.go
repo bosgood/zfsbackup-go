@@ -166,9 +166,12 @@ func planSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, 
 	// Roll onto a newer full-candidate snapshot once the last full is older
 	// than the configured window. Age is measured against the most recent
 	// snapshot; the full is anchored on the newest full-candidate (e.g. the
-	// newest "_monthly"), which must be newer than the existing full.
+	// newest "_monthly"), which must be newer than the most recent backup.
+	// An older candidate was already sent (so the full would re-send it), or
+	// predates the last incremental (which the next incremental continues
+	// from, orphaning the full).
 	ageExceeded := snapshots[0].CreationTime.Sub(lastFull.CreationTime) > jobInfo.FullIfOlderThan
-	hasNewerFullBase := fullBase != nil && fullBase.CreationTime.After(lastFull.CreationTime)
+	hasNewerFullBase := fullBase != nil && fullBase.CreationTime.After(lastBackup[0].CreationTime)
 	if ageExceeded && hasNewerFullBase {
 		return Plan{Action: PlanFull, Base: *fullBase, Reason: reasonWindowElapsed}, nil
 	}

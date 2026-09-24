@@ -1,0 +1,6 @@
+# A year of daily runs at 01:00. Fulls roll onto the first monthly newer than
+# the last daily backup once the window elapses; the next daily chains from it.
+policy=hourly=36,daily=30,monthly=3
+from=2026-09-24T01:00:00Z
+until=2027-10-01T01:00:00Z
+every=24h

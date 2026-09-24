@@ -1,0 +1,8 @@
+# A year of daily runs at 01:00: the 4320h window since each full elapses on
+# 2027-02-28 and 2027-08-28, and the next full takes the first monthly newer
+# than the last backup (2027-03-01, 2027-09-01).
+policy=hourly=36,daily=30,monthly=3
+from=2026-09-24T01:00:00Z
+until=2027-10-01T01:00:00Z
+every=24h
+checks=coverage:_monthly          # every monthly backed up exactly once

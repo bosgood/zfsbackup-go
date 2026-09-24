@@ -1,0 +1,7 @@
+# The pool as of the September monthly; the schedule takes and prunes the
+# rest, starting after the newest snapshot here.
+autosnap_2026-09-01_00:00:00_monthly
+autosnap_2026-09-01_00:00:00_daily
+autosnap_2026-09-01_00:00:00_hourly
+autosnap_2026-08-01_00:00:00_monthly
+autosnap_2026-07-01_00:00:00_monthly
