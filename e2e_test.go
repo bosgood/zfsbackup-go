@@ -41,6 +41,7 @@ import (
 	"github.com/someone1/zfsbackup-go/files"
 	"github.com/someone1/zfsbackup-go/internal/fakezfs"
 	"github.com/someone1/zfsbackup-go/log"
+	"github.com/someone1/zfsbackup-go/zfs"
 )
 
 // The end-to-end tests run the real send pipeline against a file://
@@ -135,11 +136,37 @@ func scenarioFlags(t *testing.T, dir string) []string {
 	}
 	var flags []string
 	for _, line := range strings.Split(string(sc), "\n") {
-		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
-			flags = append(flags, strings.Fields(line)...)
-		}
+		flags = append(flags, strings.Fields(zfs.StripComment(line))...)
 	}
 	return flags
+}
+
+// newestBackup reads the destination back as the smart options see it and
+// returns its newest backup.
+func newestBackup(t *testing.T, volume, target string) *files.JobInfo {
+	t.Helper()
+	jobInfo := &files.JobInfo{ManifestPrefix: "manifests", MaxParallelUploads: 1, MaxBackoffTime: time.Minute, MaxRetryTime: time.Minute}
+	backups, err := backup.BackupsAtTarget(context.Background(), volume, target, jobInfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) == 0 {
+		t.Fatalf("no backups at %s", target)
+	}
+	return backups[0]
+}
+
+// checkSent fails unless the newest backup at target is what plan sends.
+func checkSent(t *testing.T, volume, target string, plan backup.Plan) {
+	t.Helper()
+	got := newestBackup(t, volume, target)
+	want := files.SnapshotInfo{}
+	if plan.Action == backup.PlanIncremental {
+		want = plan.Source
+	}
+	if !got.BaseSnapshot.Equal(&plan.Base) || !got.IncrementalSnapshot.Equal(&want) || got.IncrementalSnapshot.Bookmark != want.Bookmark {
+		t.Errorf("%s holds %s from %+v, the planner planned %s", target, got.BaseSnapshot.Name, got.IncrementalSnapshot, plan)
+	}
 }
 
 func TestE2EDryRunSendsNothing(t *testing.T) {
@@ -199,6 +226,8 @@ func TestE2ESequenceMatchesPlanner(t *testing.T) {
 			t.Fatalf("%v: planned a no-op, send returned %v\n%s", step.At, err, logs)
 		case step.Plan.Action != backup.PlanNoop && err != nil:
 			t.Fatalf("%v: planned %s, send failed: %v\n%s", step.At, step.Plan, err, logs)
+		case step.Plan.Action != backup.PlanNoop:
+			checkSent(t, sc.Volume, target, step.Plan)
 		}
 	}
 
@@ -216,6 +245,72 @@ func TestE2ESequenceMatchesPlanner(t *testing.T) {
 			t.Errorf("backup %d: destination has %s from %q, planner expected %s from %q", i,
 				got[i].BaseSnapshot.Name, got[i].IncrementalSnapshot.Name, want[i].BaseSnapshot.Name, want[i].IncrementalSnapshot.Name)
 		}
+	}
+}
+
+// TestE2ENextRunScenarios replays every next-run golden scenario through the
+// real send: the backups its manifests.txt lists are first created at file://
+// destinations with manual sends, then one smart send runs against the
+// scenario's pool and must do what the planner planned.
+func TestE2ENextRunScenarios(t *testing.T) {
+	dirs, err := filepath.Glob("backup/testdata/scenarios/*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range dirs {
+		sc, err := backup.LoadScenario(dir)
+		if err != nil {
+			t.Fatalf("%s: %v", dir, err)
+		}
+		if !sc.Until.IsZero() {
+			continue // runs over time: see TestE2ESequenceMatchesPlanner
+		}
+		t.Run(filepath.Base(dir), func(t *testing.T) {
+			env := newE2EEnv(t)
+			step := sc.Run().Steps[0]
+
+			var targets []string
+			for d, manifests := range sc.DestBackups {
+				dest := filepath.Join(env.dest, fmt.Sprint(d))
+				if err := os.Mkdir(dest, 0700); err != nil {
+					t.Fatal(err)
+				}
+				targets = append(targets, "file://"+dest)
+				for i := len(manifests) - 1; i >= 0; i-- { // oldest first
+					m := manifests[i]
+					pool, args := []files.SnapshotInfo{m.BaseSnapshot}, []string(nil)
+					if source := m.IncrementalSnapshot; source.Name != "" {
+						pool, args = append(pool, source), []string{"-i", sc.Volume + "@" + source.Name}
+						if source.Bookmark {
+							args[1] = sc.Volume + "#" + source.Name
+						}
+					}
+					env.writeSnapshots(t, sc.Volume, pool)
+					if logs, err := env.send(append(args, sc.Volume+"@"+m.BaseSnapshot.Name, targets[d])...); err != nil {
+						t.Fatalf("creating %s at %s: %v\n%s", m.BaseSnapshot.Name, targets[d], err, logs)
+					}
+				}
+			}
+
+			env.writeSnapshots(t, sc.Volume, sc.Snapshots)
+			logs, err := env.send(append(scenarioFlags(t, dir), sc.Volume, strings.Join(targets, ","))...)
+			switch {
+			case step.Err != nil:
+				if err == nil || err.Error() != step.Err.Error() {
+					t.Errorf("the planner failed with %q, send returned %v\n%s", step.Err, err, logs)
+				}
+			case step.Plan.Action == backup.PlanNoop:
+				if !errors.Is(err, backup.ErrNoOp) {
+					t.Errorf("planned a no-op, send returned %v\n%s", err, logs)
+				}
+			case err != nil:
+				t.Errorf("planned %s, send failed: %v\n%s", step.Plan, err, logs)
+			default:
+				for _, target := range targets {
+					checkSent(t, sc.Volume, target, step.Plan)
+				}
+			}
+		})
 	}
 }
 
@@ -249,10 +344,15 @@ func TestE2EExitCodes(t *testing.T) {
 	send := append([]string{"send", "--zfsPath", env.self, "--workingDirectory", env.work}, scenarioFlags(t, monthlyOnlyScenario)...)
 	send = append(send, "tank/data", "file://"+env.dest)
 
-	if code, out := run(send...); code != 0 {
+	// The dry run's report is visible at the default log level.
+	code, out := run(append([]string{send[0], "-n"}, send[1:]...)...)
+	if code != 0 || !strings.Contains(out, "Dry-run: would perform a full backup of tank/data@autosnap_2026-09-01_00:00:00_monthly") {
+		t.Errorf("send -n exited %d without the Dry-run report:\n%s", code, out)
+	}
+	if code, out = run(send...); code != 0 {
 		t.Fatalf("first send (a full) exited %d:\n%s", code, out)
 	}
-	code, out := run(send...)
+	code, out = run(send...)
 	if code != 0 || !strings.Contains(out, "Nothing new to back up.") {
 		t.Errorf("second send (a no-op) exited %d, want 0:\n%s", code, out)
 	}
@@ -264,5 +364,10 @@ func TestE2EExitCodes(t *testing.T) {
 	code, out = run("plan", "--workingDirectory", env.work, "--increment", "--snapshots", env.snapshots, "--manifests", broken, "tank/data")
 	if code != 2 || !strings.Contains(out, "chain-links") {
 		t.Errorf("plan with a broken chain exited %d, want 2:\n%s", code, out)
+	}
+
+	// Every run removed its temporary directory, the failed ones included.
+	if left, err := ioutil.ReadDir(filepath.Join(env.work, "temp")); err != nil || len(left) != 0 {
+		t.Errorf("runs left %d temporary directories behind (%v)", len(left), err)
 	}
 }
