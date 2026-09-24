@@ -18,116 +18,130 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-package zfs
+// External test package: the fake zfs (internal/fakezfs) imports zfs for its
+// fixture parser, so these tests cannot live inside package zfs.
+package zfs_test
 
 import (
-	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/someone1/zfsbackup-go/files"
+	"github.com/someone1/zfsbackup-go/zfs"
 )
 
-func TestParseSendSizeEstimate(t *testing.T) {
+// nolint:funlen // table-driven test
+func TestParseSnapshotList(t *testing.T) {
+	sep1 := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	aug1 := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	sep24 := time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
+	edt := time.FixedZone("EDT", -4*60*60)
+
 	testCases := []struct {
 		name    string
-		out     string
-		want    uint64
-		wantErr bool
+		input   string
+		loc     *time.Location
+		want    []files.SnapshotInfo
+		wantErr string
 	}{
 		{
-			name: "typical -P output",
-			out:  "full\ttank/data@snap1\t123456\nsize\t123456\n",
-			want: 123456,
+			name:  "raw snapshot row",
+			input: "tank/data@autosnap_2026-09-01_00:00:00_monthly\t1788220800\tsnapshot\n",
+			want:  []files.SnapshotInfo{{Name: "autosnap_2026-09-01_00:00:00_monthly", CreationTime: sep1}},
 		},
 		{
-			name: "incremental -P output",
-			out:  "incremental\tsnap1\ttank/data@snap2\t42\nsize\t42\n",
-			want: 42,
+			name:  "raw bookmark row",
+			input: "tank/data#autosnap_2026-08-01_00:00:00_monthly\t1785542400\tbookmark\n",
+			want:  []files.SnapshotInfo{{Name: "autosnap_2026-08-01_00:00:00_monthly", CreationTime: aug1, Bookmark: true}},
 		},
 		{
-			name:    "no size line",
-			out:     "full\ttank/data@snap1\t123456\n",
-			wantErr: true,
+			name:  "raw row separated by spaces",
+			input: "tank/data@manual 1788220800 snapshot\n",
+			want:  []files.SnapshotInfo{{Name: "manual", CreationTime: sep1}},
 		},
 		{
-			name:    "non-numeric size",
-			out:     "size\tnotanumber\n",
-			wantErr: true,
+			name:  "name and epoch without a type",
+			input: "before-upgrade\t1788220800\n",
+			want:  []files.SnapshotInfo{{Name: "before-upgrade", CreationTime: sep1}},
 		},
 		{
-			name:    "empty output",
-			out:     "",
-			wantErr: true,
+			name:  "bare sanoid name",
+			input: "autosnap_2026-09-24_00:00:00_daily\n",
+			want:  []files.SnapshotInfo{{Name: "autosnap_2026-09-24_00:00:00_daily", CreationTime: sep24}},
+		},
+		{
+			name:  "bare sanoid name is read in the given location",
+			input: "autosnap_2026-09-24_00:00:00_daily\n",
+			loc:   edt,
+			want:  []files.SnapshotInfo{{Name: "autosnap_2026-09-24_00:00:00_daily", CreationTime: sep24.Add(4 * time.Hour)}},
+		},
+		{
+			name:  "bare names with dataset prefixes",
+			input: "tank/data@autosnap_2026-09-01_00:00:00_monthly\ntank/data#autosnap_2026-08-01_00:00:00_monthly\n",
+			want: []files.SnapshotInfo{
+				{Name: "autosnap_2026-09-01_00:00:00_monthly", CreationTime: sep1},
+				{Name: "autosnap_2026-08-01_00:00:00_monthly", CreationTime: aug1, Bookmark: true},
+			},
+		},
+		{
+			name: "comments and blank lines are skipped, input order is kept",
+			input: "# captured on the pool host\n\n" +
+				"autosnap_2026-08-01_00:00:00_monthly   # older first on purpose\n" +
+				"   # indented comment\n" +
+				"tank/data#autosnap_2026-09-01_00:00:00_monthly\t1788220800\tbookmark\n",
+			want: []files.SnapshotInfo{
+				{Name: "autosnap_2026-08-01_00:00:00_monthly", CreationTime: aug1},
+				{Name: "autosnap_2026-09-01_00:00:00_monthly", CreationTime: sep1, Bookmark: true},
+			},
+		},
+		{
+			name:    "bare non-sanoid name",
+			input:   "autosnap_2026-09-01_00:00:00_monthly\nmanual-snapshot\n",
+			wantErr: "line 2: no creation time",
+		},
+		{
+			name:    "invalid epoch",
+			input:   "tank/data@a\tyesterday\tsnapshot\n",
+			wantErr: "invalid creation epoch",
+		},
+		{
+			name:    "unknown type",
+			input:   "tank/data@a\t1788220800\tfilesystem\n",
+			wantErr: "unknown type",
+		},
+		{
+			name:    "too many fields",
+			input:   "tank/data@a\t1788220800\tsnapshot\textra\n",
+			wantErr: "want name[, creation[, type]]",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseSendSizeEstimate(tc.out)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("got nil error, want one")
+			loc := tc.loc
+			if loc == nil {
+				loc = time.UTC
+			}
+			got, err := zfs.ParseSnapshotList(strings.NewReader(tc.input), loc)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("got error %v, want one containing %q", err, tc.wantErr)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if got != tc.want {
-				t.Errorf("got %d, want %d", got, tc.want)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d snapshots %+v, want %d", len(got), got, len(tc.want))
+			}
+			for i := range got {
+				if got[i].Name != tc.want[i].Name || got[i].Bookmark != tc.want[i].Bookmark ||
+					!got[i].CreationTime.Equal(tc.want[i].CreationTime) {
+					t.Errorf("snapshot %d = %+v, want %+v", i, got[i], tc.want[i])
+				}
 			}
 		})
-	}
-}
-
-// TestSendDryRunArgs pins the invariant sendDryRunArgs relies on: that
-// GetZFSSendCommand emits [ZFSPath, "send", ...], so Args[2:] is everything
-// after the verb.
-func TestSendDryRunArgs(t *testing.T) {
-	ctx := context.Background()
-
-	j := &files.JobInfo{
-		VolumeName:   "tank/data",
-		BaseSnapshot: files.SnapshotInfo{Name: "snap2"},
-	}
-	base := GetZFSSendCommand(ctx, j)
-	if len(base.Args) < 2 || base.Args[1] != "send" {
-		t.Fatalf("GetZFSSendCommand args = %v, want Args[1] == \"send\"", base.Args)
-	}
-
-	got := sendDryRunArgs(base)
-	if got[0] != "send" || got[1] != "-n" || got[2] != "-P" {
-		t.Fatalf("sendDryRunArgs = %v, want it to start with send -n -P", got)
-	}
-	if want := "tank/data@snap2"; got[len(got)-1] != want {
-		t.Errorf("last arg = %q, want %q", got[len(got)-1], want)
-	}
-	if strings.Join(got[3:], " ") != strings.Join(base.Args[2:], " ") {
-		t.Errorf("args after -n -P = %v, want %v", got[3:], base.Args[2:])
-	}
-
-	// The incremental form must keep -i and its value intact.
-	j.IncrementalSnapshot = files.SnapshotInfo{Name: "snap1"}
-	got = sendDryRunArgs(GetZFSSendCommand(ctx, j))
-	joined := strings.Join(got, " ")
-	if !strings.Contains(joined, "-i snap1") {
-		t.Errorf("incremental args = %q, want them to contain \"-i snap1\"", joined)
-	}
-	if !strings.HasPrefix(joined, "send -n -P ") {
-		t.Errorf("incremental args = %q, want the -n -P prefix", joined)
-	}
-}
-
-// TestSendDryRunArgsDoesNotMutateBase guards against the append aliasing hazard.
-func TestSendDryRunArgsDoesNotMutateBase(t *testing.T) {
-	base := GetZFSSendCommand(context.Background(), &files.JobInfo{
-		VolumeName:   "tank/data",
-		BaseSnapshot: files.SnapshotInfo{Name: "snap1"},
-	})
-	before := strings.Join(base.Args, " ")
-	_ = sendDryRunArgs(base)
-	if after := strings.Join(base.Args, " "); after != before {
-		t.Errorf("sendDryRunArgs mutated the base command: %q -> %q", before, after)
 	}
 }

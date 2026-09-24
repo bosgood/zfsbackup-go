@@ -52,3 +52,10 @@ build:
 
 build-dev:
 	${GOPATH}/bin/gox -ldflags="-X github.com/someone1/zfsbackup-go/config.GitCommit=${COMMIT_HASH}" -osarch=${TARGETS} -output="{{.Dir}}_{{.OS}}_{{.Arch}}-${COMMIT_HASH}"
+
+# Run a subset of the tests on the host, e.g.
+#   make test-run PKG=./backup/ RUN='TestPlan|TestSchedule'
+PKG ?= ./...
+RUN ?= .
+test-run:
+	go test -count=1 -run '$(RUN)' -v $(PKG)
