@@ -253,7 +253,7 @@ func snapshotsIdentical(a, b files.SnapshotInfo) bool {
 // creation` guarantees neither, so every run must plan the same kind of
 // backup either way, and the checks must agree.
 func TestTieOrderIndependence(t *testing.T) {
-	for _, name := range []string{"monthly-only-5-months", "monthly-daily-5-months"} {
+	for _, name := range []string{"monthly-only-5-months", "monthly-daily-5-months", "monthly-only-year", "monthly-daily-year"} {
 		t.Run(name, func(t *testing.T) {
 			var want, wantVariant string
 			pools := make(map[string]bool) // distinct pools seen, to prove the variants differ
