@@ -74,7 +74,14 @@ func TestScenarios(t *testing.T) {
 			if !bytes.Equal(want, buf.Bytes()) {
 				t.Errorf("plan differs from %s (- expected, + got):\n%s", golden, lineDiff(string(want), buf.String()))
 			}
-			if strings.Contains(buf.String(), "violation") {
+			if len(sim.Steps) == 0 {
+				t.Errorf("the scenario has no runs")
+			}
+			// A scenario may show a failure on purpose; it says so with an
+			// expect-violations file, so that `make scenarios-update` cannot
+			// quietly bless a violation in any other scenario.
+			if _, err = os.Stat(filepath.Join(dir, "expect-violations")); os.IsNotExist(err) &&
+				strings.Contains(buf.String(), "violation") {
 				t.Errorf("checks failed:\n%s", buf.String())
 			}
 		})

@@ -1,0 +1,2 @@
+# This scenario shows a run that fails: `plan` must report it as a violation
+# (no-errors) and exit 2, as `send` would fail.
