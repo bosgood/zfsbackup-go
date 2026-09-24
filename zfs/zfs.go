@@ -21,10 +21,13 @@
 package zfs
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +40,12 @@ import (
 var (
 	ZFSPath = "zfs"
 )
+
+// SanoidTimeLayout is the time layout of the timestamp sanoid embeds in its
+// snapshot names, as in autosnap_2026-09-01_00:00:00_monthly.
+const SanoidTimeLayout = "2006-01-02_15:04:05"
+
+var sanoidTimestamp = regexp.MustCompile(`\d{4}-\d{2}-\d{2}_\d{2}:\d{2}:\d{2}`)
 
 // GetCreationDate will use the zfs command to get and parse the creation datetime
 // of the specified volume/snapshot
@@ -68,30 +77,121 @@ func GetSnapshotsAndBookmarks(ctx context.Context, target string) ([]files.Snaps
 	if err != nil {
 		return nil, fmt.Errorf("%s (%v)", strings.TrimSpace(errB.String()), err)
 	}
-	var snapshots []files.SnapshotInfo
-	for {
-		snapInfo := files.SnapshotInfo{}
-		var creation int64
-		var objectType string
-		n, nerr := fmt.Fscanln(rpipe, &snapInfo.Name, &creation, &objectType)
-		if n == 0 || nerr != nil {
-			break
-		}
-		snapInfo.CreationTime = time.Unix(creation, 0)
-		if objectType == "bookmark" {
-			snapInfo.Name = snapInfo.Name[strings.Index(snapInfo.Name, "#")+1:]
-			snapInfo.Bookmark = true
-		} else {
-			snapInfo.Name = snapInfo.Name[strings.Index(snapInfo.Name, "@")+1:]
-		}
-		snapshots = append(snapshots, snapInfo)
+	snapshots, perr := ParseSnapshotList(rpipe, time.Local)
+	if perr != nil {
+		// Drain the rest so zfs does not block on a full pipe before Wait.
+		_, _ = io.Copy(io.Discard, rpipe)
 	}
 	err = cmd.Wait()
 	if err != nil {
 		return nil, fmt.Errorf("%s (%v)", strings.TrimSpace(errB.String()), err)
 	}
+	if perr != nil {
+		return nil, perr
+	}
 
 	return snapshots, nil
+}
+
+// ParseSnapshotList reads a snapshot listing as printed by
+//
+//	zfs list -H -p -t snapshot,bookmark -o name,creation,type -S creation <dataset>
+//
+// and returns the rows in input order. Each row is name[, creation[, type]],
+// separated by tabs (or, when a row has no tabs, by spaces). The dataset prefix
+// of the name (tank/data@, tank/data#) is optional. A row without a creation
+// column takes its creation time from the sanoid timestamp in the name, read in
+// loc (see SnapshotNameTime); a row without a type column is a bookmark when
+// its name contains '#'. Blank lines and '#' comments are skipped.
+func ParseSnapshotList(r io.Reader, loc *time.Location) ([]files.SnapshotInfo, error) {
+	var snapshots []files.SnapshotInfo
+	scanner := bufio.NewScanner(r)
+	for lineNo := 1; scanner.Scan(); lineNo++ {
+		line := StripComment(scanner.Text())
+		if line == "" {
+			continue
+		}
+		snapInfo, err := parseSnapshotRow(line, loc)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %v", lineNo, err)
+		}
+		snapshots = append(snapshots, snapInfo)
+	}
+	return snapshots, scanner.Err()
+}
+
+func parseSnapshotRow(line string, loc *time.Location) (files.SnapshotInfo, error) {
+	var fields []string
+	if strings.Contains(line, "\t") {
+		for _, field := range strings.Split(line, "\t") {
+			if field = strings.TrimSpace(field); field != "" {
+				fields = append(fields, field)
+			}
+		}
+	} else {
+		fields = strings.Fields(line)
+	}
+	if len(fields) > 3 {
+		return files.SnapshotInfo{}, fmt.Errorf("want name[, creation[, type]], got %q", line)
+	}
+
+	snapInfo := files.SnapshotInfo{Name: fields[0]}
+	snapInfo.Bookmark = strings.Contains(snapInfo.Name, "#")
+	if len(fields) == 3 {
+		switch fields[2] {
+		case "snapshot":
+			snapInfo.Bookmark = false
+		case "bookmark":
+			snapInfo.Bookmark = true
+		default:
+			return files.SnapshotInfo{}, fmt.Errorf("unknown type %q in %q", fields[2], line)
+		}
+	}
+	if snapInfo.Bookmark {
+		snapInfo.Name = snapInfo.Name[strings.Index(snapInfo.Name, "#")+1:]
+	} else {
+		snapInfo.Name = snapInfo.Name[strings.Index(snapInfo.Name, "@")+1:]
+	}
+
+	if len(fields) == 1 {
+		creation, ok := SnapshotNameTime(snapInfo.Name, loc)
+		if !ok {
+			return files.SnapshotInfo{}, fmt.Errorf("no creation time for %q: add an epoch column or use a sanoid name", line)
+		}
+		snapInfo.CreationTime = creation
+		return snapInfo, nil
+	}
+	creation, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil {
+		return files.SnapshotInfo{}, fmt.Errorf("invalid creation epoch %q in %q", fields[1], line)
+	}
+	snapInfo.CreationTime = time.Unix(creation, 0).In(loc)
+	return snapInfo, nil
+}
+
+// SnapshotNameTime returns the time embedded in a sanoid-style snapshot name
+// (autosnap_2006-01-02_15:04:05_<period>), read in loc. ok is false when the
+// name carries no such timestamp.
+func SnapshotNameTime(name string, loc *time.Location) (time.Time, bool) {
+	ts := sanoidTimestamp.FindString(name)
+	if ts == "" {
+		return time.Time{}, false
+	}
+	t, err := time.ParseInLocation(SanoidTimeLayout, ts, loc)
+	return t, err == nil
+}
+
+// StripComment removes a '#' comment from a fixture line, along with
+// surrounding whitespace. A '#' starts a comment at the beginning of the line
+// or after whitespace; inside a name, as in tank/data#bookmark, it does not.
+func StripComment(line string) string {
+	for i := 0; i < len(line); i++ {
+		if line[i] == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t') {
+			line = line[:i]
+			break
+		}
+	}
+	return strings.TrimSpace(line)
 }
 
 // GetZFSProperty will return the raw value returned by the "zfs get" command for
