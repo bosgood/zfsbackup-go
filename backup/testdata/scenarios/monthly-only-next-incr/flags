@@ -1,0 +1,4 @@
+# Production flags: monthly fulls and monthly incrementals.
+--fullIfOlderThan=4320h
+--fullSnapshotSuffix=_monthly
+--incrementalSnapshotSuffix=_monthly

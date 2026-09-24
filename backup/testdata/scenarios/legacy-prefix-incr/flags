@@ -1,0 +1,4 @@
+# Historical behaviour: the newest autosnap_ snapshot of any period, for fulls
+# and incrementals alike.
+--snapshotPrefix autosnap_
+--fullIfOlderThan 720h

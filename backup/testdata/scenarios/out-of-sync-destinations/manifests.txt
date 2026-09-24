@@ -1,0 +1,5 @@
+# destination 1
+autosnap_2026-09-01_00:00:00_monthly
+---
+# destination 2 never got the September full
+autosnap_2026-08-01_00:00:00_monthly

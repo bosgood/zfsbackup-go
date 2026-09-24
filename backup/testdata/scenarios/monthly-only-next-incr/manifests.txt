@@ -1,0 +1,2 @@
+# The full sent by the first run.
+autosnap_2026-09-01_00:00:00_monthly

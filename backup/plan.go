@@ -22,6 +22,8 @@ package backup
 
 import (
 	"fmt"
+	"io"
+	"strings"
 	"time"
 
 	"github.com/someone1/zfsbackup-go/files"
@@ -193,4 +195,212 @@ func planSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, 
 		return Plan{Action: PlanFull, Base: *fullBase, Source: source, Reason: reasonSourcePruned}, nil
 	}
 	return Plan{Action: PlanIncremental, Base: *incrBase, Source: source, Reason: reasonNewerCandidate}, nil
+}
+
+// Step is one simulated run.
+type Step struct {
+	At        time.Time            // zero for a single next run
+	Snapshots []files.SnapshotInfo // the pool at this run, newest-first
+	Plan      Plan
+	Err       error
+}
+
+// Simulation is the outcome of running a Scenario.
+type Simulation struct {
+	Scenario *Scenario
+	Steps    []Step
+	// Initial and Manifests are the destinations' backups before the first
+	// run and after the last one, newest-first per destination.
+	Initial   [][]*files.JobInfo
+	Manifests [][]*files.JobInfo
+}
+
+// Run simulates the scenario. Without Until it plans a single run against the
+// snapshots as given. Otherwise it plans a run every Every from From (default:
+// an hour after the newest snapshot) to Until, letting the Schedule take and
+// prune snapshots in between. Every backup a run sends is added to each
+// destination, so the next run sees it the way getBackupsForTarget would read
+// it back.
+func (s *Scenario) Run() *Simulation {
+	sim := &Simulation{Scenario: s, Initial: cloneDestinations(s.DestBackups)}
+	snapshots := s.Snapshots
+	dest := cloneDestinations(s.DestBackups)
+	if s.Until.IsZero() {
+		sim.Steps = append(sim.Steps, s.run(time.Time{}, snapshots, dest))
+		sim.Manifests = dest
+		return sim
+	}
+
+	// The schedule takes the snapshots due after the newest one given.
+	taken := s.From
+	if len(snapshots) > 0 {
+		taken = snapshots[0].CreationTime
+	}
+	for at := s.firstRun(); !at.After(s.Until); at = s.nextRun(at) {
+		if s.Schedule != nil {
+			snapshots = s.Schedule.Advance(snapshots, taken, at)
+			if at.After(taken) {
+				taken = at
+			}
+		}
+		sim.Steps = append(sim.Steps, s.run(at, snapshots, dest))
+	}
+	sim.Manifests = dest
+	return sim
+}
+
+// run plans one run and records what it sends at every destination.
+func (s *Scenario) run(at time.Time, snapshots []files.SnapshotInfo, dest [][]*files.JobInfo) Step {
+	jobInfo := files.JobInfo{
+		VolumeName:                s.Volume,
+		Full:                      s.JobInfo.Full,
+		Incremental:               s.JobInfo.Incremental,
+		FullIfOlderThan:           s.JobInfo.FullIfOlderThan,
+		SnapshotPrefix:            s.JobInfo.SnapshotPrefix,
+		FullSnapshotSuffix:        s.JobInfo.FullSnapshotSuffix,
+		IncrementalSnapshotSuffix: s.JobInfo.IncrementalSnapshotSuffix,
+	}
+	plan, err := planSmartSnapshots(&jobInfo, snapshots, dest)
+	if err == nil && plan.Action != PlanNoop {
+		for i := range dest {
+			manifest := &files.JobInfo{VolumeName: s.Volume, BaseSnapshot: plan.Base}
+			if plan.Action == PlanIncremental {
+				manifest.IncrementalSnapshot = plan.Source
+			}
+			dest[i] = addManifest(dest[i], manifest)
+		}
+	}
+	return Step{At: at, Snapshots: snapshots, Plan: plan, Err: err}
+}
+
+func (s *Scenario) firstRun() time.Time {
+	switch {
+	case !s.From.IsZero():
+		return s.From
+	case len(s.Snapshots) > 0:
+		return s.Snapshots[0].CreationTime.Add(time.Hour)
+	default:
+		return s.Until
+	}
+}
+
+// nextRun steps by Every (default 24h). Whole days are added on the calendar,
+// so a daily run keeps its wall-clock time across DST changes, like cron.
+func (s *Scenario) nextRun(at time.Time) time.Time {
+	every := s.Every
+	if every <= 0 {
+		every = 24 * time.Hour
+	}
+	if every%(24*time.Hour) == 0 {
+		return at.In(s.location()).AddDate(0, 0, int(every/(24*time.Hour)))
+	}
+	return at.Add(every)
+}
+
+// addManifest records a backup at a destination. Sending the same backup again
+// writes the same object names, so it replaces the earlier manifest. The list
+// stays newest-first, with ties in the order they were sent.
+func addManifest(manifests []*files.JobInfo, m *files.JobInfo) []*files.JobInfo {
+	out := make([]*files.JobInfo, 0, len(manifests)+1)
+	for _, existing := range manifests {
+		if existing.BaseSnapshot.Name != m.BaseSnapshot.Name || existing.IncrementalSnapshot.Name != m.IncrementalSnapshot.Name {
+			out = append(out, existing)
+		}
+	}
+	i := 0
+	for i < len(out) && !out[i].BaseSnapshot.CreationTime.Before(m.BaseSnapshot.CreationTime) {
+		i++
+	}
+	return append(out[:i], append([]*files.JobInfo{m}, out[i:]...)...)
+}
+
+func cloneDestinations(dests [][]*files.JobInfo) [][]*files.JobInfo {
+	out := make([][]*files.JobInfo, len(dests))
+	for i, dest := range dests {
+		out[i] = make([]*files.JobInfo, len(dest))
+		for j, m := range dest {
+			c := *m
+			out[i][j] = &c
+		}
+	}
+	return out
+}
+
+// WriteText renders the simulation in the golden format: one line per run,
+// with consecutive identical no-ops or errors collapsed into one line, then
+// the check results.
+func (sim *Simulation) WriteText(w io.Writer, violations []Violation) error {
+	var b strings.Builder
+	for i := 0; i < len(sim.Steps); {
+		step := sim.Steps[i]
+		j := i + 1
+		if step.Err != nil || step.Plan.Action == PlanNoop {
+			for j < len(sim.Steps) && sameOutcome(sim.Steps[j], step) {
+				j++
+			}
+		}
+		at := sim.formatTime(step.At)
+		if j-i > 1 {
+			at += ".." + sim.formatTime(sim.Steps[j-1].At)
+		}
+		fmt.Fprintf(&b, "%s  %s\n", at, step.describe(j-i))
+		i = j
+	}
+
+	if len(violations) == 0 {
+		b.WriteString("checks: OK\n")
+	} else {
+		fmt.Fprintf(&b, "checks: %d violation(s)\n", len(violations))
+		for _, v := range violations {
+			b.WriteString("  " + v.Check)
+			if !v.At.IsZero() {
+				b.WriteString("  " + sim.formatTime(v.At))
+			}
+			b.WriteString("  " + v.Detail + "\n")
+		}
+	}
+	_, err := io.WriteString(w, b.String())
+	return err
+}
+
+// describe renders a step's outcome; n > 1 counts collapsed identical steps.
+func (st Step) describe(n int) string {
+	count := ""
+	if n > 1 {
+		count = fmt.Sprintf(" x%d", n)
+	}
+	switch {
+	case st.Err != nil:
+		return fmt.Sprintf("ERROR%s  %v", count, st.Err)
+	case st.Plan.Action == PlanFull:
+		return fmt.Sprintf("FULL  %s  %s", st.Plan.Base.Name, st.Plan.Reason)
+	case st.Plan.Action == PlanIncremental:
+		return fmt.Sprintf("INCR  %s  from %s  %s", st.Plan.Base.Name, snapshotRef(st.Plan.Source), st.Plan.Reason)
+	default:
+		return fmt.Sprintf("NOOP%s  %s", count, st.Plan.Reason)
+	}
+}
+
+func sameOutcome(a, b Step) bool {
+	if a.Err != nil || b.Err != nil {
+		return a.Err != nil && b.Err != nil && a.Err.Error() == b.Err.Error()
+	}
+	return a.Plan.Action == PlanNoop && b.Plan.Action == PlanNoop && a.Plan.Reason == b.Plan.Reason
+}
+
+// snapshotRef names a snapshot, marking bookmarks with '#'.
+func snapshotRef(s files.SnapshotInfo) string {
+	if s.Bookmark {
+		return "#" + s.Name
+	}
+	return s.Name
+}
+
+// formatTime renders a run time in the scenario's location; the zero time is
+// the single "next" run.
+func (sim *Simulation) formatTime(t time.Time) string {
+	if t.IsZero() {
+		return "next"
+	}
+	return t.In(sim.Scenario.location()).Format(time.RFC3339)
 }

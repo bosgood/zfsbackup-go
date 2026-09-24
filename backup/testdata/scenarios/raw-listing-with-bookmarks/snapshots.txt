@@ -1,0 +1,7 @@
+# zfs list -H -p -t snapshot,bookmark -o name,creation,type -S creation tank/data
+# October's monthly only survives as a bookmark, which cannot be sent in full.
+tank/data#autosnap_2026-10-01_00:00:00_monthly	1790812800	bookmark
+tank/data@autosnap_2026-09-30_00:00:00_daily	1790726400	snapshot
+tank/data@autosnap_2026-09-01_00:00:00_monthly	1788220800	snapshot
+tank/data#autosnap_2026-08-01_00:00:00_monthly	1785542400	bookmark
+tank/data@autosnap_2026-08-01_00:00:00_monthly	1785542400	snapshot

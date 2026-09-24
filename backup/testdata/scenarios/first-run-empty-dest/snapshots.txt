@@ -1,0 +1,11 @@
+# The pool at 2026-09-24 01:00 (sanoid hourly/daily/monthly), abridged.
+# Nothing has been backed up yet.
+autosnap_2026-09-24_01:00:00_hourly
+autosnap_2026-09-24_00:00:00_daily
+autosnap_2026-09-24_00:00:00_hourly
+autosnap_2026-09-23_23:00:00_hourly
+autosnap_2026-09-23_00:00:00_daily
+autosnap_2026-09-01_00:00:00_monthly
+autosnap_2026-09-01_00:00:00_daily
+autosnap_2026-08-01_00:00:00_monthly
+autosnap_2026-07-01_00:00:00_monthly

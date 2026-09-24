@@ -1,0 +1,9 @@
+# The pool at 2026-10-01 01:00: October's monthly has just been taken.
+autosnap_2026-10-01_01:00:00_hourly
+autosnap_2026-10-01_00:00:00_monthly
+autosnap_2026-10-01_00:00:00_daily
+autosnap_2026-10-01_00:00:00_hourly
+autosnap_2026-09-30_00:00:00_daily
+autosnap_2026-09-01_00:00:00_monthly
+autosnap_2026-09-01_00:00:00_daily
+autosnap_2026-08-01_00:00:00_monthly
