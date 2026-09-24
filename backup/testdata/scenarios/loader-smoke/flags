@@ -1,0 +1,4 @@
+# Smart send flags, exactly as passed to `zfsbackup send`: one or more per
+# line, with = or a space before the value.
+--fullIfOlderThan=4320h
+--fullSnapshotSuffix _monthly --incrementalSnapshotSuffix=_monthly
