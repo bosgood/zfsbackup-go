@@ -75,7 +75,13 @@ destination of your choosing.`,
 // Execute adds all child commands to the root command sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute(ctx context.Context) {
-	if code := exitCode(RootCmd.ExecuteContextC(ctx)); code != 0 {
+	cmd, err := RootCmd.ExecuteContextC(ctx)
+	if err != nil {
+		// PersistentPostRun only runs after a successful RunE, but a smart
+		// send with nothing new returns ErrNoOp from PreRunE, every day.
+		postRunCleanup(cmd, nil)
+	}
+	if code := exitCode(cmd, err); code != 0 {
 		os.Exit(code)
 	}
 }

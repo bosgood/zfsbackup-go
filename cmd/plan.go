@@ -107,6 +107,10 @@ func validatePlanFlags(cmd *cobra.Command, args []string) error {
 	if err := validateSmartFlags(); err != nil {
 		return err
 	}
+	if planSnapshots == "-" && planManifests == "-" {
+		log.AppLogger.Errorf("--snapshots and --manifests cannot both read stdin.")
+		return errInvalidInput
+	}
 	if len(args) == 2 {
 		if planManifests != "" {
 			log.AppLogger.Errorf("--manifests and destination URIs are mutually exclusive.")
@@ -118,8 +122,9 @@ func validatePlanFlags(cmd *cobra.Command, args []string) error {
 				return err
 			}
 		}
-		// Manifests may be encrypted and/or signed.
-		return loadReceiveKeys()
+		// Manifests may be encrypted and/or signed: load the keys a smart
+		// send loads to read them, so the same flags work for both.
+		return loadSendKeys()
 	}
 	return nil
 }
@@ -164,6 +169,10 @@ func runPlan(cmd *cobra.Command, args []string) error {
 	}
 
 	sim := sc.Run()
+	if len(sim.Steps) == 0 {
+		log.AppLogger.Errorf("Nothing to plan: --schedule until=%v is before the first run.", sc.Until)
+		return errInvalidInput
+	}
 	violations := sim.Check(sc.Checks)
 	write := sim.WriteText
 	if config.JSONOutput {

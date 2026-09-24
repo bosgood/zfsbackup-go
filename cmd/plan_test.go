@@ -185,6 +185,8 @@ func TestPlanFlagErrors(t *testing.T) {
 		{"--full", "--manifests", manifests, "--snapshots", snapshots, "tank/data", "file:///tmp"}, // both destination sources
 		{"--full", "--snapshots", snapshots, "--schedule", "until=soon", "tank/data"},              // bad schedule
 		{"--full", "--snapshots", filepath.Join(scenarios, "missing.txt"), "tank/data"},            // missing file
+		{"--full", "--snapshots", "-", "--manifests", "-", "tank/data"},                            // stdin twice
+		{"--full", "--snapshots", snapshots, "--schedule", "until=2026-10-01", "tank/data"},        // no runs before until
 	} {
 		if _, err := runPlanCommand(t, args...); err == nil || err == errChecksFailed {
 			t.Errorf("plan %v: got error %v, want an input error", args, err)
