@@ -50,6 +50,10 @@ func runPlanCommand(t *testing.T, args ...string) (string, error) {
 	log.AppLogger.SetBackend(logging.AddModuleLevel(logging.NewLogBackend(&logs, "", 0)))
 
 	RootCmd.SetArgs(append([]string{"plan", "--workingDirectory", t.TempDir()}, args...))
+	defer func() { // leave no arguments or flag values behind for later runs
+		RootCmd.SetArgs(nil)
+		ResetSendJobInfo()
+	}()
 	err := RootCmd.ExecuteContext(context.Background())
 	if err != nil {
 		t.Logf("plan logged:\n%s", logs.String())

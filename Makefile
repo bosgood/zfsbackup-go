@@ -1,7 +1,7 @@
 TARGETS="freebsd/amd64 linux/amd64"
 COMMIT_HASH=`git rev-parse --short HEAD 2>/dev/null`
 
-check: lint test test-race
+check: lint test test-race e2e
 
 fmt:
 	@for d in $(DIRS) ; do \
@@ -73,3 +73,8 @@ scenarios-update:
 #     --incrementalSnapshotSuffix _monthly --snapshots snaps.txt tank/data"
 plan:
 	go run . plan $(ARGS)
+
+# End-to-end tests: the real send pipeline against a file:// destination, with
+# the test binary standing in for zfs (internal/fakezfs).
+e2e:
+	go test -count=1 -run TestE2E -v .
