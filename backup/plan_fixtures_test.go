@@ -181,6 +181,8 @@ location=UTC
 		"until=next-week",                        // bad time
 		"until=2027-01-01,location=Mars/Olympus", // unknown zone
 		"until=2027-01-01,oops",                  // not key=value
+		"checks=chain-link",                      // unknown check
+		"checks=coverage:",                       // coverage needs a suffix
 	} {
 		if err := (&Scenario{}).ParseScheduleSpec(bad); err == nil {
 			t.Errorf("ParseScheduleSpec(%q) succeeded, want an error", bad)
