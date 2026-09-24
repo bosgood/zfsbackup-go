@@ -23,13 +23,144 @@
 package zfs_test
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/someone1/zfsbackup-go/files"
+	"github.com/someone1/zfsbackup-go/internal/fakezfs"
 	"github.com/someone1/zfsbackup-go/zfs"
 )
+
+// TestMain lets the test binary stand in for zfs: with FAKEZFS=1 it runs the
+// fake instead of the tests (see useFakeZFS).
+func TestMain(m *testing.M) {
+	fakezfs.RunIfRequested()
+	os.Exit(m.Run())
+}
+
+// useFakeZFS points zfs.ZFSPath at this test binary, which runs as the fake
+// zfs with the given snapshot fixture.
+func useFakeZFS(t *testing.T, fixture string) {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "snapshots.txt")
+	if err = os.WriteFile(path, []byte(fixture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKEZFS", "1")
+	t.Setenv("FAKEZFS_SNAPSHOTS", path)
+	old := zfs.ZFSPath
+	zfs.ZFSPath = self
+	t.Cleanup(func() { zfs.ZFSPath = old })
+}
+
+const fakeFixture = `tank/data@c	300	snapshot
+tank/data#b	200	bookmark
+tank/data@b	200	snapshot
+tank/data@a	100	snapshot
+tank/other@z	900	snapshot
+`
+
+func TestGetSnapshotsAndBookmarks(t *testing.T) {
+	useFakeZFS(t, fakeFixture)
+	got, err := zfs.GetSnapshotsAndBookmarks(context.Background(), "tank/data")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []files.SnapshotInfo{
+		{Name: "c", CreationTime: time.Unix(300, 0)},
+		{Name: "b", CreationTime: time.Unix(200, 0), Bookmark: true},
+		{Name: "b", CreationTime: time.Unix(200, 0)},
+		{Name: "a", CreationTime: time.Unix(100, 0)},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i].Name != want[i].Name || got[i].Bookmark != want[i].Bookmark || !got[i].CreationTime.Equal(want[i].CreationTime) {
+			t.Errorf("snapshot %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	if _, err = zfs.GetSnapshotsAndBookmarks(context.Background(), "tank/missing"); err == nil ||
+		!strings.Contains(err.Error(), "dataset does not exist") {
+		t.Errorf("unknown dataset: got error %v, want zfs's stderr in it", err)
+	}
+}
+
+func TestGetCreationDate(t *testing.T) {
+	useFakeZFS(t, fakeFixture)
+	for target, want := range map[string]int64{"tank/data@a": 100, "tank/data#b": 200} {
+		got, err := zfs.GetCreationDate(context.Background(), target)
+		if err != nil || !got.Equal(time.Unix(want, 0)) {
+			t.Errorf("GetCreationDate(%s) = %v, %v; want %v", target, got, err, time.Unix(want, 0))
+		}
+	}
+	_, err := zfs.GetCreationDate(context.Background(), "tank/data@nope")
+	if err == nil || !strings.Contains(err.Error(), "cannot open 'tank/data@nope': dataset does not exist (exit status 1)") {
+		t.Errorf("unknown target: got error %v, want zfs's stderr and exit status", err)
+	}
+}
+
+func TestGetZFSSendDryRun(t *testing.T) {
+	useFakeZFS(t, fakeFixture)
+	t.Setenv("FAKEZFS_STREAM_BYTES", "123456")
+	j := &files.JobInfo{VolumeName: "tank/data", BaseSnapshot: files.SnapshotInfo{Name: "c"}, IncrementalSnapshot: files.SnapshotInfo{Name: "a"}}
+	if size, err := zfs.GetZFSSendDryRun(context.Background(), j); err != nil || size != 123456 {
+		t.Errorf("got %d, %v; want 123456", size, err)
+	}
+
+	t.Setenv("FAKEZFS_DRYRUN_OUTPUT", "incremental\ta\ttank/data@c\n")
+	if _, err := zfs.GetZFSSendDryRun(context.Background(), j); err == nil || !strings.Contains(err.Error(), "could not parse") {
+		t.Errorf("output without a size line: got error %v, want could not parse", err)
+	}
+}
+
+func TestGetZFSSendCommand(t *testing.T) {
+	base := files.SnapshotInfo{Name: "c"}
+	testCases := []struct {
+		name    string
+		jobInfo files.JobInfo
+		want    []string
+	}{
+		{"full", files.JobInfo{}, []string{"send", "tank/data@c"}},
+		{"incremental", files.JobInfo{IncrementalSnapshot: files.SnapshotInfo{Name: "a"}}, []string{"send", "-i", "a", "tank/data@c"}},
+		{
+			"intermediary",
+			files.JobInfo{IncrementalSnapshot: files.SnapshotInfo{Name: "a"}, IntermediaryIncremental: true},
+			[]string{"send", "-I", "a", "tank/data@c"},
+		},
+		{
+			"from a bookmark",
+			files.JobInfo{IncrementalSnapshot: files.SnapshotInfo{Name: "b", Bookmark: true}},
+			[]string{"send", "-i", "tank/data#b", "tank/data@c"},
+		},
+		{
+			"flags",
+			files.JobInfo{Replication: true, Properties: true, Compressor: files.ZfsCompressor, Raw: true},
+			[]string{"send", "-R", "-p", "-c", "-w", "tank/data@c"},
+		},
+		{"internal compressor sends uncompressed", files.JobInfo{Compressor: files.InternalCompressor}, []string{"send", "tank/data@c"}},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			j := tc.jobInfo
+			j.VolumeName, j.BaseSnapshot = "tank/data", base
+			cmd := zfs.GetZFSSendCommand(context.Background(), &j)
+			if got := cmd.Args[1:]; !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("got zfs %v, want zfs %v", got, tc.want)
+			}
+		})
+	}
+}
 
 // nolint:funlen // table-driven test
 func TestParseSnapshotList(t *testing.T) {
