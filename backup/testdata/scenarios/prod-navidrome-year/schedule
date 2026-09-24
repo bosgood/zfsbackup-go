@@ -1,0 +1,13 @@
+# A year of daily runs at 01:00 from the real pool, as captured on 2026-09-24
+# (snapshots.json links to testdata/zfs). The capture has no creation times,
+# so they come from the sanoid names, which are in the host's local time.
+volume=backup3/enc/user/app/navidrome
+location=America/New_York
+# backup3 is a syncoid target that has pruned nothing (2226 hourlies). Prune
+# like sanoid on ypool, where these snapshots are taken, instead: monthly-only
+# backups that hold up with its retention hold up where more is kept.
+policy=hourly=48,daily=30,monthly=6
+from=2026-09-25T01:00:00
+until=2027-10-01T01:00:00
+every=24h
+checks=coverage:_monthly          # every monthly backed up exactly once

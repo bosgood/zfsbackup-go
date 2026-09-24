@@ -1,0 +1,5 @@
+# The first run against the real pool, as captured on 2026-09-24
+# (snapshots.json links to testdata/zfs). The capture has no creation times,
+# so they come from the sanoid names, which are in the host's local time.
+volume=backup3/enc/user/app/navidrome
+location=America/New_York

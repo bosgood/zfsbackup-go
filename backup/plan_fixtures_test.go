@@ -22,6 +22,8 @@ package backup
 
 import (
 	"fmt"
+	"io/ioutil"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -88,6 +90,30 @@ func TestLoadScenario(t *testing.T) {
 		if m.VolumeName != "tank/data" {
 			t.Errorf("manifest %v has volume %q, want tank/data", m.BaseSnapshot.Name, m.VolumeName)
 		}
+	}
+}
+
+func TestLoadScenarioSnapshotsJSON(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := ioutil.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("flags", "--full\n")
+	write("snapshots.json", `[{"name": "tank/data@autosnap_2026-09-01_00:00:00_monthly", "used": "0B"}]`)
+	s, err := LoadScenario(dir)
+	if err != nil {
+		t.Fatalf("LoadScenario: %v", err)
+	}
+	if len(s.Snapshots) != 1 || s.Snapshots[0].Name != "autosnap_2026-09-01_00:00:00_monthly" {
+		t.Errorf("got snapshots %+v, want the one in snapshots.json", s.Snapshots)
+	}
+
+	write("snapshots.txt", "autosnap_2026-08-01_00:00:00_monthly\n")
+	if _, err = LoadScenario(dir); err == nil || !strings.Contains(err.Error(), "not both") {
+		t.Errorf("got error %v, want one for having both snapshots.txt and snapshots.json", err)
 	}
 }
 
