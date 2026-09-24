@@ -67,3 +67,9 @@ scenarios:
 
 scenarios-update:
 	go test -count=1 -run TestScenarios ./backup/ -update
+
+# Plan smart backups with the working tree's code, e.g.
+#   make plan ARGS="--fullIfOlderThan 4320h --fullSnapshotSuffix _monthly \
+#     --incrementalSnapshotSuffix _monthly --snapshots snaps.txt tank/data"
+plan:
+	go run . plan $(ARGS)
