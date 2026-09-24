@@ -58,9 +58,10 @@ The checks:
 
 | Check | Fails when |
 |---|---|
+| `no-errors` | a run fails (for example no snapshot matches a suffix), as `send` would |
 | `chain-links` | an incremental's source is not backed up at the destination |
 | `source-present` | an incremental is sent from a snapshot no longer on the pool |
-| `no-duplicate-send` | a backup already at the destination is sent again |
+| `no-duplicate-send` | a snapshot already backed up at the destination is sent again |
 | `no-orphan-full` | the backup after a full does not chain from it |
 | `full-cadence` | fulls are not one window apart (± one month and one run), or a full is overdue |
 | `restore-depth` | restoring the newest backup takes more incrementals than fit in a window |
@@ -68,7 +69,8 @@ The checks:
 
 `source-pruned` in the output means sanoid pruned the last backup's snapshot
 before the next run could send from it. The retention is too short for the run
-cadence, or the host was down too long.
+cadence, or the host was down too long. A `source-pruned` no-op waits for the
+next monthly: `send` logs a warning and exits 0.
 
 ## 3. Plan the first run against the real destination
 
@@ -77,7 +79,8 @@ zfsbackup plan $FLAGS $DS $URI
 ```
 
 This lists the live snapshots and reads the manifests already at the
-destination (read-only; PGP flags apply if the manifests are encrypted). Expect:
+destination (read-only). If the manifests are encrypted or signed, pass the
+same PGP flags as `send`. Expect:
 
 ```
 next  FULL  autosnap_<newest monthly>_monthly  no-previous-full
@@ -88,9 +91,9 @@ If the destination holds manifests from earlier attempts, the plan chains from
 them (`INCR ... from ...`, or `NOOP`). Decide whether to keep them. To start over,
 delete them at the destination **and** their cached copies under
 `<workingDirectory>/cache/<md5 of the URI>/`. `zfsbackup clean` never deletes
-manifests (only `clean --force` removes whole broken sets). A cached manifest
-missing from the destination still counts as a backup, both for its volumes
-and for the planner.
+manifests (only `clean --force` removes whole broken sets). The planner ignores
+a cached manifest that is gone from the destination, but `clean` still treats
+it as live and keeps the volumes it lists.
 
 ## 4. Dry-run the send
 
@@ -116,7 +119,9 @@ failure.
 
 The next day, `zfsbackup send -n $FLAGS $DS $URI` must report `Nothing new to
 back up.` and exit 0. On the 1st of the next month it must plan an incremental
-from the monthly sent in step 5.
+from the monthly sent in step 5. Around each six-month mark, `send` logs that
+the last full backup is older than the window. The next full waits for the
+first monthly newer than the last backup.
 
 ## 6. Keep the real snapshot names under test
 

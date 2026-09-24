@@ -86,7 +86,7 @@ Use the `--fullIfOlderThan` option to auto select the most recent snapshot on th
 
 ### Planning a smart backup
 
-`plan` makes the same decision as a smart `send` and prints what it would back up, and why, without sending anything. With `--schedule` it projects the runs over time as sanoid takes and prunes snapshots. Every plan ends with invariant checks: restore chains, duplicate sends, full cadence and restore depth, plus the opt-in `coverage:<suffix>`. `plan` exits 0 when they pass (a no-op included), 2 when one fails and 1 on other errors.
+`plan` makes the same decision as a smart `send` and prints what it would back up, and why, without sending anything. With `--schedule` it projects the runs over time as sanoid takes and prunes snapshots. Every plan ends with invariant checks: runs that fail, restore chains, duplicate sends, full cadence and restore depth, plus the opt-in `coverage:<suffix>`. `plan` exits 0 when they pass (a no-op included), 2 when one fails and 1 on other errors.
 
 The examples take monthly fulls and monthly incrementals from sanoid's `_monthly` snapshots. Capture the pool's snapshots on the pool host (or leave out `--snapshots` to list them live):
 
