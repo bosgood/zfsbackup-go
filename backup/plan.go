@@ -188,13 +188,18 @@ func planSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, 
 	}
 
 	// The incremental source (the most recent backup) must still exist locally
-	// to send from it. If it has been pruned, fall back to a full backup. The
-	// copy keeps the destination state untouched: the existence check flags
-	// the source as a bookmark if only a bookmark of it is left.
+	// to send from it. If it has been pruned, fall back to a full backup of a
+	// full-candidate newer than that backup; an older one would only re-send
+	// data already backed up, so wait for the next one instead. The copy keeps
+	// the destination state untouched: the existence check flags the source as
+	// a bookmark if only a bookmark of it is left.
 	source := *lastBackup[0]
 	if !validateSnapShotExistsFromSnaps(&source, snapshots, true) {
 		if fullBase == nil {
 			return Plan{}, fmt.Errorf("no snapshots found matching the full backup criteria")
+		}
+		if !fullBase.CreationTime.After(source.CreationTime) {
+			return Plan{Action: PlanNoop, Source: source, Reason: reasonSourcePruned}, nil
 		}
 		return Plan{Action: PlanFull, Base: *fullBase, Source: source, Reason: reasonSourcePruned}, nil
 	}

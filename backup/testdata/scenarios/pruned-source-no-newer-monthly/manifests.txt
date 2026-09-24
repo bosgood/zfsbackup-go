@@ -1,0 +1,3 @@
+# The roll-over full and the next day's incremental.
+autosnap_2027-03-01_00:00:00_monthly
+autosnap_2027-03-01_00:00:00_monthly to autosnap_2027-03-02_00:00:00_daily

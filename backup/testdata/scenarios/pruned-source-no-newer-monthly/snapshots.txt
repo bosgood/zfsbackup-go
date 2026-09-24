@@ -1,0 +1,11 @@
+# The pool at 2027-03-12 01:00 under hourly=36,daily=7,monthly=3, abridged: the
+# host was down after the 2027-03-02 run and sanoid has since pruned that
+# daily. The newest monthly is still the one the last full was taken from.
+autosnap_2027-03-12_01:00:00_hourly
+autosnap_2027-03-12_00:00:00_daily
+autosnap_2027-03-12_00:00:00_hourly
+autosnap_2027-03-06_00:00:00_daily
+autosnap_2027-03-05_00:00:00_daily
+autosnap_2027-03-01_00:00:00_monthly
+autosnap_2027-02-01_00:00:00_monthly
+autosnap_2027-01-01_00:00:00_monthly

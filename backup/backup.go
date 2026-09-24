@@ -113,6 +113,13 @@ func selectSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo
 	}
 	log.AppLogger.Infof("Smart backup plan: %s.", p)
 	if p.Action == PlanNoop {
+		if p.Reason == reasonSourcePruned {
+			log.AppLogger.Warningf(
+				"The last backup (%s) is no longer on the pool, so no incremental can be sent, and no full backup candidate "+
+					"newer than it exists yet. Nothing will be backed up until one does.",
+				p.Source.Name,
+			)
+		}
 		return ErrNoOp
 	}
 	jobInfo.BaseSnapshot = p.Base
