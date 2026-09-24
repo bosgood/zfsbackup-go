@@ -84,6 +84,38 @@ Use the `--fullIfOlderThan` option to auto select the most recent snapshot on th
 ./zfsbackup send --encryptTo user@domain.com --signFrom user@domain.com --publicKeyRingPath pubring.gpg.asc --secretKeyRingPath secring.gpg.asc --fullIfOlderThan 720h Tank/Dataset gs://backup-bucket-target,s3://another-backup-target
 ```
 
+### Planning a smart backup
+
+`plan` makes the same decision as a smart `send` and prints what it would back up, and why, without sending anything. With `--schedule` it projects the runs over time as sanoid takes and prunes snapshots. Every plan ends with invariant checks: restore chains, duplicate sends, full cadence and restore depth, plus the opt-in `coverage:<suffix>`. `plan` exits 0 when they pass (a no-op included), 2 when one fails and 1 on other errors.
+
+The examples take monthly fulls and monthly incrementals from sanoid's `_monthly` snapshots. Capture the pool's snapshots on the pool host (or leave out `--snapshots` to list them live):
+
+```bash
+zfs list -H -p -t snapshot,bookmark -o name,creation,type -S creation Tank/Dataset > snaps.txt
+```
+
+The next run against the real destination (its manifests are read, nothing is sent):
+
+```bash
+$ ./zfsbackup plan --fullIfOlderThan 4320h --fullSnapshotSuffix _monthly --incrementalSnapshotSuffix _monthly --snapshots snaps.txt Tank/Dataset gs://backup-bucket-target
+next  FULL  autosnap_2026-09-01_00:00:00_monthly  no-previous-full
+checks: OK
+```
+
+Daily runs until a date, with sanoid's retention policy taking and pruning snapshots in between (`location=` is the time zone of sanoid's snapshot names, UTC by default; `--manifests FILE` stands in for a destination):
+
+```bash
+$ ./zfsbackup plan --fullIfOlderThan 4320h --fullSnapshotSuffix _monthly --incrementalSnapshotSuffix _monthly --snapshots snaps.txt \
+    --schedule "policy=hourly=48,daily=30,monthly=6,until=2027-10-01,every=24h,checks=coverage:_monthly" Tank/Dataset
+2026-09-24T01:00:00Z  FULL  autosnap_2026-09-01_00:00:00_monthly  no-previous-full
+2026-09-25T01:00:00Z..2026-09-30T01:00:00Z  NOOP x6  nothing-newer
+2026-10-01T01:00:00Z  INCR  autosnap_2026-10-01_00:00:00_monthly  from autosnap_2026-09-01_00:00:00_monthly  newer-candidate
+...
+checks: OK
+```
+
+`send -n` (`--dry-run`) then shows the next run's `zfs send` command and size estimate without uploading anything. Scenario directories under `backup/testdata/scenarios` hold the same inputs as files (`flags`, `snapshots.txt`, `manifests.txt`, `schedule`) with the expected output in `expected.txt`. `make scenarios` checks them all and `make plan ARGS="..."` runs `plan` from the source tree.
+
 ### "Smart" Restore Options
 
 Add the `--auto` option to automatically restore to the snapshot if one is given, or detect the latest snapshot for the filesystem/volume given and restore to that. It will figure out which snapshots are missing from the local_volume and select them all to restore to get to the desired snapshot. Note: snapshot comparisons work using the name of the snapshot, if you restored a snapshot to a different name, this application won't think it is available and it will break the restore process.
@@ -160,6 +192,7 @@ Available Commands:
   clean       Clean will delete any objects in the target that are not found in the manifest files found in the target.
   help        Help about any command
   list        List all backup sets found at the provided target.
+  plan        plan shows what a smart backup would send, without sending anything.
   receive     receive will restore a snapshot of a ZFS volume similar to how the "zfs recv" command works.
   send        send will backup of a ZFS volume similar to how the "zfs send" command works.
   version     Print the version of zfsbackup in use and relevant compile information
