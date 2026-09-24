@@ -22,6 +22,7 @@ package backup
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -93,6 +94,19 @@ func TestChecks(t *testing.T) {
 		detail string // substring of the single expected violation; empty for none
 	}{
 		{
+			name:  "no-errors: every run decides",
+			check: "no-errors",
+			sim:   simulate(scenario(), full(0, 0), noop(1, 0)),
+		},
+		{
+			name:  "no-errors: runs failing the same way are one violation",
+			check: "no-errors",
+			sim: simulate(scenario(), full(0, 0),
+				Step{At: day(1), Err: errors.New("destinations are out of sync")},
+				Step{At: day(2), Err: errors.New("destinations are out of sync")}),
+			detail: "destinations are out of sync (2 runs, through 2026-09-03T00:00:00Z)",
+		},
+		{
 			name:  "chain-links: incremental with its full",
 			check: "chain-links",
 			sim:   simulate(scenario(incrManifest(monthly(30), monthly(0)), fullManifest(monthly(0)))),
@@ -124,13 +138,19 @@ func TestChecks(t *testing.T) {
 			name:   "no-duplicate-send: the same full twice",
 			check:  "no-duplicate-send",
 			sim:    simulate(scenario(), full(0, 0), full(1, 0)),
-			detail: "FULL autosnap_day0_monthly again (first sent 2026-09-01T00:00:00Z)",
+			detail: "FULL autosnap_day0_monthly re-sends autosnap_day0_monthly, already backed up by FULL autosnap_day0_monthly sent 2026-09-01T00:00:00Z",
 		},
 		{
 			name:   "no-duplicate-send: a full already at the destination",
 			check:  "no-duplicate-send",
 			sim:    simulate(scenario(fullManifest(monthly(0))), full(1, 0)),
-			detail: "FULL autosnap_day0_monthly again (first sent before the first run)",
+			detail: "FULL autosnap_day0_monthly re-sends autosnap_day0_monthly, already backed up by FULL autosnap_day0_monthly before the first run",
+		},
+		{
+			name:   "no-duplicate-send: a full of a monthly already sent as an incremental",
+			check:  "no-duplicate-send",
+			sim:    simulate(scenario(), full(0, 0), incr(30, 30, 0), full(180, 30)),
+			detail: "FULL autosnap_day30_monthly re-sends autosnap_day30_monthly, already backed up by INCR autosnap_day30_monthly from autosnap_day0_monthly",
 		},
 		{
 			name:  "no-orphan-full: the next incremental chains from the full",
@@ -153,6 +173,17 @@ func TestChecks(t *testing.T) {
 			check:  "full-cadence",
 			sim:    simulate(scenario(), full(0, 0), full(30, 30)),
 			detail: "FULL autosnap_day30_monthly is 30d after FULL autosnap_day0_monthly, want 180d ± 32d",
+		},
+		{
+			name:  "full-cadence: a late full catching up after the initial state",
+			check: "full-cadence",
+			sim:   simulate(scenario(fullManifest(monthly(0))), full(400, 400)),
+		},
+		{
+			name:  "full-cadence: nothing to judge without a snapshot period",
+			check: "full-cadence",
+			sim: simulate(&Scenario{JobInfo: files.JobInfo{FullIfOlderThan: 720 * time.Hour}, DestBackups: [][]*files.JobInfo{{fullManifest(monthly(0))}}},
+				full(0, 1)),
 		},
 		{
 			name:   "full-cadence: a full overdue",

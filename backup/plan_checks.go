@@ -43,6 +43,7 @@ var defaultChecks = []struct {
 	name string
 	run  func(*Simulation) []Violation
 }{
+	{"no-errors", (*Simulation).checkNoErrors},
 	{"chain-links", (*Simulation).checkChainLinks},
 	{"source-present", (*Simulation).checkSourcePresent},
 	{"no-duplicate-send", (*Simulation).checkNoDuplicateSend},
@@ -77,6 +78,30 @@ func (sim *Simulation) Check(checks []string) []Violation {
 		if suffix := strings.TrimPrefix(name, coverageCheck); suffix != name {
 			found = append(found, sim.checkCoverage(name, suffix)...)
 		}
+	}
+	return found
+}
+
+// checkNoErrors: every run makes a decision; a planner error is what `send`
+// would fail with. Consecutive runs failing the same way are one violation.
+func (sim *Simulation) checkNoErrors() []Violation {
+	var found []Violation
+	for i := 0; i < len(sim.Steps); {
+		st := sim.Steps[i]
+		j := i + 1
+		if st.Err == nil {
+			i = j
+			continue
+		}
+		for j < len(sim.Steps) && sameOutcome(sim.Steps[j], st) {
+			j++
+		}
+		detail := st.Err.Error()
+		if j-i > 1 {
+			detail += fmt.Sprintf(" (%d runs, through %s)", j-i, sim.formatTime(sim.Steps[j-1].At))
+		}
+		found = append(found, Violation{Check: "no-errors", At: st.At, Detail: detail})
+		i = j
 	}
 	return found
 }
@@ -122,14 +147,15 @@ func (sim *Simulation) checkSourcePresent() []Violation {
 	return found
 }
 
-// checkNoDuplicateSend: a backup already at the destination is never sent
-// again (it would write the same objects).
+// checkNoDuplicateSend: a snapshot already backed up at a destination (as a
+// full or as an incremental's target) is never sent there again: the data is
+// there, and the same backup would even write the same objects.
 func (sim *Simulation) checkNoDuplicateSend() []Violation {
-	type key struct{ base, source string }
-	first := make(map[key]string)
-	for _, dest := range sim.Initial {
+	backedUp := make([]map[string]string, len(sim.Initial)) // per destination: base => how and when it was sent
+	for d, dest := range sim.Initial {
+		backedUp[d] = make(map[string]string)
 		for _, m := range dest {
-			first[key{m.BaseSnapshot.Name, m.IncrementalSnapshot.Name}] = "before the first run"
+			backedUp[d][snapshotID(m.BaseSnapshot)] = describeBackup(m.BaseSnapshot, m.IncrementalSnapshot) + " before the first run"
 		}
 	}
 	var found []Violation
@@ -138,16 +164,19 @@ func (sim *Simulation) checkNoDuplicateSend() []Violation {
 			continue
 		}
 		m := manifestFor("", st.Plan)
-		k := key{m.BaseSnapshot.Name, m.IncrementalSnapshot.Name}
-		if when, dup := first[k]; dup {
-			found = append(found, Violation{
-				Check:  "no-duplicate-send",
-				At:     st.At,
-				Detail: fmt.Sprintf("%s again (first sent %s)", describeBackup(m.BaseSnapshot, m.IncrementalSnapshot), when),
-			})
-			continue
+		id := snapshotID(m.BaseSnapshot)
+		for d := range backedUp {
+			if earlier, dup := backedUp[d][id]; dup {
+				found = append(found, Violation{
+					Check: "no-duplicate-send",
+					At:    st.At,
+					Detail: fmt.Sprintf("%s%s re-sends %s, already backed up by %s",
+						sim.destination(d), describeBackup(m.BaseSnapshot, m.IncrementalSnapshot), m.BaseSnapshot.Name, earlier),
+				})
+				continue
+			}
+			backedUp[d][id] = describeBackup(m.BaseSnapshot, m.IncrementalSnapshot) + " sent " + sim.formatTime(st.At)
 		}
-		first[k] = sim.formatTime(st.At)
 	}
 	return found
 }
@@ -179,17 +208,21 @@ func (sim *Simulation) checkNoOrphanFull() []Violation {
 	return found
 }
 
-// checkFullCadence: with --fullIfOlderThan, consecutive fulls are one window
-// apart, give or take the slack (see fullSlack), and a full is never overdue
-// by more than the slack.
+// checkFullCadence: with --fullIfOlderThan, a full never comes less than one
+// window (minus the slack, see fullSlack) after the previous one, and never
+// more than one window plus the slack after the previous full a run sent: a
+// full is never overdue. The first full after the initial state may come any
+// time later: it may be catching up. Without a known slack (no snapshot
+// period to go by) there is nothing to judge.
 func (sim *Simulation) checkFullCadence() []Violation {
 	window := sim.Scenario.JobInfo.FullIfOlderThan
-	if window < 0 {
+	slack := sim.fullSlack()
+	if window < 0 || slack == 0 {
 		return nil
 	}
-	slack := sim.fullSlack()
 
 	var last *files.SnapshotInfo // base of the latest full
+	lastSent := false            // whether a run sent it
 	if len(sim.Initial) > 0 {
 		for _, m := range sim.Initial[0] {
 			if m.IncrementalSnapshot.Name == "" {
@@ -205,7 +238,7 @@ func (sim *Simulation) checkFullCadence() []Violation {
 		if st.Err == nil && st.Plan.Action == PlanFull {
 			if last != nil {
 				gap := st.Plan.Base.CreationTime.Sub(last.CreationTime)
-				if gap < window-slack || gap > window+slack {
+				if gap < window-slack || (lastSent && gap > window+slack) {
 					found = append(found, Violation{
 						Check: "full-cadence",
 						At:    st.At,
@@ -215,7 +248,7 @@ func (sim *Simulation) checkFullCadence() []Violation {
 				}
 			}
 			base := st.Plan.Base
-			last, overdue = &base, false
+			last, lastSent, overdue = &base, true, false
 			continue
 		}
 		if last == nil || overdue || st.At.IsZero() || len(st.Snapshots) == 0 {
@@ -272,7 +305,7 @@ func (sim *Simulation) checkCoverage(name, suffix string) []Violation {
 	var candidates []files.SnapshotInfo
 	for _, st := range sim.Steps {
 		for _, s := range st.Snapshots {
-			id := fmt.Sprintf("%s@%d", s.Name, s.CreationTime.UnixNano())
+			id := snapshotID(s)
 			if !s.Bookmark && strings.HasSuffix(s.Name, suffix) && !seen[id] {
 				seen[id] = true
 				candidates = append(candidates, s)
@@ -368,14 +401,26 @@ func chainDepth(manifests []*files.JobInfo) int {
 	if len(manifests) == 0 {
 		return 0
 	}
-	depth := 0
-	for m := manifests[0]; m.IncrementalSnapshot.Name != "" && depth < len(manifests); {
-		depth++
-		if m = parentOf(manifests, m.IncrementalSnapshot); m == nil {
-			break
+	// Parents by base snapshot, chosen as parentOf does.
+	parents := make(map[string]*files.JobInfo, len(manifests))
+	for _, m := range manifests {
+		id := snapshotID(m.BaseSnapshot)
+		if p, ok := parents[id]; !ok || (m.IncrementalSnapshot.Name == "" && p.IncrementalSnapshot.Name != "") {
+			parents[id] = m
 		}
 	}
+	depth := 0
+	for m := manifests[0]; m != nil && m.IncrementalSnapshot.Name != "" && depth < len(manifests); {
+		depth++
+		m = parents[snapshotID(m.IncrementalSnapshot)]
+	}
 	return depth
+}
+
+// snapshotID identifies a snapshot by name and creation time, as
+// SnapshotInfo.Equal compares them.
+func snapshotID(s files.SnapshotInfo) string {
+	return fmt.Sprintf("%s@%d", s.Name, s.CreationTime.UnixNano())
 }
 
 // parentOf finds the backup an incremental from source restores onto,

@@ -1,2 +1,3 @@
 next  ERROR  destinations are out of sync, cannot continue with smart option
-checks: OK
+checks: 1 violation(s)
+  no-errors  destinations are out of sync, cannot continue with smart option
