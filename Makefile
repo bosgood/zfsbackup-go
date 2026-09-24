@@ -59,3 +59,11 @@ PKG ?= ./...
 RUN ?= .
 test-run:
 	go test -count=1 -run '$(RUN)' -v $(PKG)
+
+# Golden plan scenarios (backup/testdata/scenarios/*/expected.txt).
+# `scenarios-update` rewrites every expected.txt; review the diff before committing.
+scenarios:
+	go test -count=1 -run 'TestScenarios|TestTieOrder' -v ./backup/
+
+scenarios-update:
+	go test -count=1 -run TestScenarios ./backup/ -update

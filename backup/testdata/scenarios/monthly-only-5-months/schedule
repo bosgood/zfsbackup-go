@@ -1,0 +1,6 @@
+# Daily runs at 01:00, ending before the 4320h window since the September
+# full elapses (2027-02-28), so no full roll-over happens.
+policy=hourly=36,daily=30,monthly=3
+from=2026-09-24T01:00:00Z
+until=2027-02-20T01:00:00Z
+every=24h

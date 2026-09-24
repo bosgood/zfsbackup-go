@@ -1,0 +1,13 @@
+2026-09-24T01:00:00Z  FULL  autosnap_2026-09-01_00:00:00_monthly  no-previous-full
+2026-09-25T01:00:00Z..2026-09-30T01:00:00Z  NOOP x6  nothing-newer
+2026-10-01T01:00:00Z  INCR  autosnap_2026-10-01_00:00:00_monthly  from autosnap_2026-09-01_00:00:00_monthly  newer-candidate
+2026-10-02T01:00:00Z..2026-10-31T01:00:00Z  NOOP x30  nothing-newer
+2026-11-01T01:00:00Z  INCR  autosnap_2026-11-01_00:00:00_monthly  from autosnap_2026-10-01_00:00:00_monthly  newer-candidate
+2026-11-02T01:00:00Z..2026-11-30T01:00:00Z  NOOP x29  nothing-newer
+2026-12-01T01:00:00Z  INCR  autosnap_2026-12-01_00:00:00_monthly  from autosnap_2026-11-01_00:00:00_monthly  newer-candidate
+2026-12-02T01:00:00Z..2026-12-31T01:00:00Z  NOOP x30  nothing-newer
+2027-01-01T01:00:00Z  INCR  autosnap_2027-01-01_00:00:00_monthly  from autosnap_2026-12-01_00:00:00_monthly  newer-candidate
+2027-01-02T01:00:00Z..2027-01-31T01:00:00Z  NOOP x30  nothing-newer
+2027-02-01T01:00:00Z  INCR  autosnap_2027-02-01_00:00:00_monthly  from autosnap_2027-01-01_00:00:00_monthly  newer-candidate
+2027-02-02T01:00:00Z..2027-02-20T01:00:00Z  NOOP x19  nothing-newer
+checks: OK

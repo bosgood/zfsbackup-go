@@ -21,11 +21,100 @@
 package backup
 
 import (
+	"bytes"
+	"flag"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/someone1/zfsbackup-go/files"
 )
+
+var update = flag.Bool("update", false, "rewrite expected.txt for every scenario")
+
+// TestScenarios runs every scenario under testdata/scenarios and compares the
+// rendered plan with its expected.txt. `make scenarios-update` rewrites them.
+func TestScenarios(t *testing.T) {
+	entries, err := ioutil.ReadDir("testdata/scenarios")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join("testdata/scenarios", entry.Name())
+		t.Run(entry.Name(), func(t *testing.T) {
+			sc, err := LoadScenario(dir)
+			if err != nil {
+				t.Fatalf("LoadScenario: %v", err)
+			}
+			sim := sc.Run()
+			var buf bytes.Buffer
+			if err = sim.WriteText(&buf, sim.Check(sc.Checks)); err != nil {
+				t.Fatal(err)
+			}
+
+			golden := filepath.Join(dir, "expected.txt")
+			if *update {
+				if err = ioutil.WriteFile(golden, buf.Bytes(), 0644); err != nil { // nolint:gosec // not secret
+					t.Fatal(err)
+				}
+			}
+			want, err := ioutil.ReadFile(golden)
+			if os.IsNotExist(err) {
+				t.Fatalf("%s is missing; create it with `make scenarios-update`:\n%s", golden, buf.String())
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(want, buf.Bytes()) {
+				t.Errorf("plan differs from %s (- expected, + got):\n%s", golden, lineDiff(string(want), buf.String()))
+			}
+			if strings.Contains(buf.String(), "violation") {
+				t.Errorf("checks failed:\n%s", buf.String())
+			}
+		})
+	}
+}
+
+// lineDiff lists the lines only in want ("- ") or only in got ("+ "), in order.
+func lineDiff(want, got string) string {
+	a, b := strings.Split(want, "\n"), strings.Split(got, "\n")
+	// common[i][j] is the length of the longest common subsequence of a[i:] and b[j:].
+	common := make([][]int, len(a)+1)
+	for i := range common {
+		common[i] = make([]int, len(b)+1)
+	}
+	for i := len(a) - 1; i >= 0; i-- {
+		for j := len(b) - 1; j >= 0; j-- {
+			switch {
+			case a[i] == b[j]:
+				common[i][j] = common[i+1][j+1] + 1
+			case common[i+1][j] >= common[i][j+1]:
+				common[i][j] = common[i+1][j]
+			default:
+				common[i][j] = common[i][j+1]
+			}
+		}
+	}
+	var out strings.Builder
+	for i, j := 0, 0; i < len(a) || j < len(b); {
+		switch {
+		case i < len(a) && j < len(b) && a[i] == b[j]:
+			i, j = i+1, j+1
+		case j < len(b) && (i == len(a) || common[i][j+1] >= common[i+1][j]):
+			out.WriteString("+ " + b[j] + "\n")
+			j++
+		default:
+			out.WriteString("- " + a[i] + "\n")
+			i++
+		}
+	}
+	return out.String()
+}
 
 // nolint:funlen // table-driven test
 func TestPlanSmartSnapshotsReasons(t *testing.T) {

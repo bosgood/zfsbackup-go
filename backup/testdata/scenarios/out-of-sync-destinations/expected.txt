@@ -1,0 +1,2 @@
+next  ERROR  destinations are out of sync, cannot continue with smart option
+checks: OK
