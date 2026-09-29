@@ -1,5 +1,9 @@
 TARGETS="freebsd/amd64 linux/amd64"
 COMMIT_HASH=`git rev-parse --short HEAD 2>/dev/null`
+# Go toolchain for the Docker images, taken from go.mod's `go` directive so the
+# images cannot drift from the module (see the GO_VERSION note in Dockerfile).
+GO_VERSION := $(shell sed -nE 's/^go ([0-9]+(\.[0-9]+)*).*/\1/p' go.mod)
+DOCKER_BUILD = docker build --build-arg GO_VERSION=$(GO_VERSION)
 
 check: lint test test-race e2e
 
@@ -31,11 +35,27 @@ integration:
 	go test -tags integration -v ./...
 
 test-docker:
-	docker build -t zfsbackup-test . && docker run --rm zfsbackup-test
+	$(DOCKER_BUILD) --target test -t zfsbackup-test . && docker run --rm zfsbackup-test
+
+# Dev container with Claude Code sandboxed behind an egress firewall; see
+# .devcontainer/. `devcontainer-build` only builds the image (plain docker);
+# the other targets drive it with the devcontainer CLI
+# (npm install -g @devcontainers/cli), which also works without VS Code.
+devcontainer-build:
+	$(DOCKER_BUILD) --target devcontainer -t zfsbackup-devcontainer .
+
+devcontainer-up:
+	devcontainer up --workspace-folder .
+
+devcontainer-claude: devcontainer-up
+	devcontainer exec --workspace-folder . claude
+
+devcontainer-shell: devcontainer-up
+	devcontainer exec --workspace-folder . bash
 
 # Run a single test against the supported toolchain without rebuilding the
 # image, e.g. `make test-one RUN=TestSelectSmartSnapshots PKG=./backup/`.
-GO_IMAGE=golang:1.25-bookworm
+GO_IMAGE=golang:$(GO_VERSION)-bookworm
 RUN?=.
 PKG?=./...
 test-one:

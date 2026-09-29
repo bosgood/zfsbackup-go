@@ -1,0 +1,49 @@
+// Dev container for zfsbackup-go with Claude Code sandboxed inside it.
+//
+// Builds the `devcontainer` stage of the repo's Dockerfile (same Go toolchain
+// as `make test-docker`), runs as the non-root `dev` user, and restricts
+// outbound network access to an allowlist via init-firewall.sh (which needs
+// the NET_ADMIN/NET_RAW capabilities below). Claude Code's config and
+// credentials, the shell history, and the Go build cache live in named
+// volumes so they survive container rebuilds.
+//
+// Use it from VS Code ("Dev Containers: Reopen in Container") or the CLI:
+//   devcontainer up --workspace-folder .            (make devcontainer-up)
+//   devcontainer exec --workspace-folder . claude   (make devcontainer-claude)
+{
+  "name": "zfsbackup-go (Claude Code sandbox)",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": "..",
+    "target": "devcontainer",
+    "args": {
+      "TZ": "${localEnv:TZ:UTC}",
+      "CLAUDE_CODE_VERSION": "latest"
+    }
+  },
+  // Needed by init-firewall.sh (iptables/ipset). Only root can use them, and
+  // the dev user's sudo is limited to that one script.
+  "runArgs": ["--cap-add=NET_ADMIN", "--cap-add=NET_RAW"],
+  "remoteUser": "dev",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/zfsbackup-go,type=bind,consistency=delegated",
+  "workspaceFolder": "/workspaces/zfsbackup-go",
+  "mounts": [
+    "source=zfsbackup-go-claude-config-${devcontainerId},target=/home/dev/.claude,type=volume",
+    "source=zfsbackup-go-bash-history-${devcontainerId},target=/commandhistory,type=volume",
+    "source=zfsbackup-go-cache-${devcontainerId},target=/home/dev/.cache,type=volume"
+  ],
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/dev/.claude"
+  },
+  // Re-applied on every start: iptables state does not survive a container restart.
+  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh",
+  "waitFor": "postStartCommand",
+  "customizations": {
+    "vscode": {
+      "extensions": ["anthropic.claude-code", "golang.go"],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  }
+}

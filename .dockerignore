@@ -1,0 +1,11 @@
+# Keep the build context small: none of this is needed to build or test.
+# (.devcontainer/ stays in: the devcontainer stage copies init-firewall.sh.)
+.git
+.github
+.remember
+.claude
+.DS_Store
+tmp
+result
+*.test
+*.out

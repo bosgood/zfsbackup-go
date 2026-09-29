@@ -1,0 +1,3 @@
+# The recovery full lands four months after the previous one, inside the
+# 4320h window, which `full-cadence` rightly flags: it is the price of
+# missing the cron job for three months, not a planner bug.
