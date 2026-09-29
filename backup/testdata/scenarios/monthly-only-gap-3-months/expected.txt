@@ -1,0 +1,3 @@
+next  FULL  autosnap_2027-01-01_00:00:00_monthly  source-pruned
+checks: 1 violation(s)
+  full-cadence  FULL autosnap_2027-01-01_00:00:00_monthly is 122d after FULL autosnap_2026-09-01_00:00:00_monthly, want 180d ± 31d

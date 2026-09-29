@@ -114,7 +114,9 @@ $ ./zfsbackup plan --fullIfOlderThan 4320h --fullSnapshotSuffix _monthly --incre
 checks: OK
 ```
 
-`send -n` (`--dry-run`) then shows the next run's `zfs send` command and size estimate without uploading anything. Scenario directories under `backup/testdata/scenarios` hold the same inputs as files (`flags`, `snapshots.txt`, `manifests.txt`, `schedule`) with the expected output in `expected.txt`. `make scenarios` checks them all and `make plan ARGS="..."` runs `plan` from the source tree.
+`--snapshots` also reads `zfs list` output converted to JSON: an array of rows such as `{"name": "Tank/Dataset@autosnap_2026-09-01_00:00:00_monthly"}`, each with an optional `creation` (epoch) and `type`. Other keys are ignored. A row without a creation time takes it from its sanoid name, read in the `location=` zone.
+
+`send -n` (`--dry-run`) then shows the next run's `zfs send` command and size estimate without uploading anything. Scenario directories under `backup/testdata/scenarios` hold the same inputs as files (`flags`, `snapshots.txt` or `snapshots.json`, `manifests.txt`, `schedule`) with the expected output in `expected.txt`. The `prod-navidrome-*` scenarios link to a real pool's snapshots, captured under `testdata/zfs`. `make scenarios` checks them all and `make plan ARGS="..."` runs `plan` from the source tree.
 
 ### "Smart" Restore Options
 

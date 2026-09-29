@@ -684,3 +684,34 @@ After an independent review of the implementation:
 - **Not changed:** a `source-pruned` no-op still exits 0 with a warning. An
   alternative is an incremental from an older backup still on the pool; that
   is a design decision for later.
+
+A real capture, added afterwards:
+
+- `testdata/zfs/snap-navidrome-2026-09-24.json` is `zfs list` output for
+  `backup3/enc/user/app/navidrome` converted to JSON: oldest first, with no
+  creation times. `zfs.ParseSnapshotList` reads JSON arrays of rows, and a
+  scenario may hold a `snapshots.json` (here a link to the capture) instead
+  of `snapshots.txt`. `prod-navidrome-first-run` and `prod-navidrome-year`
+  plan from it, reading the times from the names in `America/New_York`.
+- It answers part of the tie-order question above. On every 1st, sanoid
+  created the monthly, then the daily, then the hourly (createtxg order), all
+  with the same timestamp in their names. Loaded, they are listed in that
+  order, which is also how `Schedule.Advance` lists coincident snapshots. The
+  plans do not depend on the order either way (`TestTieOrderIndependence`).
+
+Weekly cadence on a three-monthly pool (2026-09-24, from the capture):
+
+- `prod-navidrome-weekly-3-monthlies` runs every Sunday 03:00 for a year with
+  `monthly=3`. Every monthly is sent exactly once, as an incremental on the
+  first Sunday after its 1st, and the fulls roll on 2027-03-07 and 2027-09-05
+  (the first Sundays after the first 1st past each 4320h window); all other
+  runs are `nothing-newer` no-ops. The previous monthly is always still on
+  the pool: sanoid prunes a monthly only once it is older than 3 x 31 days
+  with more than three present.
+- `monthly-only-gap-2-months` and `monthly-only-gap-3-months` bound the
+  outage the chain tolerates. With the last backup at the October monthly and
+  no run since, a run at 2026-12-28 still finds October on the pool and sends
+  December from it (November is skipped, not lost: it is in the December
+  incremental's data). A run at 2027-01-10 finds October pruned and sends a
+  `source-pruned` FULL of the January monthly, which `full-cadence` flags as
+  early (`expect-violations`); the chain then continues from January.

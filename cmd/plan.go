@@ -76,7 +76,8 @@ func init() {
 		"snapshots",
 		"",
 		"read the snapshots from this file (- for stdin) instead of the pool: the output of "+
-			"`zfs list -H -p -t snapshot,bookmark -o name,creation,type -S creation <volume>`, or bare sanoid names.",
+			"`zfs list -H -p -t snapshot,bookmark -o name,creation,type -S creation <volume>`, bare sanoid names, or a JSON "+
+			"array of rows with a name and optionally a creation epoch and a type.",
 	)
 	planCmd.Flags().StringVar(
 		&planManifests,

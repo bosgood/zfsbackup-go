@@ -1,0 +1,10 @@
+# The pool at 2026-12-28 under hourly=48,daily=30,monthly=3, abridged: the cron
+# job has missed every run since October 4th. Sanoid pruned the September
+# monthly (older than 3*31 days with four monthlies present) but the October
+# one, the last backup, is still here, so the chain continues from it and the
+# November monthly is simply skipped.
+autosnap_2026-12-28_02:00:00_hourly
+autosnap_2026-12-28_00:00:00_daily
+autosnap_2026-12-01_00:00:00_monthly
+autosnap_2026-11-01_00:00:00_monthly
+autosnap_2026-10-01_00:00:00_monthly

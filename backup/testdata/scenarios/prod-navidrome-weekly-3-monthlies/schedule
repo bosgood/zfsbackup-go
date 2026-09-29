@@ -1,0 +1,14 @@
+# A weekly cron job (Sunday 03:00) that always targets _monthly, on a pool that
+# keeps only three monthlies. Uploads must land about once a month, on the first
+# Sunday after each 1st, as an INCR from the previous monthly; every run in
+# between is a NOOP. The monthly two back is still on the pool when each
+# incremental runs (sanoid destroys a monthly once it is older than 3*31 days
+# AND more than three remain), so the chain never breaks, and the fulls roll
+# on the first Sunday after the first 1st past each 4320h window.
+volume=backup3/enc/user/app/navidrome
+location=America/New_York
+policy=hourly=48,daily=30,monthly=3
+from=2026-09-27T03:00:00
+until=2027-10-10T03:00:00
+every=168h
+checks=coverage:_monthly          # every monthly backed up exactly once

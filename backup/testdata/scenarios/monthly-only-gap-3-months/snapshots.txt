@@ -1,0 +1,10 @@
+# The pool at 2027-01-10 under hourly=48,daily=30,monthly=3, abridged: the cron
+# job has missed every run since October 4th. The October monthly, the last
+# backup, turned 93 days old on January 2nd with four monthlies present, so
+# sanoid pruned it and no incremental can be sent. A newer monthly exists, so
+# the chain restarts with a full of it instead of stalling.
+autosnap_2027-01-10_02:00:00_hourly
+autosnap_2027-01-10_00:00:00_daily
+autosnap_2027-01-01_00:00:00_monthly
+autosnap_2026-12-01_00:00:00_monthly
+autosnap_2026-11-01_00:00:00_monthly

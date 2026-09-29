@@ -1,8 +1,9 @@
 # Runbook: the first monthly-only offsite backup
 
-This walks a dataset from "never backed up" to a daily cron job that sends only
+This walks a dataset from "never backed up" to a cron job that sends only
 sanoid's `_monthly` snapshots: a full backup every six months and a monthly
-incremental in between. `zfsbackup plan` shows every decision before anything
+incremental in between. The job can run daily or weekly; only the runs that
+see a new monthly upload anything. `zfsbackup plan` shows every decision before anything
 is uploaded. See [the plan harness spec](specs/2026-09-24--plan-harness/plan.md)
 for how the planner and its checks work.
 
@@ -40,7 +41,9 @@ often visible.
 Sanoid names snapshots in the host's local time. If the host is not on UTC,
 pass `location=<zone>` (e.g. `location=America/New_York`) in `--schedule` below.
 Otherwise the simulated sanoid snapshots are taken, and the run times rendered,
-at UTC wall-clock times.
+at UTC wall-clock times. For a capture without creation times, such as
+`zfs list` output converted to JSON (see `testdata/zfs`), the times also come
+from the snapshot names, read in that zone.
 
 ## 2. Review a year of runs
 
@@ -112,10 +115,27 @@ zfsbackup send $FLAGS $DS $URI
 ```
 
 A full backup can take hours. If it is interrupted, rerun it with `--resume`
-and the same flags. Then schedule the same command daily. The exit status is 0
-both when it uploads a backup and when there is nothing new (`Nothing new to
-back up.`, the normal case on most days), so any other status is a real
-failure.
+and the same flags. Then schedule the same command daily or weekly. The exit
+status is 0 both when it uploads a backup and when there is nothing new
+(`Nothing new to back up.`, the normal case on most runs), so any other status
+is a real failure.
+
+A weekly job works the same way with a pool that keeps only three monthlies
+(`monthly=3`): the run on the first day after each 1st sends the new monthly as
+an incremental from the previous one, the other runs are no-ops, and each full
+rolls on the first run after the first 1st past the window. The previous
+monthly is still on the pool then, because sanoid destroys a monthly only once
+it is older than 3 x 31 days and more than three remain. The scenario
+`prod-navidrome-weekly-3-monthlies` shows a year of Sunday runs against the
+real pool. Check a different cadence or retention with `every=168h` (or the
+cron interval) and the pool's `monthly=` count in step 2.
+
+The chain tolerates missed runs for about two months. Once the last backed-up
+monthly is pruned (the third 1st after it was taken, plus a day or two), the
+next run cannot send an incremental and instead sends a full of the newest
+monthly, then continues from that; nothing stalls, but the full costs one
+extra upload. `monthly-only-gap-2-months` and `monthly-only-gap-3-months`
+show both sides of that line.
 
 The next day, `zfsbackup send -n $FLAGS $DS $URI` must report `Nothing new to
 back up.` and exit 0. On the 1st of the next month it must plan an incremental
@@ -141,3 +161,13 @@ make scenarios
 
 The scenario's `expected.txt` must show fulls about every six months, every
 `_monthly` exactly once, and `checks: OK`.
+
+A JSON capture stays in `testdata/zfs`, and the scenario links to it as
+`snapshots.json` instead of copying it. `prod-navidrome-year`,
+`prod-navidrome-weekly-3-monthlies` and `prod-navidrome-first-run` do this for
+`backup3/enc/user/app/navidrome`, and their schedules also set `volume=` to the
+dataset:
+
+```bash
+ln -s ../../../../testdata/zfs/<capture>.json backup/testdata/scenarios/prod-<dataset>/snapshots.json
+```

@@ -99,6 +99,32 @@ func TestPlanNextRun(t *testing.T) {
 	}
 }
 
+// TestPlanCapture plans the first run from a real pool's snapshots, captured
+// as JSON without creation times.
+func TestPlanCapture(t *testing.T) {
+	const name = "prod-navidrome-first-run"
+	args := append(scenarioFlags(t, name),
+		"--snapshots", filepath.Join(scenarios, name, "snapshots.json"),
+		"--schedule", "location=America/New_York",
+		"backup3/enc/user/app/navidrome")
+	out, err := runPlanCommand(t, args...)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if want := readGolden(t, name); out != want {
+		t.Errorf("got:\n%s\nwant %s/expected.txt:\n%s", out, name, want)
+	}
+
+	// The creation times come from the sanoid names, read in location.
+	out, err = runPlanCommand(t, append([]string{"--jsonOutput"}, args...)...)
+	if err != nil {
+		t.Fatalf("plan --jsonOutput: %v", err)
+	}
+	if want := `"creation": "2026-09-01T00:03:36-04:00"`; !strings.Contains(out, want) {
+		t.Errorf("want the base snapshot's %s in:\n%s", want, out)
+	}
+}
+
 func TestPlanSchedule(t *testing.T) {
 	const name = "monthly-only-5-months"
 	args := append(scenarioFlags(t, name),
