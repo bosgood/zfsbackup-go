@@ -18,7 +18,7 @@
 algorithms 1/2/3 (RSA), 16 (ElGamal), 17 (DSA), 18 (ECDH) and 19 (ECDSA).
 Anything else, including 22 (EdDSA = Ed25519 in OpenPGP), returns
 `errors.UnsupportedError("public key type: 22")`. `ReadKeyRing`
-(`keys.go:253`) skips such entities; when *every* entity in the file is
+(`keys.go:253`) skips such entities; when _every_ entity in the file is
 unsupported it returns that error, which `cmd/root.go:218-229` logs as
 "Could not load public keyring" and exits.
 
@@ -31,19 +31,19 @@ ElGamal and errors with `encrypting a key to public key of type 18`.
 Verified against a clone of go-crypto at tag **v1.5.2** (in `tmp/go-crypto`,
 gitignored). Every symbol this repo uses exists with the same signature:
 
-| Symbol | Used at |
-|---|---|
-| `openpgp.ReadArmoredKeyRing(io.Reader) (EntityList, error)` | `pgp/pgp.go` |
-| `openpgp.EntityList`, `openpgp.KeyRing`, `openpgp.Entity`, `openpgp.Key` | `pgp/pgp.go`, `files/jobinfo.go` |
-| `openpgp.PromptFunction` = `func(keys []Key, symmetric bool) ([]byte, error)` | `pgp.PromptFunc` |
-| `openpgp.ReadMessage(r, keyring, prompt, *packet.Config) (*MessageDetails, error)` | `files/volumeinfo.go:210` |
-| `MessageDetails.{IsSigned, SignatureError, SignedBy, UnverifiedBody}` | `files/volumeinfo.go:126-133` |
-| `openpgp.Encrypt(w, []*Entity, signed *Entity, *FileHints, *packet.Config)` | `files/volumeinfo.go:428` |
-| `openpgp.Sign(w, *Entity, *FileHints, *packet.Config)` | `files/volumeinfo.go:432` |
-| `packet.Config.{DefaultCompressionAlgo, DefaultCipher, DefaultHash, RSABits}` | `files/volumeinfo.go:207-209, 418-422` |
-| `packet.CompressionNone`, `packet.CipherAES256` | same |
-| `Entity.PrivateKey.Encrypted`, `PrivateKey.Decrypt([]byte) error` | `cmd/root.go:248-262` |
-| `Entity.Identities` (map) with `.UserId.Email`, `Entity.PrimaryKey.KeyIdString()` | `pgp/pgp.go` |
+| Symbol                                                                             | Used at                                |
+| ---------------------------------------------------------------------------------- | -------------------------------------- |
+| `openpgp.ReadArmoredKeyRing(io.Reader) (EntityList, error)`                        | `pgp/pgp.go`                           |
+| `openpgp.EntityList`, `openpgp.KeyRing`, `openpgp.Entity`, `openpgp.Key`           | `pgp/pgp.go`, `files/jobinfo.go`       |
+| `openpgp.PromptFunction` = `func(keys []Key, symmetric bool) ([]byte, error)`      | `pgp.PromptFunc`                       |
+| `openpgp.ReadMessage(r, keyring, prompt, *packet.Config) (*MessageDetails, error)` | `files/volumeinfo.go:210`              |
+| `MessageDetails.{IsSigned, SignatureError, SignedBy, UnverifiedBody}`              | `files/volumeinfo.go:126-133`          |
+| `openpgp.Encrypt(w, []*Entity, signed *Entity, *FileHints, *packet.Config)`        | `files/volumeinfo.go:428`              |
+| `openpgp.Sign(w, *Entity, *FileHints, *packet.Config)`                             | `files/volumeinfo.go:432`              |
+| `packet.Config.{DefaultCompressionAlgo, DefaultCipher, DefaultHash, RSABits}`      | `files/volumeinfo.go:207-209, 418-422` |
+| `packet.CompressionNone`, `packet.CipherAES256`                                    | same                                   |
+| `Entity.PrivateKey.Encrypted`, `PrivateKey.Decrypt([]byte) error`                  | `cmd/root.go:248-262`                  |
+| `Entity.Identities` (map) with `.UserId.Email`, `Entity.PrimaryKey.KeyIdString()`  | `pgp/pgp.go`                           |
 
 Additional facts that shape the plan:
 
@@ -52,8 +52,7 @@ Additional facts that shape the plan:
   Old RSA/DSA keyrings and SHA-1-self-signed keys still load. Do not migrate
   to `openpgp/v2`; it is a different API and nothing here needs it.
 - It parses EdDSA (22), ECDH over Curve25519 (18), and the RFC 9580 v6 forms
-  Ed25519 (27) / X25519 (25), plus AEAD-protected secret keys (S2K usage
-  253) that newer GnuPG exports.
+  Ed25519 (27) / X25519 (25), plus AEAD-protected secret keys (S2K usage 253) that newer GnuPG exports.
 - With `AEADConfig == nil`, `Encrypt` writes the same SEIPD v1 packets as
   before, so old binaries and `gpg` decrypt new backups.
 - `golang.org/x/crypto` v0.41.0 (the version go-crypto v1.5.2 requires)
@@ -78,20 +77,20 @@ Additional facts that shape the plan:
 
 ### Files touched
 
-| File | Change |
-|---|---|
-| `Makefile` | new `vendor` and `pgp-fixtures` targets |
-| `go.mod`, `go.sum`, `vendor/` | add go-crypto, bump x/crypto and friends |
-| `pgp/pgp.go` | import path; log key algorithm in debug output |
-| `cmd/root.go` | import path (openpgp) |
-| `files/jobinfo.go` | import path |
-| `files/volumeinfo.go` | import paths (openpgp, packet) |
-| `testdata/pgp/generate.sh` + `testdata/pgp/*.asc` | new committed keyring fixtures |
-| `pgp/pgp_test.go` | new |
-| `files/volumeinfo_test.go`, `files/volumeinfo_gpg_test.go` | new |
-| `e2e_test.go` | new `TestE2EEncryptedSend` |
-| `README.md` | Encryption/Signing section |
-| `.claude/napkin.md`, `docs/specs/2026-09-29--pgp-ed25519/plan.md` | notes |
+| File                                                              | Change                                         |
+| ----------------------------------------------------------------- | ---------------------------------------------- |
+| `Makefile`                                                        | new `vendor` and `pgp-fixtures` targets        |
+| `go.mod`, `go.sum`, `vendor/`                                     | add go-crypto, bump x/crypto and friends       |
+| `pgp/pgp.go`                                                      | import path; log key algorithm in debug output |
+| `cmd/root.go`                                                     | import path (openpgp)                          |
+| `files/jobinfo.go`                                                | import path                                    |
+| `files/volumeinfo.go`                                             | import paths (openpgp, packet)                 |
+| `testdata/pgp/generate.sh` + `testdata/pgp/*.asc`                 | new committed keyring fixtures                 |
+| `pgp/pgp_test.go`                                                 | new                                            |
+| `files/volumeinfo_test.go`, `files/volumeinfo_gpg_test.go`        | new                                            |
+| `e2e_test.go`                                                     | new `TestE2EEncryptedSend`                     |
+| `README.md`                                                       | Encryption/Signing section                     |
+| `.claude/napkin.md`, `docs/specs/2026-09-29--pgp-ed25519/plan.md` | notes                                          |
 
 ---
 
@@ -102,6 +101,7 @@ so unit tests never need `gpg`. Generated inside the Go image so the GnuPG
 version is pinned (2.2.40) and the script is reproducible.
 
 **Files:**
+
 - Create: `testdata/pgp/generate.sh`
 - Create: `testdata/pgp/README.md`
 - Modify: `Makefile` (add `pgp-fixtures` target after `pgp` line of `plan:`)
@@ -189,9 +189,10 @@ git commit -m "test: add GnuPG-generated ed25519 and rsa keyring fixtures"
 These compile against both libraries (no `packet` import, the algorithm id
 is a local constant, and only fields that exist in both `Entity` types are
 used: `Entity.EncryptionKey`/`SigningKey` are unexported in x/crypto), so
-they fail *now* for the right reason and pass after the swap.
+they fail _now_ for the right reason and pass after the swap.
 
 **Files:**
+
 - Create: `pgp/pgp_test.go`
 
 **Step 1: Write the tests**
@@ -312,6 +313,7 @@ against both.
 
 Run: `make test-run PKG=./pgp/ RUN='TestLoad|TestDecrypt'`
 Expected:
+
 - `TestLoadEd25519PublicRing`, `TestLoadEd25519PrivateRing`,
   `TestDecryptPassphraseProtectedEd25519Key` FAIL with
   `openpgp: unsupported feature: public key type: 22`
@@ -336,6 +338,7 @@ go-crypto commit reviewable and proves the bump itself is harmless to the
 SSH backend (`pkg/sftp`) and Azure (`pkcs12`).
 
 **Files:**
+
 - Modify: `Makefile` (add `vendor` target)
 - Modify: `go.mod`, `go.sum`, `vendor/**`
 
@@ -396,6 +399,7 @@ git commit -m "deps: bump golang.org/x/crypto to v0.41.0; add make vendor"
 ### Task 4: Switch to `github.com/ProtonMail/go-crypto/openpgp`
 
 **Files:**
+
 - Modify: `pgp/pgp.go:27` (import), `pgp/pgp.go:99-111` (debug output)
 - Modify: `cmd/root.go:38`
 - Modify: `files/jobinfo.go:30`
@@ -483,6 +487,7 @@ written through `CreateBackupVolume` with each key type come back out of
 test (`package files`) so it can read the unexported temp filename.
 
 **Files:**
+
 - Create: `files/volumeinfo_test.go`
 
 **Step 1: Write the test**
@@ -629,7 +634,7 @@ func TestVolumePGPWrongKeyFails(t *testing.T) {
 ```
 
 Note for the implementer: the receive side reads through
-`pgp.GetCombinedKeyRing()` (a package global), so the *last* `loadKeys` call
+`pgp.GetCombinedKeyRing()` (a package global), so the _last_ `loadKeys` call
 decides what can decrypt/verify; `TestVolumePGPWrongKeyFails` relies on
 that.
 
@@ -657,6 +662,7 @@ verifies, and that what `gpg` encrypts we can read. Skips when `gpg` is not
 on PATH; runs on this host (gpg 2.5.20) and in `make test-docker` (2.2.40).
 
 **Files:**
+
 - Create: `files/volumeinfo_gpg_test.go`
 
 **Step 1: Write the test**
@@ -780,6 +786,7 @@ pipeline, `file://` backend) with the fake zfs. `zfs receive` is not faked,
 so the check decrypts the manifest and volume in-process.
 
 **Files:**
+
 - Modify: `e2e_test.go` (append)
 
 **Step 1: Write the test**
@@ -889,6 +896,7 @@ git commit -m "e2e: encrypted and signed send with an ed25519 keyring"
 ### Task 8: Documentation
 
 **Files:**
+
 - Modify: `README.md:51-53` (Encryption/Signing), `README.md:167-173` (key export notes)
 
 **Step 1: Edit**
@@ -938,6 +946,7 @@ indirect dependency. Doing this drops the last use of a deprecated package
 and lets `go mod vendor` remove `vendor/golang.org/x/crypto/ssh/terminal`.
 
 **Files:**
+
 - Modify: `cmd/root.go:39`, `cmd/root.go` `validatePassphrase`
 - Modify: `go.mod` (x/term becomes direct), `vendor/`
 
@@ -993,3 +1002,40 @@ passphrase (it will then fail on zfs, which is fine).
   and changing the output format would break older readers.
 - Generating keys inside `zfsbackup`.
 - Replacing the email-based key lookup with fingerprints.
+
+## Implementation notes
+
+Executed 2026-10-02 on branch `pgp-ed25519`. Deviations from the plan above:
+
+- Task 1: `generate.sh` also writes `ed25519-pass-public.asc` (six `.asc`
+  files, not five). Harmless; nothing reads it yet.
+- Task 3: the `vendor` target needs `.PHONY: vendor`, otherwise make sees the
+  existing `vendor/` directory and reports "up to date". The bump also moved
+  `golang.org/x/sync` to v0.16.0 (required by the new x/net).
+- Task 5: the "volume contains the plaintext" check is skipped for the
+  `sign` mode: a signed-only OpenPGP message carries the literal data in
+  the clear. The unused `io` import was dropped.
+- Task 6: `gpgHome` uses `ioutil.TempDir("", "gpg")` instead of
+  `t.TempDir()`: gpg-agent puts its socket in GNUPGHOME and the `t.TempDir()`
+  path exceeds the macOS Unix-socket path limit ("File name too long"). The
+  cleanup kills the agent with `gpgconf --kill gpg-agent`. `gpg --verify`
+  rejects an encrypted message ("verify signatures failed: Unexpected
+  error"), so the test instead asserts `DECRYPTION_OKAY`, `GOODSIG` and
+  `VALIDSIG` in a `--status-file` written by `--decrypt`. Passes with host
+  gpg 2.5.20 and the image's 2.2.40.
+- Task 7: on the host, another session's e2e tests held the shared send lock
+  (`$TMPDIR/zfsbackup.<md5(volume)>.lck`, `tank/data`), so the in-process
+  send failed with "Locked by other process". The root package was run in
+  the Go container instead (own temp dir): all pass, `TestVersion` included.
+- Added `TestVolumePGPRoundTripV6Key` (files): GnuPG does not emit RFC 9580
+  v6 keys, so the README's v6 claim is backed by a key generated with
+  go-crypto (`V6Keys`, Ed25519 primary + X25519 subkey) and round-tripped
+  through `CreateBackupVolume`/`ExtractLocal`.
+- Task 8: the key-creation example uses a fenced block, like the rest of
+  the README.
+- Task 9: done. The hidden-input prompt was not checked interactively (no
+  TTY in the session); with stdin not a terminal the prompt is reached and
+  fails exactly as before (pre-existing panic in `validatePassphrase`).
+- Task 10: a host gpg 2.5.20 `default` key is ed25519/cv25519 v4; it loads
+  and the debug listing shows both rings with `(algo 22)`. `make test-docker`
+  green after Task 9.
