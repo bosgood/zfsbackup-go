@@ -1,0 +1,281 @@
+// Copyright © 2016 Prateek Malhotra (someone1@gmail.com)
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/md5" // nolint:gosec // matches the lock file name, not for security
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/op/go-logging"
+
+	"github.com/someone1/zfsbackup-go/cmd"
+	"github.com/someone1/zfsbackup-go/files"
+	"github.com/someone1/zfsbackup-go/internal/fakezfs"
+	"github.com/someone1/zfsbackup-go/log"
+)
+
+// The failure-path tests: a send whose uploads or zfs stream fail must exit, and a
+// --resume must not trust volumes it cannot see. See
+// docs/specs/2026-09-29--destructive-ops-fixes.
+
+const hangTimeout = 30 * time.Second
+
+// backupGoroutines dumps the goroutines that are inside the backup package.
+func backupGoroutines() string {
+	buf := make([]byte, 4<<20)
+	n := runtime.Stack(buf, true)
+	var keep []string
+	for _, g := range strings.Split(string(buf[:n]), "\n\n") {
+		if strings.Contains(g, "zfsbackup-go/backup.") {
+			lines := strings.Split(g, "\n")
+			if len(lines) > 12 {
+				lines = lines[:12]
+			}
+			keep = append(keep, strings.Join(lines, "\n"))
+		}
+	}
+	return strings.Join(keep, "\n\n")
+}
+
+// guarded runs fn and fails the test, with a stack dump, if it does not return within hangTimeout.
+func guarded(t *testing.T, fn func() (string, error)) (string, error) {
+	t.Helper()
+	type result struct {
+		logs string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		logs, err := fn()
+		done <- result{logs, err}
+	}()
+	select {
+	case r := <-done:
+		return r.logs, r.err
+	case <-time.After(hangTimeout):
+		t.Fatalf("HANG: still running after %v. Goroutines:\n%s", hangTimeout, backupGoroutines())
+		return "", nil
+	}
+}
+
+// receive runs `zfsbackup receive` in-process and returns what it logged.
+func (env *e2eEnv) receive(args ...string) (string, error) {
+	cmd.ResetReceiveJobInfo()
+	var logs bytes.Buffer
+	log.AppLogger.SetBackend(logging.AddModuleLevel(logging.NewLogBackend(&logs, "", 0)))
+	base := []string{"receive", "--zfsPath", env.self, "--workingDirectory", env.work}
+	cmd.RootCmd.SetArgs(append(base, args...))
+	defer func() {
+		cmd.RootCmd.SetArgs(nil)
+		cmd.ResetReceiveJobInfo()
+	}()
+	err := cmd.RootCmd.ExecuteContext(context.Background())
+	return logs.String(), err
+}
+
+// lockFile is where send locks volume.
+func lockFile(volume string) string {
+	// nolint:gosec // MD5 not used for cryptographic purposes
+	return filepath.Join(os.TempDir(), fmt.Sprintf("zfsbackup.%x.lck", md5.Sum([]byte(volume))))
+}
+
+// destObjects returns every object (path relative to dir) under a file:// destination.
+func destObjects(t *testing.T, dir string) map[string][]byte {
+	t.Helper()
+	objects := make(map[string][]byte)
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		data, rerr := ioutil.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		rel, _ := filepath.Rel(dir, path)
+		objects[rel] = data
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return objects
+}
+
+func manifestNames(objects map[string][]byte) []string {
+	var names []string
+	for name := range objects {
+		if strings.HasPrefix(name, "manifests|") {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// cachedManifests decodes every manifest in the working directory's cache.
+func (env *e2eEnv) cachedManifests(t *testing.T) []*files.JobInfo {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(env.work, "cache", "*", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifests []*files.JobInfo
+	for _, path := range paths {
+		vol, err := files.ExtractLocal(context.Background(), &files.JobInfo{}, path, true)
+		if err != nil {
+			t.Fatalf("reading cached manifest %s: %v", path, err)
+		}
+		m := new(files.JobInfo)
+		err = json.NewDecoder(vol).Decode(m)
+		_ = vol.Close()
+		if err != nil {
+			t.Fatalf("decoding cached manifest %s: %v", path, err)
+		}
+		manifests = append(manifests, m)
+	}
+	return manifests
+}
+
+// copyDir copies the regular files under src to dst.
+func copyDir(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, path)
+		if info.IsDir() {
+			return os.MkdirAll(filepath.Join(dst, rel), 0700)
+		}
+		data, rerr := ioutil.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		return ioutil.WriteFile(filepath.Join(dst, rel), data, 0600)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// checkRestores receives the newest backup of tank/data@snap from dest and checks the fake
+// zfs got exactly the stream it sent.
+func (env *e2eEnv) checkRestores(t *testing.T, dest, snap string, streamBytes int64) {
+	t.Helper()
+	receiveLog := filepath.Join(t.TempDir(), "receive.log")
+	t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+	logs, err := guarded(t, func() (string, error) { return env.receive("tank/data@"+snap, dest, "restored/data") })
+	if err != nil {
+		t.Fatalf("receive: %v\n%s", err, logs)
+	}
+	got, err := ioutil.ReadFile(receiveLog)
+	if err != nil {
+		t.Fatalf("zfs receive was not run: %v\n%s", err, logs)
+	}
+	h := sha256.New()
+	if _, err = io.Copy(h, fakezfs.Stream("", "tank/data@"+snap, streamBytes)); err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("%d %s\n", streamBytes, hex.EncodeToString(h.Sum(nil))); string(got) != want {
+		t.Errorf("zfs receive got %q, want the sent stream %q", got, want)
+	}
+}
+
+func TestE2EUploadFailureExits(t *testing.T) {
+	env := newE2EEnv(t)
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	// A file where the data volumes' parent directory must go: every volume upload fails,
+	// while manifests (manifests|...) could still be written.
+	if err := ioutil.WriteFile(filepath.Join(env.dest, "tank"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := guarded(t, func() (string, error) {
+		return env.send("--maxRetryTime", "2s", "--maxBackoffTime", "1s", "tank/data@a", "file://"+env.dest)
+	})
+	if err == nil {
+		t.Fatalf("send succeeded although no volume could be uploaded:\n%s", logs)
+	}
+	if _, serr := os.Stat(lockFile("tank/data")); !os.IsNotExist(serr) {
+		t.Errorf("lock file %s left behind (stat: %v)", lockFile("tank/data"), serr)
+	}
+	if names := manifestNames(destObjects(t, env.dest)); len(names) != 0 {
+		t.Errorf("a failed send uploaded manifests %q", names)
+	}
+}
+
+func TestE2EZFSSendFailureExits(t *testing.T) {
+	const (
+		streamBytes = 4 << 20
+		failAfter   = 5 << 19 // 2.5 MiB: two complete 1 MiB volumes, then the stream dies
+	)
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(streamBytes))
+	t.Setenv("FAKEZFS_FAIL_AFTER_BYTES", fmt.Sprint(failAfter))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	dest := "file://" + env.dest
+	args := []string{"--volsize", "1", "--compressor", "", "--maxRetryTime", "2s", "--maxBackoffTime", "1s", "tank/data@a", dest}
+
+	logs, err := guarded(t, func() (string, error) { return env.send(args...) })
+	if err == nil {
+		t.Fatalf("send succeeded although zfs send failed:\n%s", logs)
+	}
+	if !strings.Contains(logs, "cannot send: I/O error") {
+		t.Errorf("log lacks zfs send's stderr:\n%s", logs)
+	}
+	if names := manifestNames(destObjects(t, env.dest)); len(names) != 0 {
+		t.Errorf("a failed send uploaded manifests %q", names)
+	}
+	if _, serr := os.Stat(lockFile("tank/data")); !os.IsNotExist(serr) {
+		t.Errorf("lock file %s left behind (stat: %v)", lockFile("tank/data"), serr)
+	}
+	// The cached partial manifest may only list volumes cut before the stream died: all of
+	// them full-size (uncompressed, a volume is cut at 1 MiB - 50 KiB), none the truncated tail.
+	for _, m := range env.cachedManifests(t) {
+		if streamed, _ := m.TotalBytesStreamedAndVols(); streamed > failAfter {
+			t.Errorf("cached manifest lists %d stream bytes, but zfs send only wrote %d", streamed, failAfter)
+		}
+		for _, v := range m.Volumes {
+			if v.ZFSStreamBytes < 1<<20-50<<10 {
+				t.Errorf("cached manifest lists %s with only %d stream bytes: the truncated tail", v.ObjectName, v.ZFSStreamBytes)
+			}
+		}
+	}
+
+	// Resume with a healthy zfs: the result restores to exactly the sent stream.
+	os.Unsetenv("FAKEZFS_FAIL_AFTER_BYTES")
+	if logs, err = guarded(t, func() (string, error) { return env.send(append([]string{"--resume"}, args...)...) }); err != nil {
+		t.Fatalf("resume: %v\n%s", err, logs)
+	}
+	env.checkRestores(t, dest, "a", streamBytes)
+}

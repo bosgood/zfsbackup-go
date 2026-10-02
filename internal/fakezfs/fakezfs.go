@@ -29,6 +29,9 @@
 //	                       (not JSON); rows with a dataset prefix belong to that dataset,
 //	                       rows without one to every dataset; bare sanoid names are read in UTC
 //	FAKEZFS_STREAM_BYTES   bytes `zfs send` writes (default 65536)
+//	FAKEZFS_FAIL_AFTER_BYTES  when set, `zfs send` writes at most this many bytes, then prints
+//	                       "cannot send: I/O error" and exits 1, like a send that dies mid-stream
+//	FAKEZFS_RECEIVE_LOG    file `zfs receive` appends "<bytes> <sha256 hex>" of its stdin to
 //	FAKEZFS_DRYRUN_OUTPUT  replaces what `zfs send -n -P` prints
 //	FAKEZFS_LOG            file every invocation's arguments are appended to, one line each
 //
@@ -37,6 +40,8 @@
 package fakezfs
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -80,6 +85,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		err = get(args[1:], stdout)
 	case args[0] == "send":
 		err = send(args[1:], stdout)
+	case args[0] == "receive":
+		err = receive(args[1:], stdin)
 	default:
 		err = errUnexpected
 	}
@@ -215,11 +222,54 @@ func send(args []string, stdout io.Writer) error {
 		return err
 	}
 
-	// A stream that differs for every (source, target) pair, reproducibly.
+	if value, ok := os.LookupEnv("FAKEZFS_FAIL_AFTER_BYTES"); ok {
+		failAfter, perr := strconv.ParseInt(value, 10, 64)
+		if perr != nil || failAfter < 0 {
+			return fmt.Errorf("fakezfs: invalid FAKEZFS_FAIL_AFTER_BYTES %q", value)
+		}
+		if failAfter < size {
+			if _, err = io.CopyN(stdout, Stream(source, target, size), failAfter); err != nil {
+				return err
+			}
+			return errors.New("cannot send: I/O error")
+		}
+	}
+	_, err = io.CopyN(stdout, Stream(source, target, size), size)
+	return err
+}
+
+// Stream returns the size bytes `zfs send` writes for an incremental from source (or a full
+// when source is "") to target: a stream that differs for every pair, reproducibly.
+func Stream(source, target string, size int64) io.Reader {
 	h := fnv.New64a()
 	_, _ = io.WriteString(h, source+"\x00"+target)
-	_, err = io.CopyN(stdout, rand.New(rand.NewSource(int64(h.Sum64()))), size) // nolint:gosec // not for security
-	return err
+	return io.LimitReader(rand.New(rand.NewSource(int64(h.Sum64()))), size) // nolint:gosec // not for security
+}
+
+// receive: receive [flags] <dataset> - consumes the stream and records its length and hash
+// in FAKEZFS_RECEIVE_LOG, so a test can compare it with what was sent.
+func receive(args []string, stdin io.Reader) error {
+	if len(args) == 0 || strings.HasPrefix(args[len(args)-1], "-") {
+		return errUnexpected
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, stdin)
+	if err != nil {
+		return err
+	}
+	path := os.Getenv("FAKEZFS_RECEIVE_LOG")
+	if path == "" {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err = fmt.Fprintf(f, "%d %s\n", n, hex.EncodeToString(h.Sum(nil))); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // trailingArg matches args against the fixed arguments want followed by one

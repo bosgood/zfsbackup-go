@@ -369,6 +369,14 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 		usedBackends = append(usedBackends, backend)
 		group.Go(waitgroup.Wait)
 	}
+	defer func() {
+		log.AppLogger.Debugf("Cleaning up resources...")
+		for _, backend := range usedBackends {
+			if cerr := backend.Close(); cerr != nil {
+				log.AppLogger.Warningf("Could not properly close backend due to error - %v", cerr)
+			}
+		}
+	}()
 
 	// Create and copy a copy of the manifest during the backup procedure for future retry requests
 	group.Go(func() error {
@@ -414,8 +422,18 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 
 	// Final Manifest Creation
 	group.Go(func() error {
-		// TODO: How to incorporate contexts in this go routine?
-		maniwg.Wait() // Wait until the ZFS send command has completed and all volumes have been uploaded to all backends.
+		// Wait until the ZFS send command has completed and all volumes have been uploaded to all backends,
+		// unless the pipeline fails first: then no manifest may be written, and maniwg may never reach zero.
+		allUploaded := make(chan struct{})
+		go func() {
+			maniwg.Wait()
+			close(allUploaded)
+		}()
+		select {
+		case <-allUploaded:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		log.AppLogger.Infof("All volumes dispatched in pipeline, finalizing manifest file.")
 		manifestmutex.Lock()
 		jobInfo.EndTime = time.Now()
@@ -424,7 +442,11 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 		if err != nil {
 			return err
 		}
-		stepCh <- manifestVol
+		select {
+		case stepCh <- manifestVol:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		close(stepCh)
 		return nil
 	})
@@ -458,14 +480,6 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 			time.Since(jobInfo.StartTime),
 			len(jobInfo.Volumes)+1,
 		)
-	}
-
-	log.AppLogger.Debugf("Cleaning up resources...")
-
-	for _, backend := range usedBackends {
-		if err = backend.Close(); err != nil {
-			log.AppLogger.Warningf("Could not properly close backend due to error - %v", err)
-		}
 	}
 
 	return nil
@@ -530,6 +544,8 @@ func sendStream(ctx context.Context, j *files.JobInfo, c chan<- *files.VolumeInf
 	group.Go(func() error {
 		var lastTotalBytes uint64
 		defer close(c)
+		// If we stop reading early, make zfs send's output copy fail instead of blocking forever.
+		defer cin.Close()
 		var err error
 		var volume *files.VolumeInfo
 		skipBytes, volNum := j.TotalBytesStreamedAndVols()
@@ -559,7 +575,11 @@ func sendStream(ctx context.Context, j *files.JobInfo, c chan<- *files.VolumeInf
 						return err
 					}
 					if !usingPipe {
-						c <- volume
+						select {
+						case c <- volume:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
 					}
 				}
 				<-buffer
@@ -571,7 +591,11 @@ func sendStream(ctx context.Context, j *files.JobInfo, c chan<- *files.VolumeInf
 				log.AppLogger.Debugf("Starting volume %s", volume.ObjectName)
 				volNum++
 				if usingPipe {
-					c <- volume
+					select {
+					case c <- volume:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
 				}
 			}
 
@@ -586,7 +610,11 @@ func sendStream(ctx context.Context, j *files.JobInfo, c chan<- *files.VolumeInf
 					return err
 				}
 				if !usingPipe {
-					c <- volume
+					select {
+					case c <- volume:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
 				}
 				return nil
 			} else if ierr != nil {
@@ -605,8 +633,14 @@ func sendStream(ctx context.Context, j *files.JobInfo, c chan<- *files.VolumeInf
 	}
 
 	group.Go(func() error {
-		defer cout.Close()
-		return cmd.Wait()
+		// A zfs send that dies mid-stream must reach the splitter as a read error, not as an
+		// io.EOF it would take for a clean finish (and ship a truncated last volume).
+		werr := cmd.Wait()
+		if werr != nil {
+			werr = fmt.Errorf("zfs send failed: %w: %s", werr, strings.TrimSpace(buf.String()))
+		}
+		cout.CloseWithError(werr)
+		return werr
 	})
 
 	defer func() {
@@ -631,7 +665,7 @@ func sendStream(ctx context.Context, j *files.JobInfo, c chan<- *files.VolumeInf
 
 	err = group.Wait()
 	if err != nil {
-		log.AppLogger.Errorf("Error waiting for zfs command to finish - %v: %s", err, buf.String())
+		log.AppLogger.Errorf("Error waiting for zfs command to finish - %v", err)
 		return err
 	}
 	log.AppLogger.Infof("zfs send completed without error")
@@ -738,28 +772,37 @@ func retryUploadChainer(
 	for i := 0; i < j.MaxParallelUploads; i++ {
 		gwg.Go(func() error {
 			defer wg.Done()
-			for vol := range in {
+			for {
+				// Waiting on in must also watch ctx: after a failure upstream, in is never closed.
+				var vol *files.VolumeInfo
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
-				default:
-					log.AppLogger.Debugf("%s backend: Processing volume %s", prefix, vol.ObjectName)
-					// Prepare the backoff retryer (forces the user configured retry options across all backends)
-					be := backoff.NewExponentialBackOff()
-					be.MaxInterval = j.MaxBackoffTime
-					be.MaxElapsedTime = j.MaxRetryTime
-					retryconf := backoff.WithContext(be, ctx)
-
-					operation := volUploadWrapper(ctx, b, vol, prefix)
-					if err := backoff.Retry(operation, retryconf); err != nil {
-						log.AppLogger.Errorf("%s backend: Failed to upload volume %s due to error: %v", prefix, vol.ObjectName, err)
-						return err
+				case v, ok := <-in:
+					if !ok {
+						return nil
 					}
-					log.AppLogger.Debugf("%s backend: Processed volume %s", prefix, vol.ObjectName)
-					out <- vol
+					vol = v
+				}
+				log.AppLogger.Debugf("%s backend: Processing volume %s", prefix, vol.ObjectName)
+				// Prepare the backoff retryer (forces the user configured retry options across all backends)
+				be := backoff.NewExponentialBackOff()
+				be.MaxInterval = j.MaxBackoffTime
+				be.MaxElapsedTime = j.MaxRetryTime
+				retryconf := backoff.WithContext(be, ctx)
+
+				operation := volUploadWrapper(ctx, b, vol, prefix)
+				if err := backoff.Retry(operation, retryconf); err != nil {
+					log.AppLogger.Errorf("%s backend: Failed to upload volume %s due to error: %v", prefix, vol.ObjectName, err)
+					return err
+				}
+				log.AppLogger.Debugf("%s backend: Processed volume %s", prefix, vol.ObjectName)
+				select {
+				case out <- vol:
+				case <-ctx.Done():
+					return ctx.Err()
 				}
 			}
-			return nil
 		})
 	}
 
