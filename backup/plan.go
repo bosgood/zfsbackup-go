@@ -50,6 +50,7 @@ const (
 	reasonNothingNewer        = "nothing-newer"
 	reasonExplicitFull        = "explicit-full"
 	reasonExplicitIncremental = "explicit-incremental"
+	reasonAlreadyBackedUp     = "already-backed-up"
 )
 
 // Plan is the decision of one smart backup run: a full backup of Base, an
@@ -97,10 +98,28 @@ func planSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, 
 	fullBase := newestMatchingSnapshot(snapshots, jobInfo.SnapshotPrefix, jobInfo.FullSnapshotSuffix)
 	incrBase := newestMatchingSnapshot(snapshots, jobInfo.SnapshotPrefix, jobInfo.IncrementalSnapshotSuffix)
 
-	// An explicit full backup always anchors on the full-candidate snapshot.
+	// An explicit full backup always anchors on the full-candidate snapshot, unless that full
+	// already exists: sending it again would overwrite a good backup set in place.
 	if jobInfo.Full {
 		if fullBase == nil {
 			return Plan{}, fmt.Errorf("no snapshots found matching the full backup criteria")
+		}
+		var have, missing []int
+		for idx := range destBackups {
+			if hasFullOf(destBackups[idx], fullBase) {
+				have = append(have, idx)
+			} else {
+				missing = append(missing, idx)
+			}
+		}
+		switch {
+		case len(have) > 0 && len(missing) == 0:
+			return Plan{Action: PlanNoop, Reason: reasonAlreadyBackedUp}, nil
+		case len(have) > 0:
+			return Plan{}, fmt.Errorf(
+				"destinations are out of sync: destination #%d already has a full of %s, destination #%d does not",
+				have[0]+1, fullBase.Name, missing[0]+1,
+			)
 		}
 		return Plan{Action: PlanFull, Base: *fullBase, Reason: reasonExplicitFull}, nil
 	}
@@ -519,4 +538,14 @@ func (sim *Simulation) formatTime(t time.Time) string {
 		return "next"
 	}
 	return t.In(sim.Scenario.location()).Format(time.RFC3339)
+}
+
+// hasFullOf reports whether backups include a full backup of snapshot.
+func hasFullOf(backups []*files.JobInfo, snapshot *files.SnapshotInfo) bool {
+	for _, b := range backups {
+		if b.IncrementalSnapshot.Name == "" && b.BaseSnapshot.Equal(snapshot) {
+			return true
+		}
+	}
+	return false
 }

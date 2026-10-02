@@ -1,0 +1,3 @@
+# An explicit --full of the newest monthly, which is already backed up as a full.
+--full
+--fullSnapshotSuffix=_monthly

@@ -149,6 +149,7 @@ func TestPlanSmartSnapshotsReasons(t *testing.T) {
 		snapshots   []files.SnapshotInfo
 		destBackups [][]*files.JobInfo
 		want        Plan
+		wantErr     string
 	}{
 		{
 			name:        "no previous full",
@@ -273,6 +274,38 @@ func TestPlanSmartSnapshotsReasons(t *testing.T) {
 			want:        Plan{Action: PlanFull, Base: snap("s2", day(2)), Reason: "explicit-full"},
 		},
 		{
+			name:      "explicit full already at every destination",
+			jobInfo:   files.JobInfo{Full: true, FullIfOlderThan: window, FullSnapshotSuffix: "_monthly"},
+			snapshots: []files.SnapshotInfo{snap("d2_daily", day(2)), snap("d1_monthly", day(1))},
+			destBackups: [][]*files.JobInfo{
+				{fullManifest(snap("d1_monthly", day(1)))},
+				{incrManifest(snap("d2_daily", day(2)), snap("d1_monthly", day(1))), fullManifest(snap("d1_monthly", day(1)))},
+			},
+			want: Plan{Action: PlanNoop, Reason: "already-backed-up"},
+		},
+		{
+			// Only an incremental TO the candidate exists: a full of it is still new.
+			name:        "explicit full, candidate only backed up as an incremental",
+			jobInfo:     files.JobInfo{Full: true, FullIfOlderThan: off},
+			snapshots:   []files.SnapshotInfo{snap("s2", day(2)), snap("s1", day(1))},
+			destBackups: [][]*files.JobInfo{{incrManifest(snap("s2", day(2)), snap("s1", day(1))), fullManifest(snap("s1", day(1)))}},
+			want:        Plan{Action: PlanFull, Base: snap("s2", day(2)), Reason: "explicit-full"},
+		},
+		{
+			name:        "explicit full at no destination",
+			jobInfo:     files.JobInfo{Full: true, FullIfOlderThan: off},
+			snapshots:   []files.SnapshotInfo{snap("s2", day(2)), snap("s1", day(1))},
+			destBackups: [][]*files.JobInfo{{}, {fullManifest(snap("s1", day(1)))}},
+			want:        Plan{Action: PlanFull, Base: snap("s2", day(2)), Reason: "explicit-full"},
+		},
+		{
+			name:        "explicit full already at one destination only",
+			jobInfo:     files.JobInfo{Full: true, FullIfOlderThan: off},
+			snapshots:   []files.SnapshotInfo{snap("s2", day(2)), snap("s1", day(1))},
+			destBackups: [][]*files.JobInfo{{fullManifest(snap("s2", day(2)))}, {}},
+			wantErr:     "destinations are out of sync: destination #1 already has a full of s2, destination #2 does not",
+		},
+		{
 			name:        "explicit incremental",
 			jobInfo:     files.JobInfo{Incremental: true, FullIfOlderThan: off},
 			snapshots:   []files.SnapshotInfo{snap("s2", day(2)), snap("s1", day(1))},
@@ -292,6 +325,12 @@ func TestPlanSmartSnapshotsReasons(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ji := tc.jobInfo
 			got, err := planSmartSnapshots(&ji, tc.snapshots, tc.destBackups)
+			if tc.wantErr != "" {
+				if err == nil || err.Error() != tc.wantErr {
+					t.Fatalf("got %+v, %v; want error %q", got, err, tc.wantErr)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

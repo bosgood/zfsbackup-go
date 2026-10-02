@@ -1,0 +1,5 @@
+# The pool at 2026-09-15 01:00, mid-month.
+autosnap_2026-09-15_01:00:00_hourly
+autosnap_2026-09-15_00:00:00_daily
+autosnap_2026-09-01_00:00:00_monthly
+autosnap_2026-09-01_00:00:00_daily

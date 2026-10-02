@@ -126,6 +126,9 @@ func selectSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo
 				p.Source.Name,
 			)
 		}
+		if p.Reason == reasonAlreadyBackedUp {
+			log.AppLogger.Noticef("The full backup candidate is already backed up as a full at every destination; not sending it again.")
+		}
 		return ErrNoOp
 	}
 	jobInfo.BaseSnapshot = p.Base
