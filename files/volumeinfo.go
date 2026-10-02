@@ -38,12 +38,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"github.com/dustin/go-humanize"
 	"github.com/juju/ratelimit"
 	gzip "github.com/klauspost/pgzip"
 	"github.com/miolini/datacounter"
-	"golang.org/x/crypto/openpgp"
-	"golang.org/x/crypto/openpgp/packet"
 
 	"github.com/someone1/zfsbackup-go/config"
 	"github.com/someone1/zfsbackup-go/log"

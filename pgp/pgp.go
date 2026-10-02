@@ -18,6 +18,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+// Package pgp loads OpenPGP keyrings for the encrypt/sign options. It uses
+// github.com/ProtonMail/go-crypto, the maintained fork of the frozen
+// golang.org/x/crypto/openpgp, which adds Ed25519/Curve25519 (the GnuPG
+// >= 2.3 default), v6 keys and AEAD-protected secret keys.
 package pgp
 
 import (
@@ -25,7 +29,7 @@ import (
 	"os"
 	"strings"
 
-	"golang.org/x/crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp"
 
 	"github.com/someone1/zfsbackup-go/log"
 )
@@ -95,12 +99,14 @@ func PrintPGPDebugInformation() {
 	debugStr := make([]string, 0, 4)
 	debugStr = append(debugStr, "PGP Debug Info:\nLoaded Private Keys:")
 	for _, key := range secRing {
-		debugStr = append(debugStr, fmt.Sprintf("\t%v\n\t%v", key.PrimaryKey.KeyIdString(), key.Identities))
+		debugStr = append(debugStr, fmt.Sprintf("\t%v (algo %d)\n\t%v",
+			key.PrimaryKey.KeyIdString(), key.PrimaryKey.PubKeyAlgo, key.Identities))
 	}
 
 	debugStr = append(debugStr, "\nLoaded Public Keys:")
 	for _, key := range pubRing {
-		debugStr = append(debugStr, fmt.Sprintf("\t%v\n\t%v", key.PrimaryKey.KeyIdString(), key.Identities))
+		debugStr = append(debugStr, fmt.Sprintf("\t%v (algo %d)\n\t%v",
+			key.PrimaryKey.KeyIdString(), key.PrimaryKey.PubKeyAlgo, key.Identities))
 	}
 
 	log.AppLogger.Debugf("%s", strings.Join(debugStr, "\n"))

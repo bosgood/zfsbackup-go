@@ -31,11 +31,11 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/ProtonMail/go-crypto/openpgp"
 	humanize "github.com/dustin/go-humanize"
 	"github.com/juju/ratelimit"
 	"github.com/op/go-logging"
 	"github.com/spf13/cobra"
-	"golang.org/x/crypto/openpgp"
 	"golang.org/x/crypto/ssh/terminal"
 
 	"github.com/someone1/zfsbackup-go/backup"
