@@ -23,11 +23,13 @@ package backends
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"time"
 
 	"github.com/someone1/zfsbackup-go/files"
+	"github.com/someone1/zfsbackup-go/log"
 )
 
 // Backend is an interface type that defines the functions and functionality required for different backend implementations.
@@ -55,6 +57,9 @@ type BackendConfig struct {
 	MaxRetryTime            time.Duration
 	TargetURI               string
 	UploadChunkSize         int
+	// ManifestPrefix lets object-store backends detect the pre-normalization
+	// key layout (see checkLegacyLayout). Empty disables the check.
+	ManifestPrefix string
 }
 
 var (
@@ -89,4 +94,88 @@ func GetBackendForURI(uri string) (Backend, error) {
 	default:
 		return nil, ErrInvalidPrefix
 	}
+}
+
+// objectStoreSchemes are the backends whose URI path is a key prefix inside a bucket/container.
+var objectStoreSchemes = map[string]bool{
+	AWSS3BackendPrefix:              true,
+	GoogleCloudStorageBackendPrefix: true,
+	AzureBackendPrefix:              true,
+	B2BackendPrefix:                 true,
+}
+
+// objectPrefix turns the path part of an object-store URI into a key prefix that names a
+// "directory": "", "/" -> ""; "p", "p/", "/p/", "p//" -> "p/". Without the trailing slash,
+// s3://b/p would also match keys under p-other/ and concatenate to keys like "pmanifests|...".
+func objectPrefix(uriPath string) string {
+	prefix := strings.Trim(uriPath, "/")
+	if prefix != "" {
+		prefix += "/"
+	}
+	return prefix
+}
+
+// parseObjectURI splits an object-store URI into its bucket/container and normalized key prefix.
+// rawPrefix is the path with surrounding slashes trimmed, as older versions used it (minus the slashes).
+func parseObjectURI(uri, scheme string) (bucket, rawPrefix, prefix string, err error) {
+	clean := strings.TrimPrefix(uri, scheme+"://")
+	if clean == uri {
+		return "", "", "", ErrInvalidURI
+	}
+	bucket, path, _ := strings.Cut(clean, "/")
+	return bucket, strings.Trim(path, "/"), objectPrefix(path), nil
+}
+
+// stripPrefix returns key relative to prefix, and false if key is not under prefix.
+func stripPrefix(prefix, key string) (string, bool) {
+	if !strings.HasPrefix(key, prefix) {
+		return "", false
+	}
+	return key[len(prefix):], true
+}
+
+// relativeKey is stripPrefix for List implementations: keys outside the prefix are logged and dropped.
+func relativeKey(backend, prefix, key string) (string, bool) {
+	name, ok := stripPrefix(prefix, key)
+	if !ok {
+		log.AppLogger.Debugf("%s backend: ignoring listed key %s outside of prefix %q", backend, key, prefix)
+	}
+	return name, ok
+}
+
+// checkLegacyLayout fails when the destination holds manifests written before object-store
+// prefixes were normalized, i.e. at "<rawPrefix><ManifestPrefix>..." with no "/" in between.
+// firstKey must return the first key in the bucket starting with the given (bucket-absolute)
+// prefix, or "" if there is none.
+func checkLegacyLayout(conf *BackendConfig, rawPrefix string, firstKey func(prefix string) (string, error)) error {
+	if rawPrefix == "" || conf.ManifestPrefix == "" {
+		return nil
+	}
+	key, err := firstKey(rawPrefix + conf.ManifestPrefix)
+	if err != nil {
+		return err
+	}
+	if key == "" {
+		return nil
+	}
+	return fmt.Errorf(
+		"found %s, a backup written by an older version that used the URI path %q as a raw key prefix; "+
+			"move every object starting with %q to %q (i.e. under %s/) and retry",
+		key, rawPrefix, rawPrefix, rawPrefix+"/", rawPrefix,
+	)
+}
+
+// CanonicalURI normalizes object-store URIs so that spellings with and without a trailing
+// slash name the same destination (and therefore share one local manifest cache):
+// s3://b/p -> s3://b/p/, s3://b/ -> s3://b. Other schemes are returned unchanged.
+func CanonicalURI(uri string) string {
+	scheme, rest, ok := strings.Cut(uri, "://")
+	if !ok || !objectStoreSchemes[scheme] {
+		return uri
+	}
+	bucket, path, _ := strings.Cut(rest, "/")
+	if prefix := objectPrefix(path); prefix != "" {
+		return scheme + "://" + bucket + "/" + prefix
+	}
+	return scheme + "://" + bucket
 }

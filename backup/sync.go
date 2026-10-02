@@ -68,6 +68,7 @@ func prepareBackend(ctx context.Context, j *files.JobInfo, backendURI string, up
 		MaxBackoffTime:          j.MaxBackoffTime,
 		MaxRetryTime:            j.MaxRetryTime,
 		UploadChunkSize:         j.UploadChunkSize * 1024 * 1024,
+		ManifestPrefix:          j.ManifestPrefix,
 	}
 
 	backend, err := backends.GetBackendForURI(backendURI)

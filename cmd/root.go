@@ -38,6 +38,7 @@ import (
 	"golang.org/x/crypto/openpgp"
 	"golang.org/x/crypto/ssh/terminal"
 
+	"github.com/someone1/zfsbackup-go/backends"
 	"github.com/someone1/zfsbackup-go/backup"
 	"github.com/someone1/zfsbackup-go/config"
 	"github.com/someone1/zfsbackup-go/files"
@@ -425,4 +426,14 @@ func validatePassphrase() {
 			panic(err)
 		}
 	}
+}
+
+// parseDestinations splits a comma-separated destination argument and canonicalizes each URI,
+// so that e.g. s3://bucket/prefix and s3://bucket/prefix/ name the same destination and cache.
+func parseDestinations(arg string) []string {
+	destinations := strings.Split(arg, ",")
+	for idx := range destinations {
+		destinations[idx] = backends.CanonicalURI(destinations[idx])
+	}
+	return destinations
 }

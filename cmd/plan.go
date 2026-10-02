@@ -117,7 +117,7 @@ func validatePlanFlags(cmd *cobra.Command, args []string) error {
 			log.AppLogger.Errorf("--manifests and destination URIs are mutually exclusive.")
 			return errInvalidInput
 		}
-		for _, destination := range strings.Split(args[1], ",") {
+		for _, destination := range parseDestinations(args[1]) {
 			if _, err := backends.GetBackendForURI(destination); err != nil {
 				log.AppLogger.Errorf("Unsupported destination URI %s - %v", destination, err)
 				return err
@@ -157,7 +157,7 @@ func runPlan(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	case len(args) == 2:
-		for _, destination := range strings.Split(args[1], ",") {
+		for _, destination := range parseDestinations(args[1]) {
 			manifests, err := backup.BackupsAtTarget(cmd.Context(), sc.Volume, destination, &jobInfo)
 			if err != nil {
 				log.AppLogger.Errorf("Could not read the backups at %s - %v", destination, err)

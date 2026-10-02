@@ -24,7 +24,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
 
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/iterator"
@@ -64,17 +63,12 @@ func WithGoogleCloudStorageClient(c *storage.Client) Option {
 func (g *GoogleCloudStorageBackend) Init(ctx context.Context, conf *BackendConfig, opts ...Option) error {
 	g.conf = conf
 
-	cleanPrefix := strings.TrimPrefix(g.conf.TargetURI, "gs://")
-	if cleanPrefix == g.conf.TargetURI {
-		return ErrInvalidURI
+	bucket, rawPrefix, prefix, err := parseObjectURI(g.conf.TargetURI, GoogleCloudStorageBackendPrefix)
+	if err != nil {
+		return err
 	}
-
-	uriParts := strings.Split(cleanPrefix, "/")
-
-	g.bucketName = uriParts[0]
-	if len(uriParts) > 1 {
-		g.prefix = strings.Join(uriParts[1:], "/")
-	}
+	g.bucketName = bucket
+	g.prefix = prefix
 
 	for _, opt := range opts {
 		opt.Apply(g)
@@ -92,7 +86,15 @@ func (g *GoogleCloudStorageBackend) Init(ctx context.Context, conf *BackendConfi
 		return err
 	}
 
-	return nil
+	return checkLegacyLayout(conf, rawPrefix, func(keyPrefix string) (string, error) {
+		attrs, lerr := g.client.Bucket(g.bucketName).Objects(ctx, &storage.Query{Prefix: keyPrefix}).Next()
+		if lerr == iterator.Done {
+			return "", nil
+		} else if lerr != nil {
+			return "", lerr
+		}
+		return attrs.Name, nil
+	})
 }
 
 // Upload will upload the provided VolumeInfo to Google's Cloud Storage
@@ -159,7 +161,9 @@ func (g *GoogleCloudStorageBackend) List(ctx context.Context, prefix string) ([]
 			return nil, fmt.Errorf("gs backend: could not list bucket due to error - %v", err)
 		}
 
-		l = append(l, strings.TrimPrefix(attrs.Name, g.prefix))
+		if name, ok := relativeKey(GoogleCloudStorageBackendPrefix, g.prefix, attrs.Name); ok {
+			l = append(l, name)
+		}
 	}
 	return l, nil
 }

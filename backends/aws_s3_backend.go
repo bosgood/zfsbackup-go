@@ -29,7 +29,6 @@ import (
 	"io"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -103,17 +102,12 @@ func WithS3Uploader(c s3manageriface.UploaderAPI) Option {
 func (a *AWSS3Backend) Init(ctx context.Context, conf *BackendConfig, opts ...Option) error {
 	a.conf = conf
 
-	cleanPrefix := strings.TrimPrefix(a.conf.TargetURI, AWSS3BackendPrefix+"://")
-	if cleanPrefix == a.conf.TargetURI {
-		return ErrInvalidURI
+	bucket, rawPrefix, prefix, err := parseObjectURI(a.conf.TargetURI, AWSS3BackendPrefix)
+	if err != nil {
+		return err
 	}
-
-	uriParts := strings.Split(cleanPrefix, "/")
-
-	a.bucketName = uriParts[0]
-	if len(uriParts) > 1 {
-		a.prefix = strings.Join(uriParts[1:], "/")
-	}
+	a.bucketName = bucket
+	a.prefix = prefix
 
 	for _, opt := range opts {
 		opt.Apply(a)
@@ -149,8 +143,21 @@ func (a *AWSS3Backend) Init(ctx context.Context, conf *BackendConfig, opts ...Op
 		MaxKeys: aws.Int64(0),
 	}
 
-	_, err := a.client.ListObjectsV2WithContext(ctx, listReq)
-	return err
+	if _, err = a.client.ListObjectsV2WithContext(ctx, listReq); err != nil {
+		return err
+	}
+
+	return checkLegacyLayout(conf, rawPrefix, func(keyPrefix string) (string, error) {
+		resp, lerr := a.client.ListObjectsV2WithContext(ctx, &s3.ListObjectsV2Input{
+			Bucket:  aws.String(a.bucketName),
+			MaxKeys: aws.Int64(1),
+			Prefix:  aws.String(keyPrefix),
+		})
+		if lerr != nil || len(resp.Contents) == 0 {
+			return "", lerr
+		}
+		return aws.StringValue(resp.Contents[0].Key), nil
+	})
 }
 
 func withContentMD5Header(md5sum string) request.Option {
@@ -374,7 +381,9 @@ func (a *AWSS3Backend) List(ctx context.Context, prefix string) ([]string, error
 	l := make([]string, 0, AWSS3PageSize)
 	for {
 		for _, obj := range resp.Contents {
-			l = append(l, strings.TrimPrefix(*obj.Key, a.prefix))
+			if name, ok := relativeKey(AWSS3BackendPrefix, a.prefix, *obj.Key); ok {
+				l = append(l, name)
+			}
 		}
 
 		if !*resp.IsTruncated {

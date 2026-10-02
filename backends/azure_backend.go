@@ -31,7 +31,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"strings"
 	"sync"
 
 	"github.com/Azure/azure-storage-blob-go/azblob"
@@ -67,9 +66,9 @@ type AzureBackend struct {
 func (a *AzureBackend) Init(ctx context.Context, conf *BackendConfig, opts ...Option) error {
 	a.conf = conf
 
-	cleanPrefix := strings.TrimPrefix(a.conf.TargetURI, AzureBackendPrefix+"://")
-	if cleanPrefix == a.conf.TargetURI {
-		return ErrInvalidURI
+	container, rawPrefix, prefix, err := parseObjectURI(a.conf.TargetURI, AzureBackendPrefix)
+	if err != nil {
+		return err
 	}
 
 	a.accountName = os.Getenv("AZURE_ACCOUNT_NAME")
@@ -80,12 +79,8 @@ func (a *AzureBackend) Init(ctx context.Context, conf *BackendConfig, opts ...Op
 		a.azureURL = fmt.Sprintf("https://%s.%s", a.accountName, blobAPIURL)
 	}
 
-	uriParts := strings.Split(cleanPrefix, "/")
-
-	a.containerName = uriParts[0]
-	if len(uriParts) > 1 {
-		a.prefix = strings.Join(uriParts[1:], "/")
-	}
+	a.containerName = container
+	a.prefix = prefix
 
 	for _, opt := range opts {
 		opt.Apply(a)
@@ -122,8 +117,20 @@ func (a *AzureBackend) Init(ctx context.Context, conf *BackendConfig, opts ...Op
 		a.containerSvc = svcURL.NewContainerURL(a.containerName)
 	}
 
-	_, err := a.containerSvc.ListBlobsFlatSegment(ctx, azblob.Marker{}, azblob.ListBlobsSegmentOptions{MaxResults: 0})
-	return err
+	if _, err = a.containerSvc.ListBlobsFlatSegment(ctx, azblob.Marker{}, azblob.ListBlobsSegmentOptions{MaxResults: 0}); err != nil {
+		return err
+	}
+
+	return checkLegacyLayout(conf, rawPrefix, func(keyPrefix string) (string, error) {
+		resp, lerr := a.containerSvc.ListBlobsFlatSegment(ctx, azblob.Marker{}, azblob.ListBlobsSegmentOptions{
+			Prefix:     keyPrefix,
+			MaxResults: 1,
+		})
+		if lerr != nil || len(resp.Segment.BlobItems) == 0 {
+			return "", lerr
+		}
+		return resp.Segment.BlobItems[0].Name, nil
+	})
 }
 
 // Upload will upload the provided volume to this AzureBackend's configured container+prefix
@@ -263,7 +270,9 @@ func (a *AzureBackend) List(ctx context.Context, prefix string) ([]string, error
 		}
 
 		for idx := range resp.Segment.BlobItems {
-			l = append(l, strings.TrimPrefix(resp.Segment.BlobItems[idx].Name, a.prefix))
+			if name, ok := relativeKey(AzureBackendPrefix, a.prefix, resp.Segment.BlobItems[idx].Name); ok {
+				l = append(l, name)
+			}
 		}
 
 		marker = resp.NextMarker

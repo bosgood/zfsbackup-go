@@ -25,7 +25,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 
 	"github.com/kurin/blazer/b2"
@@ -60,20 +59,16 @@ func (b bufferedRT) RoundTrip(r *http.Request) (*http.Response, error) {
 func (b *B2Backend) Init(ctx context.Context, conf *BackendConfig, opts ...Option) error {
 	b.conf = conf
 
-	cleanPrefix := strings.TrimPrefix(b.conf.TargetURI, B2BackendPrefix+"://")
-	if cleanPrefix == b.conf.TargetURI {
-		return ErrInvalidURI
+	bucket, rawPrefix, prefix, err := parseObjectURI(b.conf.TargetURI, B2BackendPrefix)
+	if err != nil {
+		return err
 	}
 
 	accountID := os.Getenv("B2_ACCOUNT_ID")
 	accountKey := os.Getenv("B2_ACCOUNT_KEY")
 
-	uriParts := strings.Split(cleanPrefix, "/")
-
-	b.bucketName = uriParts[0]
-	if len(uriParts) > 1 {
-		b.prefix = strings.Join(uriParts[1:], "/")
-	}
+	b.bucketName = bucket
+	b.prefix = prefix
 
 	for _, opt := range opts {
 		opt.Apply(b)
@@ -97,7 +92,17 @@ func (b *B2Backend) Init(ctx context.Context, conf *BackendConfig, opts ...Optio
 	// Poke the bucket to ensure it exists.
 	iter := b.bucketCli.List(ctx, b2.ListPageSize(1))
 	iter.Next()
-	return iter.Err()
+	if err = iter.Err(); err != nil {
+		return err
+	}
+
+	return checkLegacyLayout(conf, rawPrefix, func(keyPrefix string) (string, error) {
+		it := b.bucketCli.List(ctx, b2.ListPrefix(keyPrefix), b2.ListPageSize(1))
+		if it.Next() {
+			return it.Object().Name(), nil
+		}
+		return "", it.Err()
+	})
 }
 
 // Upload will upload the provided volume to this B2Backend's configured bucket+prefix
@@ -161,7 +166,9 @@ func (b *B2Backend) List(ctx context.Context, prefix string) ([]string, error) {
 	iter := b.bucketCli.List(ctx, b2.ListPrefix(b.prefix+prefix))
 	for iter.Next() {
 		obj := iter.Object()
-		l = append(l, strings.TrimPrefix(obj.Name(), b.prefix))
+		if name, ok := relativeKey(B2BackendPrefix, b.prefix, obj.Name()); ok {
+			l = append(l, name)
+		}
 	}
 	if err := iter.Err(); err != nil {
 		return nil, err

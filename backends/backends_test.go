@@ -95,6 +95,71 @@ func TestGetBackendForURI(t *testing.T) {
 	}
 }
 
+func TestCanonicalURI(t *testing.T) {
+	testCases := map[string]string{
+		"s3://b":           "s3://b",
+		"s3://b/":          "s3://b",
+		"s3://b/p":         "s3://b/p/",
+		"s3://b/p/":        "s3://b/p/",
+		"s3://b//p//":      "s3://b/p/",
+		"s3://b/p/q":       "s3://b/p/q/",
+		"gs://b/p":         "gs://b/p/",
+		"azure://c/p":      "azure://c/p/",
+		"b2://b/p":         "b2://b/p/",
+		"file:///tmp/dest": "file:///tmp/dest",
+		"file:///tmp/d/":   "file:///tmp/d/",
+		"ssh://h/path":     "ssh://h/path",
+		"delete://":        "delete://",
+		"notauri":          "notauri",
+	}
+	for in, want := range testCases {
+		if got := CanonicalURI(in); got != want {
+			t.Errorf("CanonicalURI(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The same normalization applies to every object-store backend; GCS, Azure and B2 cannot
+// Init without a live service, so check the parsing they share.
+func TestParseObjectURI(t *testing.T) {
+	testCases := []struct {
+		path, rawPrefix, prefix string
+	}{
+		{"b", "", ""},
+		{"b/", "", ""},
+		{"b/p", "p", "p/"},
+		{"b/p/", "p", "p/"},
+		{"b//p//", "p", "p/"},
+		{"b/p/q", "p/q", "p/q/"},
+	}
+	for _, scheme := range []string{AWSS3BackendPrefix, GoogleCloudStorageBackendPrefix, AzureBackendPrefix, B2BackendPrefix} {
+		for _, c := range testCases {
+			bucket, rawPrefix, prefix, err := parseObjectURI(scheme+"://"+c.path, scheme)
+			if err != nil || bucket != "b" || rawPrefix != c.rawPrefix || prefix != c.prefix {
+				t.Errorf("parseObjectURI(%s://%s) = %q, %q, %q, %v; want b, %q, %q",
+					scheme, c.path, bucket, rawPrefix, prefix, err, c.rawPrefix, c.prefix)
+			}
+		}
+		if _, _, _, err := parseObjectURI("other://b/p", scheme); err != ErrInvalidURI {
+			t.Errorf("%s: wrong scheme gave %v, want ErrInvalidURI", scheme, err)
+		}
+	}
+}
+
+func TestStripPrefix(t *testing.T) {
+	if name, ok := stripPrefix("p/", "p/a"); !ok || name != "a" {
+		t.Errorf("stripPrefix(p/, p/a) = %q, %v", name, ok)
+	}
+	for _, key := range []string{"photos/a", "pa", "/p/a"} {
+		if _, ok := stripPrefix("p/", key); ok {
+			t.Errorf("stripPrefix(p/, %s) matched", key)
+		}
+	}
+	if name, ok := stripPrefix("", "a"); !ok || name != "a" {
+		t.Errorf("stripPrefix('', a) = %q, %v", name, ok)
+	}
+}
+
 func BackendTest(ctx context.Context, prefix, uri string, skipPrefix bool, b Backend, opts ...Option) func(*testing.T) {
 	return func(t *testing.T) {
 		testPayLoad, goodVol, badVol, perr := prepareTestVols()

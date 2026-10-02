@@ -25,6 +25,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/someone1/zfsbackup-go/backends"
 	"github.com/someone1/zfsbackup-go/backup"
 	"github.com/someone1/zfsbackup-go/log"
 )
@@ -60,7 +61,7 @@ var listCmd = &cobra.Command{
 			log.AppLogger.Infof("Listing all back jobs of snapshots taken after %v", after)
 		}
 
-		jobInfo.Destinations = []string{args[0]}
+		jobInfo.Destinations = []string{backends.CanonicalURI(args[0])}
 		return backup.List(cmd.Context(), &jobInfo, startsWith, before, after)
 	},
 }

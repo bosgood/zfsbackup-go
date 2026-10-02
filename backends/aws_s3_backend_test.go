@@ -26,7 +26,9 @@ package backends
 import (
 	"context"
 	"os"
+	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -46,6 +48,22 @@ type mockS3Client struct {
 
 	headcallcount int
 	listPrefix    string
+	// keys, when non-nil, replaces the canned listing: one page of the keys under the requested prefix.
+	keys []string
+}
+
+type mockS3UploaderRecorder struct {
+	s3manageriface.UploaderAPI
+	keys []string
+}
+
+func (m *mockS3UploaderRecorder) UploadWithContext(
+	ctx aws.Context,
+	in *s3manager.UploadInput,
+	_ ...func(*s3manager.Uploader),
+) (*s3manager.UploadOutput, error) {
+	m.keys = append(m.keys, *in.Key)
+	return nil, nil
 }
 
 type mockS3Uploader struct {
@@ -91,19 +109,30 @@ func (m *mockS3Client) ListObjectsV2WithContext(
 		return nil, errTest
 	}
 
+	if m.keys != nil {
+		out := &s3.ListObjectsV2Output{IsTruncated: aws.Bool(false)}
+		for _, k := range m.keys {
+			if strings.HasPrefix(k, aws.StringValue(in.Prefix)) {
+				out.Contents = append(out.Contents, &s3.Object{Key: aws.String(k)})
+			}
+		}
+		return out, nil
+	}
+
+	random := aws.String(aws.StringValue(in.Prefix) + "random")
 	responses := make(map[string]*s3.ListObjectsV2Output)
 	responses[""] = &s3.ListObjectsV2Output{
 		IsTruncated:           aws.Bool(true),
 		NextContinuationToken: aws.String("call2"),
 		Contents: []*s3.Object{
 			{
-				Key: aws.String("random"),
+				Key: random,
 			},
 			{
-				Key: aws.String("random"),
+				Key: random,
 			},
 			{
-				Key: aws.String("random"),
+				Key: random,
 			},
 		},
 	}
@@ -112,7 +141,7 @@ func (m *mockS3Client) ListObjectsV2WithContext(
 		IsTruncated: aws.Bool(false),
 		Contents: []*s3.Object{
 			{
-				Key: aws.String("random"),
+				Key: random,
 			},
 		},
 	}
@@ -237,7 +266,7 @@ func TestS3Init(t *testing.T) {
 				TargetURI: AWSS3BackendPrefix + "://goodbucket/prefix",
 			},
 			errTest: nilErrTest,
-			prefix:  "prefix",
+			prefix:  "prefix/",
 		},
 	}
 
@@ -457,6 +486,85 @@ func TestS3List(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestS3PrefixNormalization(t *testing.T) {
+	testCases := []struct {
+		uri, prefix string
+	}{
+		{"s3://b", ""},
+		{"s3://b/", ""},
+		{"s3://b/p", "p/"},
+		{"s3://b/p/", "p/"},
+		{"s3://b//p//", "p/"},
+	}
+
+	for _, c := range testCases {
+		uploader := &mockS3UploaderRecorder{}
+		b := &AWSS3Backend{}
+		conf := &BackendConfig{TargetURI: c.uri, MaxParallelUploadBuffer: make(chan bool, 1), ManifestPrefix: "manifests"}
+		if err := b.Init(context.Background(), conf, WithS3Client(&mockS3Client{keys: []string{}}), WithS3Uploader(uploader)); err != nil {
+			t.Fatalf("%s: Init: %v", c.uri, err)
+		}
+		if b.prefix != c.prefix {
+			t.Errorf("%s: prefix = %q, want %q", c.uri, b.prefix, c.prefix)
+		}
+		vol, err := files.CreateSimpleVolume(context.Background(), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = vol.Close(); err != nil {
+			t.Fatal(err)
+		}
+		vol.ObjectName = "x"
+		if err = vol.OpenVolume(); err != nil {
+			t.Fatal(err)
+		}
+		if err = b.Upload(context.Background(), vol); err != nil {
+			t.Fatalf("%s: Upload: %v", c.uri, err)
+		}
+		_ = vol.Close()
+		_ = vol.DeleteVolume()
+		if want := []string{c.prefix + "x"}; !reflect.DeepEqual(uploader.keys, want) {
+			t.Errorf("%s: uploaded keys %q, want %q", c.uri, uploader.keys, want)
+		}
+	}
+}
+
+func TestS3ListStripsPrefixOnly(t *testing.T) {
+	b := &AWSS3Backend{}
+	client := &mockS3Client{keys: []string{"p/a", "p/b", "photos/c", "pmanifests|x"}}
+	if err := b.Init(context.Background(), &BackendConfig{TargetURI: "s3://b/p"}, WithS3Client(client), WithS3Uploader(&mockS3Uploader{})); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	l, err := b.List(context.Background(), "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if want := []string{"a", "b"}; !reflect.DeepEqual(l, want) {
+		t.Errorf("List = %q, want %q", l, want)
+	}
+}
+
+func TestS3LegacyLayoutRejected(t *testing.T) {
+	const legacy = "pmanifests|tank|s.manifest.gz"
+	client := &mockS3Client{keys: []string{legacy, "ptank|s.zstream.gz.vol1"}}
+	conf := &BackendConfig{TargetURI: "s3://b/p", ManifestPrefix: "manifests"}
+	err := (&AWSS3Backend{}).Init(context.Background(), conf, WithS3Client(client), WithS3Uploader(&mockS3Uploader{}))
+	if err == nil || !strings.Contains(err.Error(), legacy) {
+		t.Fatalf("Init of s3://b/p over a legacy layout: got %v, want an error naming %s", err, legacy)
+	}
+
+	// The current layout, and a bucket-root destination, are fine.
+	client = &mockS3Client{keys: []string{"p/manifests|tank|s.manifest.gz", "p/tank|s.zstream.gz.vol1"}}
+	if err = (&AWSS3Backend{}).Init(context.Background(), conf, WithS3Client(client), WithS3Uploader(&mockS3Uploader{})); err != nil {
+		t.Errorf("Init over the current layout: %v", err)
+	}
+	client = &mockS3Client{keys: []string{legacy}}
+	conf = &BackendConfig{TargetURI: "s3://b", ManifestPrefix: "manifests"}
+	if err = (&AWSS3Backend{}).Init(context.Background(), conf, WithS3Client(client), WithS3Uploader(&mockS3Uploader{})); err != nil {
+		t.Errorf("Init of a bucket-root destination: %v", err)
 	}
 }
 
