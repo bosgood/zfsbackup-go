@@ -50,7 +50,13 @@ The compression algorithm builtin to the software is a parallel gzip ([pgzip](ht
 
 ### Encryption/Signing
 
-The PGP algorithm is used for encryption/signing. The cipher used is AES-256.
+Volumes and manifests are encrypted and/or signed with OpenPGP
+(`github.com/ProtonMail/go-crypto`). The cipher is AES-256 and signatures
+use SHA-256. Supported keys: RSA, ECDSA/ECDH on the NIST curves, and
+Ed25519 signing keys with Curve25519 (`cv25519`) encryption subkeys, which
+is what `gpg --full-generate-key` produces by default since GnuPG 2.3. The
+RFC 9580 "v6" Ed25519/X25519 keys that newer tools emit are accepted too.
+DSA/ElGamal keys still load but are not recommended.
 
 ## Installation
 
@@ -168,6 +174,15 @@ Notes:
 gpg2 --gen-key
 gpg2 --output public.pgp --armor --export test@example.com
 gpg2 --output private.pgp --armor --export-secret-key test@example.com
+```
+
+To create a modern key pair for backups:
+
+```bash
+gpg --quick-generate-key 'backup@example.com' ed25519 sign never
+gpg --quick-add-key <fingerprint> cv25519 encr never
+gpg --output public.pgp --armor --export backup@example.com
+gpg --output private.pgp --armor --export-secret-key backup@example.com
 ```
 
 - PGP Passphrase will be prompted during execution if it is not found in the PGP_PASSPHRASE environmental variable.
