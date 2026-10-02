@@ -23,8 +23,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -41,6 +43,7 @@ import (
 	"github.com/someone1/zfsbackup-go/files"
 	"github.com/someone1/zfsbackup-go/internal/fakezfs"
 	"github.com/someone1/zfsbackup-go/log"
+	"github.com/someone1/zfsbackup-go/pgp"
 	"github.com/someone1/zfsbackup-go/zfs"
 )
 
@@ -369,5 +372,79 @@ func TestE2EExitCodes(t *testing.T) {
 	// Every run removed its temporary directory, the failed ones included.
 	if left, err := ioutil.ReadDir(filepath.Join(env.work, "temp")); err != nil || len(left) != 0 {
 		t.Errorf("runs left %d temporary directories behind (%v)", len(left), err)
+	}
+}
+
+// TestE2EEncryptedSend sends a manual full backup encrypted to and signed by
+// an ed25519/cv25519 key, then decrypts what landed at the destination.
+func TestE2EEncryptedSend(t *testing.T) {
+	env := newE2EEnv(t)
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+		{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+	})
+	const email = "ed25519@example.com"
+	logs, err := env.send(
+		"--publicKeyRingPath", "testdata/pgp/ed25519-public.asc",
+		"--secretKeyRingPath", "testdata/pgp/ed25519-secret.asc",
+		"--encryptTo", email, "--signFrom", email,
+		"tank/data@a", "file://"+env.dest)
+	if err != nil {
+		t.Fatalf("send: %v\n%s", err, logs)
+	}
+
+	// Every object must carry the pgp extension.
+	var manifests, volumes []string
+	err = filepath.Walk(env.dest, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		if !strings.Contains(filepath.Base(path), ".pgp") {
+			t.Errorf("unencrypted object at destination: %s", path)
+		}
+		if strings.HasPrefix(strings.TrimPrefix(path, env.dest+"/"), "manifests") {
+			manifests = append(manifests, path)
+		} else {
+			volumes = append(volumes, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifests) != 1 || len(volumes) == 0 {
+		t.Fatalf("destination has %d manifests and %d volumes", len(manifests), len(volumes))
+	}
+
+	// The send loaded the rings into the pgp package; reuse them to read back.
+	keys := &files.JobInfo{EncryptKey: pgp.GetPrivateKeyByEmail(email), SignKey: pgp.GetPublicKeyByEmail(email)}
+	mv, err := files.ExtractLocal(context.Background(), keys, manifests[0], true)
+	if err != nil {
+		t.Fatalf("decrypt manifest: %v", err)
+	}
+	var manifest files.JobInfo
+	if err = json.NewDecoder(mv).Decode(&manifest); err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+	mv.Close()
+	if manifest.VolumeName != "tank/data" || manifest.BaseSnapshot.Name != "a" {
+		t.Errorf("manifest = %s@%s", manifest.VolumeName, manifest.BaseSnapshot.Name)
+	}
+
+	manifest.EncryptKey, manifest.SignKey = keys.EncryptKey, keys.SignKey
+	var total int64
+	for _, path := range volumes {
+		vv, err := files.ExtractLocal(context.Background(), &manifest, path, false)
+		if err != nil {
+			t.Fatalf("decrypt %s: %v", path, err)
+		}
+		n, err := io.Copy(ioutil.Discard, vv)
+		vv.Close()
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		total += n
+	}
+	if total != 65536 { // fakezfs default FAKEZFS_STREAM_BYTES
+		t.Errorf("decrypted %d stream bytes, want 65536", total)
 	}
 }
