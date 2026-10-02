@@ -24,6 +24,9 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -69,4 +72,71 @@ func TestE2EExplicitFullAlreadyBackedUpIsNoop(t *testing.T) {
 		t.Fatalf("second --full of the same monthly: got %v, want the no-op\n%s", err, logs)
 	}
 	sameObjects(t, env.dest, before)
+}
+
+// TestE2ERefusesToOverwrite: a manual send of a set that is already at the destination
+// fails before streaming anything, and leaves the destination and the cache untouched.
+func TestE2ERefusesToOverwrite(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(3<<20))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	args := []string{"--volsize", "1", "tank/data@a", "file://" + env.dest}
+	if logs, err := env.send(args...); err != nil {
+		t.Fatalf("first send: %v\n%s", err, logs)
+	}
+	dest, cache := destObjects(t, env.dest), destObjects(t, filepath.Join(env.work, "cache"))
+	if len(manifestNames(dest)) != 1 || len(cache) != 1 {
+		t.Fatalf("first send left %d manifests at the destination and %d in the cache, want 1 and 1", len(manifestNames(dest)), len(cache))
+	}
+	zfsSends := func() int {
+		data, err := os.ReadFile(env.zfsLog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Count("\n"+string(data), "\nsend ")
+	}
+	sends := zfsSends()
+	if sends != 1 {
+		t.Fatalf("the first send ran zfs send %d times, want 1", sends)
+	}
+
+	for _, extra := range [][]string{nil, {"--resume"}} {
+		logs, err := guarded(t, func() (string, error) { return env.send(append(extra, args...)...) })
+		if err == nil || !strings.Contains(logs, "already exists") {
+			t.Errorf("send %v of an existing set: got %v, want the refusal\n%s", extra, err, logs)
+		}
+	}
+	sameObjects(t, env.dest, dest)
+	sameObjects(t, filepath.Join(env.work, "cache"), cache)
+	if after := zfsSends(); after != sends {
+		t.Errorf("the refused sends ran zfs send %d times", after-sends)
+	}
+}
+
+// TestE2EVolumeBoundariesReproducible documents the root cause behind refusing to overwrite:
+// the same stream does not split into the same volumes twice.
+func TestE2EVolumeBoundariesReproducible(t *testing.T) {
+	t.Skip("volume boundaries are not reproducible; see docs/specs/2026-09-29--destructive-ops-fixes")
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", "12582912") // 12 MiB
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	var first []string
+	for i := 0; i < 3; i++ {
+		dest := filepath.Join(env.dest, fmt.Sprintf("d%d", i))
+		if err := os.Mkdir(dest, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if logs, err := env.send("--volsize", "2", "tank/data@a", "file://"+dest); err != nil {
+			t.Fatalf("send %d: %v\n%s", i, err, logs)
+		}
+		var bounds []string
+		for _, v := range newestBackup(t, "tank/data", "file://"+dest).Volumes {
+			bounds = append(bounds, fmt.Sprintf("%d:%.8s", v.ZFSStreamBytes, v.SHA256Sum))
+		}
+		if i == 0 {
+			first = bounds
+		} else if strings.Join(bounds, " ") != strings.Join(first, " ") {
+			t.Errorf("run %d split the stream as %v, run 0 as %v", i, bounds, first)
+		}
+	}
 }

@@ -248,6 +248,37 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 		return reportDryRun(ctx, jobInfo)
 	}
 
+	uploadBuffer := make(chan bool, jobInfo.MaxParallelUploads)
+	defer close(uploadBuffer)
+
+	// Prepare the destinations first: refusing to overwrite a backup set and verifying a resume
+	// both need them, and neither may touch the cache or take the lock when it fails.
+	var usedBackends []backends.Backend
+	defer func() {
+		log.AppLogger.Debugf("Cleaning up resources...")
+		for _, backend := range usedBackends {
+			if cerr := backend.Close(); cerr != nil {
+				log.AppLogger.Warningf("Could not properly close backend due to error - %v", cerr)
+			}
+		}
+	}()
+	for _, destination := range jobInfo.Destinations {
+		backend, berr := prepareBackend(ctx, jobInfo, destination, uploadBuffer)
+		if berr != nil {
+			log.AppLogger.Errorf("Could not initialize backend due to error - %v.", berr)
+			return berr
+		}
+		usedBackends = append(usedBackends, backend)
+		if _, cerr := getCacheDir(destination); cerr != nil {
+			log.AppLogger.Errorf("Could not create cache for destination %s due to error - %v.", destination, cerr)
+			return cerr
+		}
+	}
+
+	if err := refuseExistingSet(ctx, jobInfo, usedBackends); err != nil {
+		return err
+	}
+
 	if jobInfo.Resume {
 		if err := tryResume(ctx, jobInfo); err != nil {
 			return err
@@ -307,9 +338,6 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	var maniwg sync.WaitGroup
 	maniwg.Add(1)
 
-	uploadBuffer := make(chan bool, jobInfo.MaxParallelUploads)
-	defer close(uploadBuffer)
-
 	fileBuffer := make(chan bool, fileBufferSize)
 	for i := 0; i < fileBufferSize; i++ {
 		fileBuffer <- true
@@ -347,39 +375,26 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 		return sendStream(ctx, jobInfo, startCh, fileBuffer)
 	})
 
-	var usedBackends []backends.Backend
 	var channels []<-chan *files.VolumeInfo
 	channels = append(channels, stepCh)
 
 	if jobInfo.MaxFileBuffer != 0 {
-		jobInfo.Destinations = append(jobInfo.Destinations, backends.DeleteBackendPrefix+"://")
-	}
-
-	// Prepare backends and setup plumbing
-	for _, destination := range jobInfo.Destinations {
+		destination := backends.DeleteBackendPrefix + "://"
 		backend, berr := prepareBackend(ctx, jobInfo, destination, uploadBuffer)
 		if berr != nil {
 			log.AppLogger.Errorf("Could not initialize backend due to error - %v.", berr)
 			return berr
 		}
-		_, cerr := getCacheDir(destination)
-		if cerr != nil {
-			log.AppLogger.Errorf("Could not create cache for destination %s due to error - %v.", destination, cerr)
-			return cerr
-		}
-		out, waitgroup := retryUploadChainer(ctx, channels[len(channels)-1], backend, jobInfo, destination)
-		channels = append(channels, out)
+		jobInfo.Destinations = append(jobInfo.Destinations, destination)
 		usedBackends = append(usedBackends, backend)
+	}
+
+	// Setup plumbing
+	for idx, backend := range usedBackends {
+		out, waitgroup := retryUploadChainer(ctx, channels[len(channels)-1], backend, jobInfo, jobInfo.Destinations[idx])
+		channels = append(channels, out)
 		group.Go(waitgroup.Wait)
 	}
-	defer func() {
-		log.AppLogger.Debugf("Cleaning up resources...")
-		for _, backend := range usedBackends {
-			if cerr := backend.Close(); cerr != nil {
-				log.AppLogger.Warningf("Could not properly close backend due to error - %v", cerr)
-			}
-		}
-	}()
 
 	// Create and copy a copy of the manifest during the backup procedure for future retry requests
 	group.Go(func() error {
@@ -485,6 +500,31 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 		)
 	}
 
+	return nil
+}
+
+// refuseExistingSet fails when the manifest of the backup set about to be sent already exists at
+// any destination. Volume boundaries are not reproducible, so a re-send would overwrite the set's
+// volumes in place and leave its manifest pointing at changed objects.
+func refuseExistingSet(ctx context.Context, jobInfo *files.JobInfo, destinations []backends.Backend) error {
+	name := jobInfo.ManifestObjectName()
+	for idx, backend := range destinations {
+		existing, err := backend.List(ctx, name)
+		if err != nil {
+			log.AppLogger.Errorf("Could not list %s at %s due to error - %v", name, jobInfo.Destinations[idx], err)
+			return err
+		}
+		for _, obj := range existing {
+			if obj == name {
+				err = fmt.Errorf(
+					"backup set %s already exists at %s; refusing to overwrite it. Delete it at the destination to send it again",
+					name, jobInfo.Destinations[idx],
+				)
+				log.AppLogger.Errorf("%v.", err)
+				return err
+			}
+		}
+	}
 	return nil
 }
 
