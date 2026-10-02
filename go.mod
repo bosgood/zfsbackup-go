@@ -22,6 +22,7 @@ require (
 	github.com/spf13/pflag v1.0.5
 	golang.org/x/crypto v0.41.0
 	golang.org/x/sync v0.16.0
+	golang.org/x/term v0.34.0
 	google.golang.org/api v0.97.0
 )
 
@@ -57,7 +58,6 @@ require (
 	golang.org/x/net v0.42.0 // indirect
 	golang.org/x/oauth2 v0.0.0-20220909003341-f21342109be1 // indirect
 	golang.org/x/sys v0.35.0 // indirect
-	golang.org/x/term v0.34.0 // indirect
 	golang.org/x/text v0.28.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	google.golang.org/appengine v1.6.7 // indirect

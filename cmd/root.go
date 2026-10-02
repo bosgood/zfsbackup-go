@@ -36,7 +36,7 @@ import (
 	"github.com/juju/ratelimit"
 	"github.com/op/go-logging"
 	"github.com/spf13/cobra"
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 
 	"github.com/someone1/zfsbackup-go/backup"
 	"github.com/someone1/zfsbackup-go/config"
@@ -419,7 +419,7 @@ func validatePassphrase() {
 	var err error
 	if len(passphrase) == 0 {
 		fmt.Fprint(config.Stdout, "Enter passphrase to decrypt encryption key: ")
-		passphrase, err = terminal.ReadPassword(0)
+		passphrase, err = term.ReadPassword(int(os.Stdin.Fd()))
 		if err != nil {
 			log.AppLogger.Errorf("Error reading user input for encryption key passphrase: %v", err)
 			panic(err)
