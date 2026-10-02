@@ -24,7 +24,7 @@ import (
 	"strconv"
 	"testing"
 
-	"golang.org/x/crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp"
 )
 
 func TestParseBackupVolumeObjectName(t *testing.T) {

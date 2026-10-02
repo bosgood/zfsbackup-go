@@ -27,8 +27,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ProtonMail/go-crypto/openpgp"
 	humanize "github.com/dustin/go-humanize"
-	"golang.org/x/crypto/openpgp"
 
 	"github.com/someone1/zfsbackup-go/log"
 )

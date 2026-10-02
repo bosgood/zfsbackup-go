@@ -31,7 +31,7 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp"
 )
 
 // TestReadManifestBounded: someone with only the public key forges a manifest signed by their

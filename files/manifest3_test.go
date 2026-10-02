@@ -29,7 +29,7 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp"
 )
 
 // writeRawManifest writes json, gzipped and unencrypted, as a manifest file.
