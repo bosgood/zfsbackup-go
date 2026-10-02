@@ -22,9 +22,11 @@ package backup
 
 import (
 	"context"
+	"encoding/json"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,57 +34,135 @@ import (
 	"github.com/someone1/zfsbackup-go/files"
 )
 
-// TestCleanDryRun verifies that running Clean with dryRun=true does not delete
-// any objects from the destination, while a subsequent real run does. Clean
-// resolves its backend from the destination URI, so this exercises the real
-// FileBackend against a local directory rather than a mock.
-func TestCleanDryRun(t *testing.T) {
-	// Cache/scratch directory used by getCacheDir via config.WorkingDir.
-	cacheDir, err := ioutil.TempDir("", "zfsbackup-clean-cache")
+// writeTestManifest stores a manifest for j at the file:// destination dir, as send would.
+func writeTestManifest(t *testing.T, dir string, j *files.JobInfo) {
+	t.Helper()
+	manifest, err := files.CreateManifestVolume(context.Background(), j)
 	if err != nil {
-		t.Fatalf("could not create temp cache dir - %v", err)
+		t.Fatalf("could not create manifest - %v", err)
 	}
-	defer os.RemoveAll(cacheDir)
+	defer manifest.DeleteVolume()
+	if err = json.NewEncoder(manifest).Encode(j); err != nil {
+		t.Fatalf("could not encode manifest - %v", err)
+	}
+	if err = manifest.Close(); err != nil {
+		t.Fatalf("could not close manifest - %v", err)
+	}
+	dest := filepath.Join(dir, manifest.ObjectName)
+	if err = os.MkdirAll(filepath.Dir(dest), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = manifest.CopyTo(dest); err != nil {
+		t.Fatalf("could not copy manifest - %v", err)
+	}
+}
 
+// writeTestObject creates a destination object with the given name.
+func writeTestObject(t *testing.T, dir, name string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ioutil.WriteFile(path, []byte("payload"), 0600); err != nil {
+		t.Fatalf("could not write object %s - %v", name, err)
+	}
+	return path
+}
+
+// setupCleanTest points config.WorkingDir at a temp cache and returns a file:// destination
+// directory and a jobInfo for cleaning it.
+func setupCleanTest(t *testing.T) (string, *files.JobInfo) {
+	t.Helper()
 	oldWorkingDir := config.WorkingDir
-	config.WorkingDir = cacheDir
-	defer func() { config.WorkingDir = oldWorkingDir }()
-
-	// The file:// destination, seeded with a stray object that is not referenced
-	// by any manifest - exactly what Clean is meant to delete.
-	targetDir, err := ioutil.TempDir("", "zfsbackup-clean-target")
-	if err != nil {
-		t.Fatalf("could not create temp target dir - %v", err)
+	config.WorkingDir = t.TempDir()
+	t.Cleanup(func() { config.WorkingDir = oldWorkingDir })
+	if err := os.MkdirAll(filepath.Join(config.WorkingDir, "temp"), 0700); err != nil {
+		t.Fatal(err)
 	}
-	defer os.RemoveAll(targetDir)
+	oldTempdir := config.BackupTempdir
+	config.BackupTempdir = filepath.Join(config.WorkingDir, "temp")
+	t.Cleanup(func() { config.BackupTempdir = oldTempdir })
 
-	strayPath := filepath.Join(targetDir, "data-block-stray")
-	if werr := ioutil.WriteFile(strayPath, []byte("payload"), 0600); werr != nil {
-		t.Fatalf("could not write stray object - %v", werr)
-	}
-
-	jobInfo := &files.JobInfo{
+	targetDir := t.TempDir()
+	return targetDir, &files.JobInfo{
 		ManifestPrefix:     "manifests",
+		Separator:          "|",
 		Destinations:       []string{"file://" + targetDir},
 		MaxParallelUploads: 1,
 		MaxBackoffTime:     5 * time.Second,
 		MaxRetryTime:       1 * time.Minute,
 	}
+}
 
-	// Dry-run: the stray object must be left untouched.
+// TestCleanDryRun verifies that running Clean with dryRun=true does not delete
+// any objects from the destination, while a subsequent real run deletes the
+// orphaned volume but neither the live one nor objects it does not recognize.
+// Clean resolves its backend from the destination URI, so this exercises the
+// real FileBackend against a local directory rather than a mock.
+func TestCleanDryRun(t *testing.T) {
+	targetDir, jobInfo := setupCleanTest(t)
+
+	set := &files.JobInfo{
+		VolumeName:     "tank/data",
+		BaseSnapshot:   files.SnapshotInfo{Name: "a"},
+		ManifestPrefix: "manifests",
+		Separator:      "|",
+		Compressor:     files.InternalCompressor,
+	}
+	live := set.BackupVolumeObjectName(1)
+	set.Volumes = []*files.VolumeInfo{{ObjectName: live, VolumeNumber: 1}}
+	writeTestManifest(t, targetDir, set)
+	livePath := writeTestObject(t, targetDir, live)
+	orphanPath := writeTestObject(t, targetDir, set.BackupVolumeObjectName(2))
+	foreignPath := writeTestObject(t, targetDir, "data-block-stray")
+
+	// Dry-run: nothing may be deleted.
 	if cerr := Clean(context.Background(), jobInfo, false, true); cerr != nil {
 		t.Fatalf("dry-run Clean returned error - %v", cerr)
 	}
-	if _, serr := os.Stat(strayPath); serr != nil {
-		t.Fatalf("dry-run should not have deleted stray object %s, stat error - %v", strayPath, serr)
+	for _, p := range []string{livePath, orphanPath, foreignPath} {
+		if _, serr := os.Stat(p); serr != nil {
+			t.Fatalf("dry-run should not have deleted %s, stat error - %v", p, serr)
+		}
 	}
 
-	// Real run: the stray object must now be deleted.
+	// Real run: only the orphaned volume goes.
 	if cerr := Clean(context.Background(), jobInfo, false, false); cerr != nil {
 		t.Fatalf("Clean returned error - %v", cerr)
 	}
-	if _, serr := os.Stat(strayPath); !os.IsNotExist(serr) {
-		t.Fatalf("expected stray object %s to be deleted, got stat error - %v", strayPath, serr)
+	if _, serr := os.Stat(orphanPath); !os.IsNotExist(serr) {
+		t.Fatalf("expected orphaned volume %s to be deleted, got stat error - %v", orphanPath, serr)
+	}
+	for _, p := range []string{livePath, foreignPath} {
+		if _, serr := os.Stat(p); serr != nil {
+			t.Fatalf("Clean should not have deleted %s, stat error - %v", p, serr)
+		}
+	}
+}
+
+// TestCleanRefusesWithoutManifests: a destination with objects but no manifest at all is
+// almost certainly the wrong URI, so clean must refuse rather than delete everything.
+func TestCleanRefusesWithoutManifests(t *testing.T) {
+	targetDir, jobInfo := setupCleanTest(t)
+	set := &files.JobInfo{VolumeName: "tank/data", BaseSnapshot: files.SnapshotInfo{Name: "a"}, Separator: "|"}
+	orphanPath := writeTestObject(t, targetDir, set.BackupVolumeObjectName(1))
+
+	for _, dryRun := range []bool{true, false} {
+		err := Clean(context.Background(), jobInfo, false, dryRun)
+		if err == nil || !strings.Contains(err.Error(), "no manifests; refusing to clean") {
+			t.Errorf("dryRun=%v: got %v, want the no-manifests refusal", dryRun, err)
+		}
+	}
+	if _, serr := os.Stat(orphanPath); serr != nil {
+		t.Fatalf("Clean deleted %s from a destination without manifests - %v", orphanPath, serr)
+	}
+
+	// An empty destination is fine.
+	emptyJob := *jobInfo
+	emptyJob.Destinations = []string{"file://" + t.TempDir()}
+	if err := Clean(context.Background(), &emptyJob, false, false); err != nil {
+		t.Errorf("Clean of an empty destination - %v", err)
 	}
 }
 

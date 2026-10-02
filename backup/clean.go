@@ -36,6 +36,18 @@ import (
 	"github.com/someone1/zfsbackup-go/log"
 )
 
+const defaultSeparator = "|"
+
+// parseBackupVolume returns the dataset of a backup volume object name written with any of separators.
+func parseBackupVolume(name string, separators []string) (string, bool) {
+	for _, sep := range separators {
+		if dataset, _, _, _, ok := files.ParseBackupVolumeObjectName(name, sep); ok {
+			return dataset, true
+		}
+	}
+	return "", false
+}
+
 // Clean will remove files found in the desination that are not found in any of the manifests found locally or in the destination.
 // If cleanLocal is true, then local manifests not found in the destination are ignored and deleted. This function will optionally
 // delete broken backup sets in the destination if the --force flag is provided.
@@ -65,6 +77,24 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	if serr != nil {
 		log.AppLogger.Errorf("Could not sync cache dir for target %s due to error - %v.", target, serr)
 		return serr
+	}
+
+	// TODO: The following can be done in a much more efficient way (probably)
+	allObjects, err := backend.List(ctx, "")
+	if err != nil {
+		log.AppLogger.Errorf("Could not list objects in backend %s due to error - %v", target, err)
+		return err
+	}
+
+	// With no manifests at all there is nothing to protect: the URI is almost certainly wrong,
+	// or the manifests are already gone. Either way, a bulk delete must not be one command away.
+	if len(safeManifests) == 0 && len(localOnlyFiles) == 0 && len(allObjects) > 0 {
+		err = fmt.Errorf(
+			"destination %s holds %d objects but no manifests; refusing to clean. If this is intended, delete the objects manually",
+			target, len(allObjects),
+		)
+		log.AppLogger.Errorf("%v.", err)
+		return err
 	}
 
 	// Read in Manifests
@@ -103,7 +133,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 				log.AppLogger.Noticef("Would delete local manifest %s.", manifestPath)
 				continue
 			}
-			err := os.Remove(manifestPath)
+			err = os.Remove(manifestPath)
 			if err != nil {
 				log.AppLogger.Errorf("Could not delete local manifest %s due to error - %v", manifestPath, err)
 				return err
@@ -112,20 +142,43 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 		}
 	}
 
-	// TODO: The following can be done in a much more efficient way (probably)
-	allObjects, err := backend.List(ctx, "")
-	if err != nil {
-		log.AppLogger.Errorf("Could not list objects in backend %s due to error - %v", target, err)
-		return err
+	// Only delete what we can name: objects that parse as a backup volume written by this tool,
+	// with any separator in use here. Manifests and everything else are left alone.
+	separators := []string{jobInfo.Separator, defaultSeparator}
+	datasets := make(map[string]bool)
+	for _, manifest := range decodedManifests {
+		separators = append(separators, manifest.Separator)
+		datasets[manifest.VolumeName] = true
 	}
-
-	// Remove Manifest Files
-	for idx := 0; idx < len(allObjects); idx++ {
-		if strings.HasPrefix(allObjects[idx], jobInfo.ManifestPrefix) {
-			allObjects = append(allObjects[:idx], allObjects[idx+1:]...)
-			idx--
+	manifestPrefix := jobInfo.ManifestPrefix + jobInfo.Separator
+	if jobInfo.Separator == "" {
+		manifestPrefix = jobInfo.ManifestPrefix + defaultSeparator
+	}
+	candidates := make([]string, 0, len(allObjects))
+	skipped := 0
+	for _, obj := range allObjects {
+		if strings.HasPrefix(obj, manifestPrefix) {
+			continue
 		}
+		dataset, ok := parseBackupVolume(obj, separators)
+		if !ok {
+			log.AppLogger.Noticef("Skipping unrecognized object %s (not a backup volume written by this tool).", obj)
+			skipped++
+			continue
+		}
+		// A volume of a dataset no manifest here mentions belongs to some other destination
+		// (e.g. s3://bucket/p/ seen from s3://bucket) - it is not ours to delete.
+		if !datasets[dataset] {
+			log.AppLogger.Noticef("Skipping %s: no manifest at this destination is for dataset %s.", obj, dataset)
+			skipped++
+			continue
+		}
+		candidates = append(candidates, obj)
 	}
+	if skipped > 0 {
+		log.AppLogger.Noticef("Found %d objects in destination that clean does not recognize; they will not be deleted.", skipped)
+	}
+	allObjects = candidates
 
 	// Go through all manifests and remove from the allObjects list what we know should exist
 	for _, manifest := range decodedManifests {

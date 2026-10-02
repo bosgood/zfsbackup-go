@@ -23,6 +23,7 @@ package files
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -242,6 +243,57 @@ func (j *JobInfo) BackupVolumeObjectName(volumeNumber int64) string {
 	extensions = append(extensions, fmt.Sprintf("vol%d", volumeNumber))
 
 	return fmt.Sprintf("%s.%s", strings.Join(nameParts, j.Separator), strings.Join(extensions, "."))
+}
+
+// ParseBackupVolumeObjectName is the inverse of BackupVolumeObjectName: it recognizes
+// "<volume>|<snap>.zstream[.<compressor>][.pgp].vol<N>" and the incremental form
+// "<volume>|<incr>|to|<snap>...". Anything else (manifests, foreign objects, names with a
+// leading "/") is reported as not ok.
+// nolint:gocritic // Named results document the parts
+func ParseBackupVolumeObjectName(name, separator string) (volume, base, incr string, volNum int64, ok bool) {
+	if separator == "" {
+		return "", "", "", 0, false
+	}
+	idx := strings.LastIndex(name, ".zstream.")
+	if idx < 0 {
+		return "", "", "", 0, false
+	}
+	extensions := strings.Split(name[idx+len(".zstream."):], ".")
+	last := extensions[len(extensions)-1]
+	if !strings.HasPrefix(last, "vol") {
+		return "", "", "", 0, false
+	}
+	volNum, err := strconv.ParseInt(strings.TrimPrefix(last, "vol"), 10, 64)
+	if err != nil || volNum < 1 || strings.TrimPrefix(last, "vol") != strconv.FormatInt(volNum, 10) {
+		return "", "", "", 0, false
+	}
+	switch extensions = extensions[:len(extensions)-1]; len(extensions) {
+	case 0:
+	case 1:
+		if extensions[0] == "" {
+			return "", "", "", 0, false
+		}
+	case 2:
+		if extensions[0] == "" || extensions[0] == "pgp" || extensions[1] != "pgp" {
+			return "", "", "", 0, false
+		}
+	default:
+		return "", "", "", 0, false
+	}
+
+	parts := strings.Split(name[:idx], separator)
+	switch {
+	case len(parts) == 2:
+		volume, base = parts[0], parts[1]
+	case len(parts) == 4 && parts[2] == "to":
+		volume, incr, base = parts[0], parts[1], parts[3]
+	default:
+		return "", "", "", 0, false
+	}
+	if volume == "" || base == "" || strings.HasPrefix(volume, "/") || (len(parts) == 4 && incr == "") {
+		return "", "", "", 0, false
+	}
+	return volume, base, incr, volNum, true
 }
 
 func (j *JobInfo) volumeNameParts(isManifest bool) (nameParts, extensions []string) {

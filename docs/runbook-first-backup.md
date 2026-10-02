@@ -12,8 +12,16 @@ The production flags used throughout:
 ```bash
 FLAGS="--fullIfOlderThan 4320h --fullSnapshotSuffix _monthly --incrementalSnapshotSuffix _monthly"
 DS=pool/dataset                      # the dataset to back up
-URI=s3://bucket/prefix               # the offsite destination
+URI=s3://bucket/prefix/              # the offsite destination
 ```
+
+For S3, GCS, Azure and B2 the path after the bucket is a directory:
+`s3://bucket/prefix` and `s3://bucket/prefix/` are the same destination, and
+neither reaches into `s3://bucket/prefix-other/`. Versions before 2026-10
+concatenated the path without a `/` (objects named `prefixmanifests|...` and
+`prefixpool/dataset|...`). Against such a destination every command now fails
+with `found prefixmanifests|..., a backup written by an older version`; move
+every object whose name starts with `prefix` to `prefix/` and rerun.
 
 `4320h` is 180 days (Go durations have no `d` unit). Once it has elapsed since
 the last full, the next full is taken of the first monthly newer than the last
@@ -93,10 +101,14 @@ checks: OK
 If the destination holds manifests from earlier attempts, the plan chains from
 them (`INCR ... from ...`, or `NOOP`). Decide whether to keep them. To start over,
 delete them at the destination **and** their cached copies under
-`<workingDirectory>/cache/<md5 of the URI>/`. `zfsbackup clean` never deletes
-manifests (only `clean --force` removes whole broken sets). The planner ignores
-a cached manifest that is gone from the destination, but `clean` still treats
-it as live and keeps the volumes it lists.
+`<workingDirectory>/cache/<md5 of the URI>/`. Plain `zfsbackup clean` never
+deletes manifests, nor any object it does not recognize as a backup volume
+written by this tool for a dataset that has a manifest at that destination
+(it lists those as skipped). It refuses to run against a destination that has
+objects but no manifests at all, which usually means a wrong URI. Only
+`clean --force` deletes whole broken sets, manifest included. The planner
+ignores a cached manifest that is gone from the destination, but `clean` still
+treats it as live and keeps the volumes it lists.
 
 ## 4. Dry-run the send
 

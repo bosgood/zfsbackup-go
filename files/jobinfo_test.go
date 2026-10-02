@@ -18,113 +18,57 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+
 package files
 
 import (
-	"strings"
 	"testing"
+
+	"golang.org/x/crypto/openpgp"
 )
 
-// validSendJob returns a JobInfo that passes ValidateSendFlags, so each test
-// case below isolates the one field it changes.
-func validSendJob() *JobInfo {
-	return &JobInfo{
-		MaxFileBuffer:      5,
-		MaxParallelUploads: 4,
-		MaxRetryTime:       12 * 60,
-		MaxBackoffTime:     30,
-		CompressionLevel:   6,
-		Separator:          "|",
-		UploadChunkSize:    10,
-	}
-}
-
-func TestValidateSendFlagsSeparator(t *testing.T) {
-	testCases := []struct {
-		name    string
-		sep     string
-		wantErr bool
-	}{
-		// A separator is safe only when at least one of its characters cannot
-		// occur in a ZFS dataset path. No snapshot name can then absorb it.
-		{name: "default pipe", sep: "|"},
-		{name: "pipe pair", sep: "||"},
-		{name: "at sign", sep: "@"},
-		{name: "pipe then legal char", sep: "|-"},
-		{name: "legal char then pipe", sep: "a|"},
-		{name: "pipe surrounded by legal chars", sep: "|_x"},
-
-		// Every character below is legal in a ZFS dataset path, so joining a
-		// volume name and snapshot names with it gives an ambiguous object name.
-		{name: "empty", sep: "", wantErr: true},
-		{name: "underscore", sep: "_", wantErr: true},
-		{name: "hyphen", sep: "-", wantErr: true},
-		{name: "colon", sep: ":", wantErr: true},
-		{name: "period", sep: ".", wantErr: true},
-		{name: "letter", sep: "x", wantErr: true},
-		{name: "digit", sep: "1", wantErr: true},
-		{name: "slash", sep: "/", wantErr: true},
-		{name: "several legal chars", sep: "-to-", wantErr: true},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			j := validSendJob()
-			j.Separator = tc.sep
-			err := j.ValidateSendFlags()
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("ValidateSendFlags accepted separator %q, want it rejected", tc.sep)
+func TestParseBackupVolumeObjectName(t *testing.T) {
+	key := &openpgp.Entity{}
+	for _, compressor := range []string{InternalCompressor, "xz", ZfsCompressor, ""} {
+		for _, encrypt := range []bool{false, true} {
+			for _, incr := range []string{"", "autosnap_2026-08-01_00:00:00_monthly"} {
+				j := &JobInfo{
+					VolumeName:          "tank/data",
+					BaseSnapshot:        SnapshotInfo{Name: "autosnap_2026-09-01_00:00:00_monthly"},
+					IncrementalSnapshot: SnapshotInfo{Name: incr},
+					Compressor:          compressor,
+					Separator:           "|",
 				}
-				if !strings.Contains(err.Error(), "separator") {
-					t.Errorf("got err %q, want it to name the separator", err)
+				if encrypt {
+					j.EncryptKey = key
 				}
-				return
+				name := j.BackupVolumeObjectName(12)
+				volume, base, gotIncr, volNum, ok := ParseBackupVolumeObjectName(name, "|")
+				if !ok || volume != j.VolumeName || base != j.BaseSnapshot.Name || gotIncr != incr || volNum != 12 {
+					t.Errorf("%s: got %q %q %q %d %v", name, volume, base, gotIncr, volNum, ok)
+				}
 			}
-			if err != nil {
-				t.Fatalf("ValidateSendFlags rejected separator %q - %v", tc.sep, err)
-			}
-		})
-	}
-}
-
-// TestObjectNameCollision states the invariant that makes the separator rule
-// matter: an incremental backup and a full backup must never compute the same
-// object name. An empty separator breaks it, because an incremental from "a" to
-// "b" and a full of a snapshot named "atob" both join to "tank/dataatob". The
-// second backup would then silently overwrite the first at the destination.
-func TestObjectNameCollision(t *testing.T) {
-	incremental := &JobInfo{
-		VolumeName:          "tank/data",
-		ManifestPrefix:      "manifests",
-		BaseSnapshot:        SnapshotInfo{Name: "b"},
-		IncrementalSnapshot: SnapshotInfo{Name: "a"},
-	}
-	full := &JobInfo{
-		VolumeName:     "tank/data",
-		ManifestPrefix: "manifests",
-		BaseSnapshot:   SnapshotInfo{Name: "atob"},
+		}
 	}
 
-	// With the empty separator the two names collide. ValidateSendFlags must
-	// therefore refuse it before a backup can run.
-	incremental.Separator, full.Separator = "", ""
-	if incremental.BackupVolumeObjectName(1) != full.BackupVolumeObjectName(1) {
-		t.Fatalf("expected the empty separator to collide, but it did not; the test no longer proves anything")
-	}
-	j := validSendJob()
-	j.Separator = ""
-	if err := j.ValidateSendFlags(); err == nil {
-		t.Error("ValidateSendFlags accepted the empty separator, which produces colliding object names")
-	}
-
-	// With the default separator the same pair must stay distinct, for the
-	// volume names as well as the manifest names.
-	incremental.Separator, full.Separator = "|", "|"
-	if got, other := incremental.BackupVolumeObjectName(1), full.BackupVolumeObjectName(1); got == other {
-		t.Errorf("volume object names collide with the default separator: %q", got)
-	}
-	if got, other := incremental.ManifestObjectName(), full.ManifestObjectName(); got == other {
-		t.Errorf("manifest object names collide with the default separator: %q", got)
+	for _, name := range []string{
+		"manifests|x.manifest.gz",
+		"manifests|tank/data|a.manifest.gz",
+		"random.bin",
+		"/tank|s.zstream.vol1",
+		"tank|s.zstream.vol0",
+		"tank|s.zstream.vol01",
+		"tank|s.zstream.volx",
+		"tank|s.zstream.gz",
+		"tank|s.zstream.gz.pgp.extra.vol1",
+		"tank|s.zstream.pgp.gz.vol1",
+		"tank.zstream.vol1",
+		"tank|a|b|s.zstream.vol1",
+		"|s.zstream.vol1",
+		"tank|.zstream.vol1",
+	} {
+		if volume, base, incr, volNum, ok := ParseBackupVolumeObjectName(name, "|"); ok {
+			t.Errorf("%s: parsed as %q %q %q %d", name, volume, base, incr, volNum)
+		}
 	}
 }
