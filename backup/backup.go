@@ -280,7 +280,7 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	}
 
 	if jobInfo.Resume {
-		if err := tryResume(ctx, jobInfo); err != nil {
+		if err := tryResume(ctx, jobInfo, usedBackends); err != nil {
 			return err
 		}
 	}
@@ -598,7 +598,13 @@ func sendStream(ctx context.Context, j *files.JobInfo, c chan<- *files.VolumeInf
 			if skipBytes > 0 {
 				log.AppLogger.Debugf("Want to skip %d bytes.", skipBytes)
 				written, serr := io.CopyN(ioutil.Discard, counter, int64(skipBytes))
-				if serr != nil && serr != io.EOF {
+				if serr == io.EOF {
+					serr = fmt.Errorf(
+						"zfs stream ended before the %d bytes recorded in the cached manifest were skipped; run without --resume",
+						lastTotalBytes,
+					)
+				}
+				if serr != nil {
 					log.AppLogger.Errorf("Error while trying to read from the zfs stream to skip %d bytes - %v", skipBytes, serr)
 					return serr
 				}
@@ -718,7 +724,10 @@ func sendStream(ctx context.Context, j *files.JobInfo, c chan<- *files.VolumeInf
 	return nil
 }
 
-func tryResume(ctx context.Context, j *files.JobInfo) error {
+// tryResume continues a previous attempt from its cached partial manifest. destinations are the
+// prepared backends of j.Destinations, in order: every volume it skips must still exist at each.
+// nolint:funlen,gocyclo // Difficult to break this apart
+func tryResume(ctx context.Context, j *files.JobInfo, destinations []backends.Backend) error {
 	// Temproary Final Manifest File
 	manifest, merr := files.CreateManifestVolume(ctx, j)
 	if merr != nil {
@@ -784,14 +793,63 @@ func tryResume(ctx context.Context, j *files.JobInfo) error {
 			return fmt.Errorf("option mismatch")
 		}
 
+		// Manifests do not record their destinations, so a destination added since the first
+		// attempt shows up here as one that is missing every volume: the resume starts over.
+		volumes, err := verifiedVolumes(ctx, j, originalManifest.Volumes, destinations)
+		if err != nil {
+			return err
+		}
+		if len(volumes) == 0 {
+			log.AppLogger.Noticef("Nothing verifiable to resume; starting over.")
+			return nil
+		}
+
 		manifestmutex.Lock()
-		j.Volumes = originalManifest.Volumes
+		j.Volumes = volumes
 		j.StartTime = originalManifest.StartTime
 		manifestmutex.Unlock()
 		log.AppLogger.Infof("Will be resuming previous backup attempt.")
 	}
 	return nil
 }
+
+// verifiedVolumes returns the longest run of cached volumes, numbered contiguously from 1, that
+// exist at every destination. Volumes past that point are sent again; their old copies at the
+// destinations are overwritten by the new attempt's same-numbered objects or, being referenced
+// by no final manifest, removed by clean once the manifest lands.
+func verifiedVolumes(
+	ctx context.Context, j *files.JobInfo, cached []*files.VolumeInfo, destinations []backends.Backend,
+) ([]*files.VolumeInfo, error) {
+	cached = append([]*files.VolumeInfo(nil), cached...)
+	sort.Sort(files.ByVolumeNumber(cached))
+
+	// "<volume>|<snap>[...].zstream[.ext].vol": every volume of this set, and nothing else.
+	prefix := strings.TrimSuffix(j.BackupVolumeObjectName(0), "0")
+	keep := len(cached)
+	for idx, backend := range destinations {
+		listed, err := backend.List(ctx, prefix)
+		if err != nil {
+			log.AppLogger.Errorf("Could not list the volumes at %s due to error - %v", j.Destinations[idx], err)
+			return nil, err
+		}
+		present := make(map[string]bool, len(listed))
+		for _, name := range listed {
+			present[name] = true
+		}
+		for n := 0; n < keep; n++ {
+			if cached[n].VolumeNumber != int64(n+1) || !present[cached[n].ObjectName] {
+				log.AppLogger.Noticef(
+					"Volume %s missing at %s; it and later volumes will be re-sent.", cached[n].ObjectName, j.Destinations[idx],
+				)
+				keep = n
+				break
+			}
+		}
+	}
+	log.AppLogger.Noticef("Resuming from volume %d: %d of %d cached volumes verified at all destinations.", keep+1, keep, len(cached))
+	return cached[:keep], nil
+}
+
 
 func retryUploadChainer(
 	ctx context.Context,

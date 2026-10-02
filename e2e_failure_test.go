@@ -279,3 +279,99 @@ func TestE2EZFSSendFailureExits(t *testing.T) {
 	}
 	env.checkRestores(t, dest, "a", streamBytes)
 }
+
+// interruptedSend leaves the state an interrupted send of tank/data@a leaves behind: volumes at
+// dest and a cached manifest listing them, but no manifest at dest. (It sends to completion,
+// then deletes the final manifest at dest; the cached copy lists every volume.)
+func (env *e2eEnv) interruptedSend(t *testing.T, streamBytes int64, dest string, args ...string) {
+	t.Helper()
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(streamBytes))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	if logs, err := env.send(append(args, "tank/data@a", "file://"+dest)...); err != nil {
+		t.Fatalf("send: %v\n%s", err, logs)
+	}
+	names := manifestNames(destObjects(t, dest))
+	if len(names) != 1 {
+		t.Fatalf("send left manifests %q at the destination, want one", names)
+	}
+	if err := os.Remove(filepath.Join(dest, names[0])); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestE2EResumeReSendsMissingVolumes(t *testing.T) {
+	const streamBytes = 4 << 20
+	env := newE2EEnv(t)
+	args := []string{"--volsize", "1", "--compressor", ""}
+	env.interruptedSend(t, streamBytes, env.dest, args...)
+	cached := env.cachedManifests(t)
+	if len(cached) != 1 || len(cached[0].Volumes) < 3 {
+		t.Fatalf("want one cached manifest with at least 3 volumes, got %d manifests", len(cached))
+	}
+	// Another host's clean took vol2 as an orphan (no manifest at the destination yet).
+	vol2 := cached[0].Volumes[1].ObjectName
+	if err := os.Remove(filepath.Join(env.dest, vol2)); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := "file://" + env.dest
+	logs, err := guarded(t, func() (string, error) { return env.send(append(args, "--resume", "tank/data@a", dest)...) })
+	if err != nil {
+		t.Fatalf("resume: %v\n%s", err, logs)
+	}
+	if want := "Volume " + vol2 + " missing at " + dest; !strings.Contains(logs, want) {
+		t.Errorf("log lacks %q:\n%s", want, logs)
+	}
+	if want := "Resuming from volume 2: 1 of"; !strings.Contains(logs, want) {
+		t.Errorf("log lacks %q:\n%s", want, logs)
+	}
+	objects := destObjects(t, env.dest)
+	for _, v := range newestBackup(t, "tank/data", dest).Volumes {
+		if data, ok := objects[v.ObjectName]; !ok || uint64(len(data)) != v.Size {
+			t.Errorf("manifest lists %s (%d bytes), the destination has %d bytes (present: %v)", v.ObjectName, v.Size, len(data), ok)
+		}
+	}
+	env.checkRestores(t, dest, "a", streamBytes)
+}
+
+// A destination added since the interrupted attempt has none of its volumes, so the resume
+// starts over, and the new destination gets the whole set.
+func TestE2EResumeWithNewDestinationStartsOver(t *testing.T) {
+	const streamBytes = 3 << 20
+	env := newE2EEnv(t)
+	env.interruptedSend(t, streamBytes, env.dest, "--volsize", "1")
+	other := filepath.Join(t.TempDir(), "other")
+	if err := os.Mkdir(other, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	logs, err := guarded(t, func() (string, error) {
+		return env.send("--volsize", "1", "--resume", "tank/data@a", "file://"+env.dest+",file://"+other)
+	})
+	if err != nil {
+		t.Fatalf("resume with an added destination: %v\n%s", err, logs)
+	}
+	for _, want := range []string{"missing at file://" + other, "Nothing verifiable to resume; starting over."} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("log lacks %q:\n%s", want, logs)
+		}
+	}
+	env.checkRestores(t, "file://"+other, "a", streamBytes)
+	env.checkRestores(t, "file://"+env.dest, "a", streamBytes)
+}
+
+func TestE2EResumeShortStreamFails(t *testing.T) {
+	env := newE2EEnv(t)
+	env.interruptedSend(t, 3<<20, env.dest, "--volsize", "1")
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(1<<20)) // shorter than what the cache says was sent
+
+	logs, err := guarded(t, func() (string, error) {
+		return env.send("--volsize", "1", "--resume", "tank/data@a", "file://"+env.dest)
+	})
+	if err == nil || !strings.Contains(logs, "zfs stream ended before") {
+		t.Errorf("resume against a short stream: got %v, want the short-stream error\n%s", err, logs)
+	}
+	if names := manifestNames(destObjects(t, env.dest)); len(names) != 0 {
+		t.Errorf("the failed resume uploaded manifests %q", names)
+	}
+}
