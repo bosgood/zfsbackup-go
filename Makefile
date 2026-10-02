@@ -84,3 +84,8 @@ plan:
 # the test binary standing in for zfs (internal/fakezfs).
 e2e:
 	go test -count=1 -run TestE2E -v .
+
+# Regenerate the OpenPGP keyring fixtures under testdata/pgp with the GnuPG
+# shipped in the Go image (see testdata/pgp/generate.sh).
+pgp-fixtures:
+	docker run --rm -v "$(PWD)":/src -w /src golang:$(GO_VERSION)-bookworm bash testdata/pgp/generate.sh
