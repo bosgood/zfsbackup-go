@@ -127,7 +127,22 @@ zfsbackup send $FLAGS $DS $URI
 ```
 
 A full backup can take hours. If it is interrupted, rerun it with `--resume`
-and the same flags. Then schedule the same command daily or weekly. The exit
+and the same flags. A failed upload or a failed `zfs send` makes `send` exit
+non-zero and release its lock; it never uploads a manifest for a partial set.
+`--resume` continues from the local cache, but first checks that every volume
+it would skip still exists at every destination: it resumes from the first
+volume missing anywhere (`Volume ... missing at ...; it and later volumes will
+be re-sent`) and starts over when none can be verified, for example after
+adding a destination. Then schedule the same command daily or weekly.
+
+What `send` refuses to do:
+
+- overwrite a backup set whose manifest is already at any destination
+  (`backup set ... already exists ...; refusing to overwrite it`); an explicit
+  `--full` of a monthly that is already backed up as a full is a no-op
+  (`Nothing new to back up.`, exit 0);
+- skip volumes on `--resume` that it cannot see at every destination;
+- resume against a `zfs send` stream shorter than the cached manifest records. The exit
 status is 0 both when it uploads a backup and when there is nothing new
 (`Nothing new to back up.`, the normal case on most runs), so any other status
 is a real failure.
