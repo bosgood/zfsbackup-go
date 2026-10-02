@@ -3,11 +3,15 @@ package files
 import (
 	"bytes"
 	"context"
+	"io"
 	"io/ioutil"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/packet"
 
 	"github.com/someone1/zfsbackup-go/config"
 	"github.com/someone1/zfsbackup-go/pgp"
@@ -132,5 +136,59 @@ func TestVolumePGPWrongKeyFails(t *testing.T) {
 	_, rsaSec := loadKeys(t, "rsa", "rsa@example.com")
 	if _, err := readVolume(testJob(rsaSec, nil), path); err == nil {
 		t.Fatal("decrypted with the wrong key")
+	}
+}
+
+// GnuPG does not emit RFC 9580 v6 keys, so this one is generated here:
+// Ed25519 (algo 27) primary with an X25519 (algo 25) subkey.
+func TestVolumePGPRoundTripV6Key(t *testing.T) {
+	config.BackupTempdir = t.TempDir()
+	const email = "v6@example.com"
+	e, err := openpgp.NewEntity("zfsbackup v6 test", "", email, &packet.Config{
+		V6Keys:    true,
+		Algorithm: packet.PubKeyAlgoEd25519,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	writeArmored := func(name, blockType string, serialize func(w io.Writer) error) {
+		var b bytes.Buffer
+		w, aerr := armor.Encode(&b, blockType, nil)
+		if aerr != nil {
+			t.Fatal(aerr)
+		}
+		if aerr = serialize(w); aerr != nil {
+			t.Fatal(aerr)
+		}
+		w.Close()
+		if aerr = ioutil.WriteFile(filepath.Join(dir, name), b.Bytes(), 0600); aerr != nil {
+			t.Fatal(aerr)
+		}
+	}
+	writeArmored("v6-public.asc", openpgp.PublicKeyType, e.Serialize)
+	writeArmored("v6-secret.asc", openpgp.PrivateKeyType, func(w io.Writer) error { return e.SerializePrivate(w, nil) })
+	if err = pgp.LoadPublicRing(filepath.Join(dir, "v6-public.asc")); err != nil {
+		t.Fatal(err)
+	}
+	if err = pgp.LoadPrivateRing(filepath.Join(dir, "v6-secret.asc")); err != nil {
+		t.Fatal(err)
+	}
+	pub, sec := pgp.GetPublicKeyByEmail(email), pgp.GetPrivateKeyByEmail(email)
+	if pub == nil || sec == nil {
+		t.Fatal("v6 key not found after loading")
+	}
+	if pub.PrimaryKey.Version != 6 || pub.PrimaryKey.PubKeyAlgo != packet.PubKeyAlgoEd25519 {
+		t.Fatalf("primary key is v%d algo %d, want v6 Ed25519", pub.PrimaryKey.Version, pub.PrimaryKey.PubKeyAlgo)
+	}
+
+	payload := bytes.Repeat([]byte("v6 "), 4096)
+	path := writeVolume(t, testJob(pub, sec), payload)
+	got, err := readVolume(testJob(sec, pub), path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("payload mismatch: got %d bytes, want %d", len(got), len(payload))
 	}
 }
