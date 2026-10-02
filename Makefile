@@ -89,3 +89,14 @@ e2e:
 # shipped in the Go image (see testdata/pgp/generate.sh).
 pgp-fixtures:
 	docker run --rm -v "$(PWD)":/src -w /src golang:$(GO_VERSION)-bookworm bash testdata/pgp/generate.sh
+
+# Dependencies are vendored and this host cannot reach proxy.golang.org, so
+# module operations run in the Go image. Usage:
+#   make vendor                                  # go mod tidy && go mod vendor
+#   make vendor GOGET=github.com/x/y@v1.2.3      # go get first, then tidy+vendor
+GOGET ?=
+.PHONY: vendor
+vendor:
+	docker run --rm -v "$(PWD)":/src -v /tmp/zfsb-gomodcache:/go/pkg/mod -w /src \
+		-e GOFLAGS=-mod=mod golang:$(GO_VERSION)-bookworm \
+		bash -c 'set -e; if [ -n "$(GOGET)" ]; then go get $(GOGET); fi; go mod tidy; go mod vendor'
