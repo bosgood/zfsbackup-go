@@ -34,6 +34,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cenkalti/backoff"
@@ -571,9 +572,8 @@ func saveManifest(ctx context.Context, j *files.JobInfo, final bool) (*files.Vol
 }
 
 // nolint:funlen,gocyclo // Difficult to break this apart
-func sendStream(ctx context.Context, j *files.JobInfo, c chan<- *files.VolumeInfo, buffer <-chan bool) error {
-	var group *errgroup.Group
-	group, ctx = errgroup.WithContext(ctx)
+func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeInfo, buffer <-chan bool) error {
+	group, ctx := errgroup.WithContext(pctx)
 
 	buf := bytes.NewBuffer(nil)
 	cmd := zfs.GetZFSSendCommand(ctx, j)
@@ -584,6 +584,19 @@ func sendStream(ctx context.Context, j *files.JobInfo, c chan<- *files.VolumeInf
 	usingPipe := false
 	if j.MaxFileBuffer == 0 {
 		usingPipe = true
+	}
+
+	// With pipes, a volume's writer (below) and its uploader block on each other: once the
+	// pipeline fails, abort the volume in flight so whichever side is still waiting gets an error.
+	// Watch pctx: group's ctx is also cancelled by a successful Wait, while the last volume uploads.
+	var current atomic.Pointer[files.VolumeInfo]
+	if usingPipe {
+		stop := context.AfterFunc(pctx, func() {
+			if volume := current.Load(); volume != nil {
+				volume.Abort(pctx.Err())
+			}
+		})
+		defer stop()
 	}
 
 	group.Go(func() error {
@@ -642,6 +655,10 @@ func sendStream(ctx context.Context, j *files.JobInfo, c chan<- *files.VolumeInf
 				log.AppLogger.Debugf("Starting volume %s", volume.ObjectName)
 				volNum++
 				if usingPipe {
+					current.Store(volume)
+					if pctx.Err() != nil { // the AfterFunc may have run before the Store
+						volume.Abort(pctx.Err())
+					}
 					select {
 					case c <- volume:
 					case <-ctx.Done():
@@ -717,6 +734,10 @@ func sendStream(ctx context.Context, j *files.JobInfo, c chan<- *files.VolumeInf
 	err = group.Wait()
 	if err != nil {
 		log.AppLogger.Errorf("Error waiting for zfs command to finish - %v", err)
+		// The deferred stop runs before the caller's group cancels pctx, so abort here too.
+		if volume := current.Load(); volume != nil {
+			volume.Abort(err)
+		}
 		return err
 	}
 	log.AppLogger.Infof("zfs send completed without error")
@@ -944,12 +965,19 @@ func volUploadWrapper(ctx context.Context, b backends.Backend, vol *files.Volume
 			log.AppLogger.Debugf("%s: Error while opening volume %s - %v", prefix, vol.ObjectName, err)
 			return err
 		}
-		defer vol.Close()
 
 		err := b.Upload(ctx, vol)
 		if err != nil {
 			log.AppLogger.Debugf("%s: Error while uploading volume %s - %v", prefix, vol.ObjectName, err)
+			if vol.IsUsingPipe() {
+				// The splitter may still be writing this volume: fail its writes rather than Close,
+				// which would flush into a pipe nobody reads. A retry would read on from wherever
+				// this attempt stopped consuming the pipe, so there is none.
+				vol.Abort(err)
+				return backoff.Permanent(err)
+			}
 		}
+		vol.Close()
 		return err
 	}
 }

@@ -89,6 +89,8 @@ type VolumeInfo struct {
 	// Pipe Objects
 	pw *io.PipeWriter
 	pr *io.PipeReader
+	// abort fails both ends of the pipe; unlike pw and pr it is never cleared, so Abort may race Close.
+	abort func(error)
 	// (de)compressor objects
 	cw  io.WriteCloser
 	rw  io.ReadCloser
@@ -139,6 +141,15 @@ func (v *VolumeInfo) Read(p []byte) (int, error) {
 // IsUsingPipe will return true when the volume is a glorified pipe
 func (v *VolumeInfo) IsUsingPipe() bool {
 	return v.usingPipe
+}
+
+// Abort makes a blocked or later read or write of a piped volume fail with err, so neither the
+// zfs stream splitter nor an uploader waits forever on an end the other has given up. No-op for
+// volumes backed by a file.
+func (v *VolumeInfo) Abort(err error) {
+	if v.abort != nil {
+		v.abort(err)
+	}
 }
 
 // Seek will passthru the command to the underlying *os.File
@@ -535,6 +546,11 @@ func CreateSimpleVolume(ctx context.Context, pipe bool) (*VolumeInfo, error) {
 
 	if pipe {
 		v.pr, v.pw = io.Pipe()
+		pr, pw := v.pr, v.pw
+		v.abort = func(err error) {
+			pw.CloseWithError(err)
+			pr.CloseWithError(err)
+		}
 		v.r = v.pr
 		v.w = v.pw
 		v.isOpened = true

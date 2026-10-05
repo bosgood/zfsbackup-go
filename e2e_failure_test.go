@@ -280,6 +280,50 @@ func TestE2EZFSSendFailureExits(t *testing.T) {
 	env.checkRestores(t, dest, "a", streamBytes)
 }
 
+// With --maxFileBuffer 0 each volume is a pipe between the zfs stream splitter and the uploader:
+// whichever side fails, the other must not wait on the pipe forever.
+func TestE2EStreamingUploadFailureExits(t *testing.T) {
+	env := newE2EEnv(t)
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	if err := ioutil.WriteFile(filepath.Join(env.dest, "tank"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := guarded(t, func() (string, error) {
+		return env.send("--maxFileBuffer", "0", "--maxRetryTime", "2s", "--maxBackoffTime", "1s", "tank/data@a", "file://"+env.dest)
+	})
+	if err == nil {
+		t.Fatalf("send succeeded although no volume could be uploaded:\n%s", logs)
+	}
+	if _, serr := os.Stat(lockFile("tank/data")); !os.IsNotExist(serr) {
+		t.Errorf("lock file %s left behind (stat: %v)", lockFile("tank/data"), serr)
+	}
+	if names := manifestNames(destObjects(t, env.dest)); len(names) != 0 {
+		t.Errorf("a failed send uploaded manifests %q", names)
+	}
+}
+
+func TestE2EStreamingZFSSendFailureExits(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(4<<20))
+	t.Setenv("FAKEZFS_FAIL_AFTER_BYTES", fmt.Sprint(5<<19))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	logs, err := guarded(t, func() (string, error) {
+		return env.send(
+			"--maxFileBuffer", "0", "--volsize", "1", "--compressor", "", "--maxRetryTime", "2s", "--maxBackoffTime", "1s",
+			"tank/data@a", "file://"+env.dest,
+		)
+	})
+	if err == nil {
+		t.Fatalf("send succeeded although zfs send failed:\n%s", logs)
+	}
+	if _, serr := os.Stat(lockFile("tank/data")); !os.IsNotExist(serr) {
+		t.Errorf("lock file %s left behind (stat: %v)", lockFile("tank/data"), serr)
+	}
+	if names := manifestNames(destObjects(t, env.dest)); len(names) != 0 {
+		t.Errorf("a failed send uploaded manifests %q", names)
+	}
+}
+
 // interruptedSend leaves the state an interrupted send of tank/data@a leaves behind: volumes at
 // dest and a cached manifest listing them, but no manifest at dest. (It sends to completion,
 // then deletes the final manifest at dest; the cached copy lists every volume.)
