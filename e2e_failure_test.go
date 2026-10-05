@@ -39,6 +39,7 @@ import (
 
 	"github.com/op/go-logging"
 
+	"github.com/someone1/zfsbackup-go/backup"
 	"github.com/someone1/zfsbackup-go/cmd"
 	"github.com/someone1/zfsbackup-go/files"
 	"github.com/someone1/zfsbackup-go/internal/fakezfs"
@@ -546,5 +547,47 @@ func TestE2EFailedSendLeavesNoWaiter(t *testing.T) {
 	}
 	if g := parked(); g != "" {
 		t.Errorf("a failed send left a goroutine waiting on the volume counter:\n%s", g)
+	}
+}
+
+// A stream that fails must never be followed by a final manifest, however long sendStream takes
+// to return its error after the splitter gave up (the hook widens that window).
+func TestE2EFailedStreamPublishesNoManifest(t *testing.T) {
+	backup.TestHookStreamFailed = func() { time.Sleep(200 * time.Millisecond) }
+	defer func() { backup.TestHookStreamFailed = nil }()
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(4<<20))
+	t.Setenv("FAKEZFS_FAIL_AFTER_BYTES", fmt.Sprint(5<<19))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	logs, err := guarded(t, func() (string, error) {
+		return env.send("--volsize", "1", "--compressor", "", "--maxRetryTime", "2s", "--maxBackoffTime", "1s", "tank/data@a", "file://"+env.dest)
+	})
+	if err == nil {
+		t.Errorf("send succeeded although zfs send failed:\n%s", logs)
+	}
+	if names := manifestNames(destObjects(t, env.dest)); len(names) != 0 {
+		t.Errorf("a failed send published manifests %q", names)
+	}
+	for _, m := range env.cachedManifests(t) {
+		if !m.EndTime.IsZero() {
+			t.Errorf("a failed send finalized its cached manifest (%d volumes)", len(m.Volumes))
+		}
+	}
+}
+
+// The final manifest records the stream's length, however late sendStream records it.
+func TestSendRecordsStreamBytes(t *testing.T) {
+	const streamBytes = 3 << 20
+	backup.TestHookBeforeStreamBytes = func() { time.Sleep(200 * time.Millisecond) }
+	defer func() { backup.TestHookBeforeStreamBytes = nil }()
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(streamBytes))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	dest := "file://" + env.dest
+	if logs, err := guarded(t, func() (string, error) { return env.send("--volsize", "1", "tank/data@a", dest) }); err != nil {
+		t.Fatalf("send: %v\n%s", err, logs)
+	}
+	if got := newestBackup(t, "tank/data", dest).ZFSStreamBytes; got != streamBytes {
+		t.Errorf("manifest records ZFSStreamBytes=%d, want %d", got, streamBytes)
 	}
 }

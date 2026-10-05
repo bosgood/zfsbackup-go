@@ -55,6 +55,15 @@ var (
 	manifestmutex sync.Mutex
 )
 
+// Test hooks, nil outside tests. They widen race windows in sendStream that are otherwise
+// too narrow to hit reliably.
+var (
+	// TestHookStreamFailed runs when sendStream is about to return an error.
+	TestHookStreamFailed func()
+	// TestHookBeforeStreamBytes runs when sendStream is about to record the stream's length.
+	TestHookBeforeStreamBytes func()
+)
+
 // ProcessSmartOptions will compute the snapshots to use
 func ProcessSmartOptions(ctx context.Context, jobInfo *files.JobInfo) error {
 	snapshots, err := zfs.GetSnapshotsAndBookmarks(context.Background(), jobInfo.VolumeName)
@@ -730,7 +739,8 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 
 	group.Go(func() error {
 		var lastTotalBytes uint64
-		defer close(c)
+		// c is closed by sendStream, once the whole stream is known good: closing it here, on a
+		// failure, would let the caller finalize the volumes sent so far as a complete set.
 		// If we stop reading early, make zfs send's output copy fail instead of blocking forever.
 		defer cin.Close()
 		var err error
@@ -867,12 +877,19 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 		if volume := current.Load(); volume != nil {
 			volume.Abort(err)
 		}
+		if TestHookStreamFailed != nil {
+			TestHookStreamFailed()
+		}
 		return err
 	}
 	log.AppLogger.Infof("zfs send completed without error")
+	if TestHookBeforeStreamBytes != nil {
+		TestHookBeforeStreamBytes()
+	}
 	manifestmutex.Lock()
 	j.ZFSStreamBytes = counter.Count()
 	manifestmutex.Unlock()
+	close(c)
 	return nil
 }
 
@@ -1053,6 +1070,10 @@ func retryUploadChainer(
 						return nil
 					}
 					vol = v
+				}
+				// The manifest makes the set final: never upload it for a pipeline that has failed.
+				if vol.IsManifest && ctx.Err() != nil {
+					return ctx.Err()
 				}
 				log.AppLogger.Debugf("%s backend: Processing volume %s", prefix, vol.ObjectName)
 				// Prepare the backoff retryer (forces the user configured retry options across all backends)
