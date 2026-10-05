@@ -352,3 +352,55 @@ func TestE2EResumeIgnoresTruncatedPartial(t *testing.T) {
 	env.sendOK(t, append(args, "--resume", "tank/data@a", dest)...)
 	env.checkRestores(t, dest, "a", streamBytes)
 }
+
+// A manifest upload that failed at one destination leaves it one set behind. The next smart run,
+// as cron starts it (no --resume), completes the set there instead of failing every run.
+func TestE2ESmartCompletesPartialWithoutResume(t *testing.T) {
+	for _, volumesThere := range []bool{true, false} {
+		t.Run(fmt.Sprintf("volumes at dest2=%v", volumesThere), func(t *testing.T) {
+			smartCompletesPartial(t, volumesThere)
+		})
+	}
+}
+
+// smartCompletesPartial: without its volumes there, dest2 diverged some other way, and smart
+// mode must not try to complete the set there (which would fail every run).
+func smartCompletesPartial(t *testing.T, volumesThere bool) {
+	env := newE2EEnv(t)
+	dest2 := newDest(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(3<<20))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	blocker := filepath.Join(dest2, "manifests|tank")
+	if err := ioutil.WriteFile(blocker, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	dests := "file://" + env.dest + ",file://" + dest2
+	common := []string{"--volsize", "1", "--maxRetryTime", "2s", "--maxBackoffTime", "1s"}
+	// Explicit: the blocker would also fail a smart run's planning, which reads the manifests.
+	if logs, err := guarded(t, func() (string, error) { return env.send(append(common, "tank/data@a", dests)...) }); err == nil {
+		t.Fatalf("send succeeded although the manifest upload to dest2 failed:\n%s", logs)
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	if names := manifestNames(destObjects(t, dest2)); len(names) != 0 {
+		t.Fatalf("dest2 has manifests %q before the smart run", names)
+	}
+	if !volumesThere {
+		dropVolumesFrom(t, dest2, 1)
+		logs, err := guarded(t, func() (string, error) {
+			return env.send(append(common, "--fullIfOlderThan", "720h", "tank/data", dests)...)
+		})
+		if err == nil || !strings.Contains(err.Error(), "destinations are out of sync") || strings.Contains(logs, "cannot complete") {
+			t.Errorf("smart run with dest2 diverged: got %v, want the out-of-sync error, no completion attempt:\n%s", err, logs)
+		}
+		return
+	}
+
+	env.sendOK(t, append(common, "--fullIfOlderThan", "720h", "tank/data", dests)...)
+	names := manifestNames(destObjects(t, dest2))
+	if len(names) != 1 {
+		t.Fatalf("dest2 has manifests %q, want the completed set's", names)
+	}
+	env.checkRestores(t, "file://"+dest2, "a", 3<<20)
+}

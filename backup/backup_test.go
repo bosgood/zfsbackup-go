@@ -387,7 +387,7 @@ func TestSelectSmartSnapshots(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			logs := captureLogs(t)
 			ji := tc.jobInfo
-			err := selectSmartSnapshots(&ji, tc.snapshots, tc.destBackups)
+			err := selectSmartSnapshots(&ji, tc.snapshots, tc.destBackups, ji.Resume)
 			if tc.wantErr != nil || tc.wantErrCont != "" {
 				if err == nil {
 					t.Fatalf("got nil error, want one")

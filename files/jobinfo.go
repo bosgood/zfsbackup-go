@@ -73,6 +73,9 @@ type JobInfo struct {
 	Properties              bool
 	IntermediaryIncremental bool
 	Resume                  bool `json:"-"`
+	// CompletePartial is set when smart options planned a set that some destinations already
+	// have: Backup copies its manifest to the rest instead of sending it (as --resume would).
+	CompletePartial bool `json:"-"`
 	// "Smart" Options
 	Full            bool          `json:"-"`
 	Incremental     bool          `json:"-"`

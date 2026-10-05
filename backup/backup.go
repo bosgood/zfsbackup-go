@@ -85,7 +85,58 @@ func ProcessSmartOptions(ctx context.Context, jobInfo *files.JobInfo) error {
 		}
 	}
 
-	return selectSmartSnapshots(jobInfo, snapshots, destBackups)
+	completable := jobInfo.Resume
+	if partial := partialSet(destBackups); partial != nil && !completable {
+		if completable, err = partialVolumesPresent(ctx, jobInfo, partial, destBackups); err != nil {
+			return err
+		}
+	}
+	return selectSmartSnapshots(jobInfo, snapshots, destBackups, completable)
+}
+
+// partialVolumesPresent reports whether every destination that lacks the backup set partial has
+// an object named like each of its volumes: the trace of a send whose manifest upload failed
+// there, rather than of destinations that diverged. Backup checks the volumes' contents.
+func partialVolumesPresent(ctx context.Context, jobInfo *files.JobInfo, partial *files.JobInfo, destBackups [][]*files.JobInfo) (bool, error) {
+	if len(partial.Volumes) == 0 {
+		return false, nil
+	}
+	prefix := partial.Volumes[0].ObjectName
+	for _, vol := range partial.Volumes[1:] {
+		for !strings.HasPrefix(vol.ObjectName, prefix) {
+			prefix = prefix[:len(prefix)-1]
+		}
+	}
+	for idx, backups := range destBackups {
+		if len(backups) > 0 && sameSets(backups[:1], []*files.JobInfo{partial}) {
+			continue
+		}
+		backend, err := prepareBackend(ctx, jobInfo, jobInfo.Destinations[idx], nil)
+		if err != nil {
+			return false, err
+		}
+		listed, err := backend.List(ctx, prefix)
+		if cerr := backend.Close(); cerr != nil {
+			log.AppLogger.Warningf("Could not properly close backend due to error - %v", cerr)
+		}
+		if err != nil {
+			return false, err
+		}
+		present := make(map[string]bool, len(listed))
+		for _, name := range listed {
+			present[name] = true
+		}
+		for _, vol := range partial.Volumes {
+			if !present[vol.ObjectName] {
+				log.AppLogger.Infof(
+					"Destination #%d lacks %s, a volume of the set it is behind on; not completing that set there.",
+					idx+1, vol.ObjectName,
+				)
+				return false, nil
+			}
+		}
+	}
+	return true, nil
 }
 
 // snapshotMatches reports whether a snapshot is eligible as a backup base given
@@ -117,8 +168,10 @@ func newestMatchingSnapshot(snapshots []files.SnapshotInfo, prefix, suffix strin
 // selectSmartSnapshots applies the smart backup plan (see planSmartSnapshots)
 // to jobInfo: it sets BaseSnapshot, and IncrementalSnapshot for an incremental
 // backup. It returns ErrNoOp when there is nothing new to send.
-func selectSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, destBackups [][]*files.JobInfo) error {
-	p, err := planSmartSnapshots(jobInfo, snapshots, destBackups)
+func selectSmartSnapshots(
+	jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, destBackups [][]*files.JobInfo, completable bool,
+) error {
+	p, err := planSmartSnapshots(jobInfo, snapshots, destBackups, completable)
 	if err != nil {
 		return err
 	}
@@ -143,6 +196,7 @@ func selectSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo
 		return ErrNoOp
 	}
 	jobInfo.BaseSnapshot = p.Base
+	jobInfo.CompletePartial = p.Reason == reasonCompletePartial
 	if p.Action == PlanIncremental {
 		jobInfo.IncrementalSnapshot = p.Source
 	}
@@ -693,7 +747,7 @@ func refuseExistingSet(ctx context.Context, jobInfo *files.JobInfo, destinations
 			"backup set %s already exists at %s; refusing to overwrite it. Delete it at the destination to send it again",
 			name, destinations[have[0]],
 		)
-	case !jobInfo.Resume:
+	case !jobInfo.Resume && !jobInfo.CompletePartial:
 		err = fmt.Errorf(
 			"backup set %s already exists at %s but not at %s; refusing to overwrite it. Run again with --resume to copy its manifest to %s",
 			name, destinations[have[0]], destinations[missing[0]], destinations[missing[0]],

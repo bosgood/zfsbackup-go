@@ -91,7 +91,9 @@ func (p Plan) String() string {
 // (e.g. "_daily"). With both suffixes empty this preserves the historical
 // behavior of using the single newest matching snapshot for everything.
 // nolint:funlen,gocyclo // Difficult to break this up
-func planSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, destBackups [][]*files.JobInfo) (Plan, error) {
+func planSmartSnapshots(
+	jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, destBackups [][]*files.JobInfo, completable bool,
+) (Plan, error) {
 	if len(snapshots) == 0 {
 		return Plan{}, fmt.Errorf("no snapshots found")
 	}
@@ -128,8 +130,10 @@ func planSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, 
 	}
 
 	// A manifest upload that failed at some destinations leaves them one set behind the rest.
-	// --resume re-plans that set, and Backup completes it there instead of sending anything.
-	if partial := partialSet(destBackups); partial != nil && jobInfo.Resume {
+	// Re-plan that set: Backup completes it there, after checking every volume, instead of
+	// sending anything. completable says the lagging destinations hold its volumes (or --resume
+	// asked for it): otherwise they diverged some other way, and the planning below decides.
+	if partial := partialSet(destBackups); partial != nil && completable {
 		if partial.IncrementalSnapshot.Name == "" {
 			return Plan{Action: PlanFull, Base: partial.BaseSnapshot, Reason: reasonCompletePartial}, nil
 		}
@@ -161,7 +165,14 @@ func planSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, 
 	// Verify that all "comparable" snapshots are the same across destinations
 	for i := 1; i < len(lastComparableSnapshots); i++ {
 		if !lastComparableSnapshots[i-1].Equal(lastComparableSnapshots[i]) {
-			return Plan{}, fmt.Errorf("destinations are out of sync, cannot continue with smart option")
+			kind := "full backup"
+			if jobInfo.Incremental {
+				kind = "backup"
+			}
+			return Plan{}, fmt.Errorf(
+				"destinations are out of sync, cannot continue with smart option: destination #%d's last %s is %s, destination #%d's is %s",
+				i, kind, snapshotName(lastComparableSnapshots[i-1]), i+1, snapshotName(lastComparableSnapshots[i]),
+			)
 		}
 
 		if !lastNotEqual && !lastBackup[i-1].Equal(lastBackup[i]) {
@@ -322,7 +333,7 @@ func (s *Scenario) run(at time.Time, snapshots []files.SnapshotInfo, dest [][]*f
 		FullSnapshotSuffix:        s.JobInfo.FullSnapshotSuffix,
 		IncrementalSnapshotSuffix: s.JobInfo.IncrementalSnapshotSuffix,
 	}
-	plan, err := planSmartSnapshots(&jobInfo, snapshots, dest)
+	plan, err := planSmartSnapshots(&jobInfo, snapshots, dest, false)
 	if err == nil && plan.Action != PlanNoop {
 		for i := range dest {
 			dest[i] = addManifest(dest[i], manifestFor(s.Volume, plan))
@@ -579,6 +590,14 @@ func partialSet(destBackups [][]*files.JobInfo) *files.JobInfo {
 		return nil
 	}
 	return leader[0]
+}
+
+// snapshotName is s's name, or "none".
+func snapshotName(s *files.SnapshotInfo) string {
+	if s == nil {
+		return "none"
+	}
+	return s.Name
 }
 
 // sameSets reports whether a and b list the same backup sets in the same order.

@@ -148,6 +148,7 @@ func TestPlanSmartSnapshotsReasons(t *testing.T) {
 		jobInfo     files.JobInfo
 		snapshots   []files.SnapshotInfo
 		destBackups [][]*files.JobInfo
+		completable bool // the lagging destination holds the partial set's volumes
 		want        Plan
 		wantErr     string
 	}{
@@ -330,11 +331,31 @@ func TestPlanSmartSnapshotsReasons(t *testing.T) {
 			want: Plan{Action: PlanIncremental, Base: snap("s2", day(2)), Source: snap("s1", day(1)), Reason: "complete-partial"},
 		},
 		{
+			// Completing copies a manifest and sends nothing, so it needs no --resume (Decision 4),
+			// once the lagging destination is known to hold the set's volumes.
+			name:        "smart, full missing at one destination, its volumes there",
+			jobInfo:     files.JobInfo{FullIfOlderThan: 720 * time.Hour},
+			completable: true,
+			snapshots:   []files.SnapshotInfo{snap("s2", day(2)), snap("s1", day(1))},
+			destBackups: [][]*files.JobInfo{{}, {fullManifest(snap("s1", day(1)))}},
+			want:        Plan{Action: PlanFull, Base: snap("s1", day(1)), Reason: "complete-partial"},
+		},
+		{
 			name:        "smart, full missing at one destination, not resuming",
 			jobInfo:     files.JobInfo{FullIfOlderThan: 720 * time.Hour},
 			snapshots:   []files.SnapshotInfo{snap("s2", day(2)), snap("s1", day(1))},
 			destBackups: [][]*files.JobInfo{{}, {fullManifest(snap("s1", day(1)))}},
-			wantErr:     "destinations are out of sync, cannot continue with smart option",
+			wantErr: "destinations are out of sync, cannot continue with smart option: destination #1's last full backup is none, " +
+				"destination #2's is s1",
+		},
+		{
+			// Not one set behind: two different fulls. The error says which destination holds what.
+			name:        "smart, destinations hold different fulls",
+			jobInfo:     files.JobInfo{FullIfOlderThan: 720 * time.Hour},
+			snapshots:   []files.SnapshotInfo{snap("s2", day(2)), snap("s1", day(1))},
+			destBackups: [][]*files.JobInfo{{fullManifest(snap("s2", day(2)))}, {fullManifest(snap("s1", day(1)))}},
+			wantErr: "destinations are out of sync, cannot continue with smart option: destination #1's last full backup is s2, " +
+				"destination #2's is s1",
 		},
 		{
 			name:        "smart, in sync, resuming",
@@ -362,7 +383,7 @@ func TestPlanSmartSnapshotsReasons(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ji := tc.jobInfo
-			got, err := planSmartSnapshots(&ji, tc.snapshots, tc.destBackups)
+			got, err := planSmartSnapshots(&ji, tc.snapshots, tc.destBackups, ji.Resume || tc.completable)
 			if tc.wantErr != "" {
 				if err == nil || err.Error() != tc.wantErr {
 					t.Fatalf("got %+v, %v; want error %q", got, err, tc.wantErr)

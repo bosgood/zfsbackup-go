@@ -1,3 +1,3 @@
-next  ERROR  destinations are out of sync, cannot continue with smart option
+next  ERROR  destinations are out of sync, cannot continue with smart option: destination #1's last full backup is autosnap_2026-09-01_00:00:00_monthly, destination #2's is autosnap_2026-08-01_00:00:00_monthly
 checks: 1 violation(s)
-  no-errors  destinations are out of sync, cannot continue with smart option
+  no-errors  destinations are out of sync, cannot continue with smart option: destination #1's last full backup is autosnap_2026-09-01_00:00:00_monthly, destination #2's is autosnap_2026-08-01_00:00:00_monthly
