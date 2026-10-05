@@ -59,7 +59,7 @@ func AutoRestore(pctx context.Context, jobInfo *files.JobInfo) error {
 	target := jobInfo.Destinations[0]
 	backend, berr := prepareBackend(ctx, jobInfo, target, nil)
 	if berr != nil {
-		log.AppLogger.Errorf("Could not initialize backend for target %s due to error - %v.", target, berr)
+		log.AppLogger.Errorf("Could not initialize backend for target %s due to error - %v.", backends.RedactURI(target), berr)
 		return berr
 	}
 	defer backend.Close()
@@ -67,14 +67,14 @@ func AutoRestore(pctx context.Context, jobInfo *files.JobInfo) error {
 	// Get the local cache dir
 	localCachePath, cerr := getCacheDir(jobInfo.Destinations[0])
 	if cerr != nil {
-		log.AppLogger.Errorf("Could not get cache dir for target %s due to error - %v.", target, cerr)
+		log.AppLogger.Errorf("Could not get cache dir for target %s due to error - %v.", backends.RedactURI(target), cerr)
 		return cerr
 	}
 
 	// Sync the local cache
 	safeManifests, _, serr := syncCache(ctx, jobInfo, localCachePath, backend)
 	if serr != nil {
-		log.AppLogger.Errorf("Could not sync cache dir for target %s due to error - %v.", target, serr)
+		log.AppLogger.Errorf("Could not sync cache dir for target %s due to error - %v.", backends.RedactURI(target), serr)
 		return serr
 	}
 
@@ -200,7 +200,7 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 	// Prepare the backend client
 	backend, berr := prepareBackend(ctx, jobInfo, target, nil)
 	if berr != nil {
-		log.AppLogger.Errorf("Could not initialize backend for target %s due to error - %v.", target, berr)
+		log.AppLogger.Errorf("Could not initialize backend for target %s due to error - %v.", backends.RedactURI(target), berr)
 		return berr
 	}
 	defer backend.Close()
@@ -208,7 +208,7 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 	// Get the local cache dir
 	localCachePath, cerr := getCacheDir(target)
 	if cerr != nil {
-		log.AppLogger.Errorf("Could not get cache dir for target %s due to error - %v.", target, cerr)
+		log.AppLogger.Errorf("Could not get cache dir for target %s due to error - %v.", backends.RedactURI(target), cerr)
 		return cerr
 	}
 

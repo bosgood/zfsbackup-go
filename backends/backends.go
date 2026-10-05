@@ -186,3 +186,19 @@ func CanonicalURI(uri string) string {
 	}
 	return scheme + "://" + bucket
 }
+
+// RedactURI drops the userinfo ("user[:password]@") from a URI, for logs and error messages.
+func RedactURI(uri string) string {
+	scheme, rest, ok := strings.Cut(uri, "://")
+	if !ok {
+		return uri
+	}
+	authority, path, hasPath := strings.Cut(rest, "/")
+	if at := strings.LastIndex(authority, "@"); at >= 0 {
+		authority = authority[at+1:]
+	}
+	if !hasPath {
+		return scheme + "://" + authority
+	}
+	return scheme + "://" + authority + "/" + path
+}

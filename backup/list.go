@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/someone1/zfsbackup-go/backends"
 	"github.com/someone1/zfsbackup-go/config"
 	"github.com/someone1/zfsbackup-go/files"
 	"github.com/someone1/zfsbackup-go/log"
@@ -48,7 +49,7 @@ func List(pctx context.Context, jobInfo *files.JobInfo, startswith string, befor
 	target := jobInfo.Destinations[0]
 	backend, berr := prepareBackend(ctx, jobInfo, target, nil)
 	if berr != nil {
-		log.AppLogger.Errorf("Could not initialize backend for target %s due to error - %v.", target, berr)
+		log.AppLogger.Errorf("Could not initialize backend for target %s due to error - %v.", backends.RedactURI(target), berr)
 		return berr
 	}
 	defer backend.Close()
@@ -56,14 +57,14 @@ func List(pctx context.Context, jobInfo *files.JobInfo, startswith string, befor
 	// Get the local cache dir
 	localCachePath, cerr := getCacheDir(jobInfo.Destinations[0])
 	if cerr != nil {
-		log.AppLogger.Errorf("Could not get cache dir for target %s due to error - %v.", target, cerr)
+		log.AppLogger.Errorf("Could not get cache dir for target %s due to error - %v.", backends.RedactURI(target), cerr)
 		return cerr
 	}
 
 	// Sync the local cache
 	safeManifests, localOnlyFiles, serr := syncCache(ctx, jobInfo, localCachePath, backend)
 	if serr != nil {
-		log.AppLogger.Errorf("Could not sync cache dir for target %s due to error - %v.", target, serr)
+		log.AppLogger.Errorf("Could not sync cache dir for target %s due to error - %v.", backends.RedactURI(target), serr)
 		return serr
 	}
 

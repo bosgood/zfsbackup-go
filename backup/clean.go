@@ -32,6 +32,7 @@ import (
 	"github.com/cenkalti/backoff"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/someone1/zfsbackup-go/backends"
 	"github.com/someone1/zfsbackup-go/files"
 	"github.com/someone1/zfsbackup-go/log"
 )
@@ -58,7 +59,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	target := jobInfo.Destinations[0]
 	backend, berr := prepareBackend(ctx, jobInfo, target, nil)
 	if berr != nil {
-		log.AppLogger.Errorf("Could not initialize backend for target %s due to error - %v.", target, berr)
+		log.AppLogger.Errorf("Could not initialize backend for target %s due to error - %v.", backends.RedactURI(target), berr)
 		return berr
 	}
 	defer backend.Close()
@@ -66,21 +67,21 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	// Get the local cache dir
 	localCachePath, cerr := getCacheDir(target)
 	if cerr != nil {
-		log.AppLogger.Errorf("Could not get cache dir for target %s due to error - %v.", target, cerr)
+		log.AppLogger.Errorf("Could not get cache dir for target %s due to error - %v.", backends.RedactURI(target), cerr)
 		return cerr
 	}
 
 	// Sync the local cache
 	safeManifests, localOnlyFiles, serr := syncCache(ctx, jobInfo, localCachePath, backend)
 	if serr != nil {
-		log.AppLogger.Errorf("Could not sync cache dir for target %s due to error - %v.", target, serr)
+		log.AppLogger.Errorf("Could not sync cache dir for target %s due to error - %v.", backends.RedactURI(target), serr)
 		return serr
 	}
 
 	// TODO: The following can be done in a much more efficient way (probably)
 	allObjects, err := backend.List(ctx, "")
 	if err != nil {
-		log.AppLogger.Errorf("Could not list objects in backend %s due to error - %v", target, err)
+		log.AppLogger.Errorf("Could not list objects in backend %s due to error - %v", backends.RedactURI(target), err)
 		return err
 	}
 

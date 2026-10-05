@@ -308,3 +308,21 @@ func BackendTest(ctx context.Context, prefix, uri string, skipPrefix bool, b Bac
 		})
 	}
 }
+
+func TestRedactURI(t *testing.T) {
+	testCases := map[string]string{
+		"ssh://user:secret@host:22/path": "ssh://host:22/path",
+		"ssh://user@host/path":           "ssh://host/path",
+		"ssh://host/path":                "ssh://host/path",
+		"s3://bucket/p@q/":               "s3://bucket/p@q/",
+		"s3://bucket":                    "s3://bucket",
+		"file:///tmp/dest":               "file:///tmp/dest",
+		"delete://":                      "delete://",
+		"notauri":                        "notauri",
+	}
+	for in, want := range testCases {
+		if got := RedactURI(in); got != want {
+			t.Errorf("RedactURI(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

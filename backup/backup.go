@@ -158,14 +158,14 @@ func getBackupsForTarget(ctx context.Context, volume, target string, jobInfo *fi
 	// Get the local cache dir
 	localCachePath, cerr := getCacheDir(target)
 	if cerr != nil {
-		log.AppLogger.Errorf("Could not get cache dir for target %s due to error - %v.", target, cerr)
+		log.AppLogger.Errorf("Could not get cache dir for target %s due to error - %v.", backends.RedactURI(target), cerr)
 		return nil, cerr
 	}
 
 	// Sync the local cache
 	safeManifests, _, serr := syncCache(ctx, jobInfo, localCachePath, backend)
 	if serr != nil {
-		log.AppLogger.Errorf("Could not sync cache dir for target %s due to error - %v.", target, serr)
+		log.AppLogger.Errorf("Could not sync cache dir for target %s due to error - %v.", backends.RedactURI(target), serr)
 		return nil, serr
 	}
 
@@ -241,6 +241,18 @@ func reportDryRun(ctx context.Context, jobInfo *files.JobInfo) error {
 
 // Backup will initiate a backup with the provided configuration.
 // nolint:funlen,gocyclo // Difficult to break this up
+// destination is one place a backup set is sent to: its URI and the backend initialized for it.
+// Keeping them in one value means a backend can never be reported, or cached, under another's URI.
+type destination struct {
+	uri     string
+	backend backends.Backend
+}
+
+// String is the URI as it may appear in logs.
+func (d destination) String() string {
+	return backends.RedactURI(d.uri)
+}
+
 func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	ctx, cancel := context.WithCancel(pctx)
 	defer cancel()
@@ -254,24 +266,24 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 
 	// Prepare the destinations first: refusing to overwrite a backup set and verifying a resume
 	// both need them, and neither may touch the cache when it fails.
-	var usedBackends []backends.Backend
+	var dests []destination
 	defer func() {
 		log.AppLogger.Debugf("Cleaning up resources...")
-		for _, backend := range usedBackends {
-			if cerr := backend.Close(); cerr != nil {
+		for _, d := range dests {
+			if cerr := d.backend.Close(); cerr != nil {
 				log.AppLogger.Warningf("Could not properly close backend due to error - %v", cerr)
 			}
 		}
 	}()
-	for _, destination := range jobInfo.Destinations {
-		backend, berr := prepareBackend(ctx, jobInfo, destination, uploadBuffer)
+	for _, uri := range jobInfo.Destinations {
+		backend, berr := prepareBackend(ctx, jobInfo, uri, uploadBuffer)
 		if berr != nil {
 			log.AppLogger.Errorf("Could not initialize backend due to error - %v.", berr)
 			return berr
 		}
-		usedBackends = append(usedBackends, backend)
-		if _, cerr := getCacheDir(destination); cerr != nil {
-			log.AppLogger.Errorf("Could not create cache for destination %s due to error - %v.", destination, cerr)
+		dests = append(dests, destination{uri: uri, backend: backend})
+		if _, cerr := getCacheDir(uri); cerr != nil {
+			log.AppLogger.Errorf("Could not create cache for destination %s due to error - %v.", backends.RedactURI(uri), cerr)
 			return cerr
 		}
 	}
@@ -301,12 +313,12 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 
 	// Only now, holding the lock: checked any earlier, an overlapping send of the same set
 	// could finish between the check and the lock, and this one would then overwrite it.
-	if done, err := refuseExistingSet(ctx, jobInfo, usedBackends); err != nil || done {
+	if done, err := refuseExistingSet(ctx, jobInfo, dests); err != nil || done {
 		return err
 	}
 
 	if jobInfo.Resume {
-		if err := tryResume(ctx, jobInfo, usedBackends); err != nil {
+		if err := tryResume(ctx, jobInfo, dests); err != nil {
 			return err
 		}
 	}
@@ -382,19 +394,19 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	channels = append(channels, stepCh)
 
 	if jobInfo.MaxFileBuffer != 0 {
-		destination := backends.DeleteBackendPrefix + "://"
-		backend, berr := prepareBackend(ctx, jobInfo, destination, uploadBuffer)
+		uri := backends.DeleteBackendPrefix + "://"
+		backend, berr := prepareBackend(ctx, jobInfo, uri, uploadBuffer)
 		if berr != nil {
 			log.AppLogger.Errorf("Could not initialize backend due to error - %v.", berr)
 			return berr
 		}
-		jobInfo.Destinations = append(jobInfo.Destinations, destination)
-		usedBackends = append(usedBackends, backend)
+		jobInfo.Destinations = append(jobInfo.Destinations, uri)
+		dests = append(dests, destination{uri: uri, backend: backend})
 	}
 
 	// Setup plumbing
-	for idx, backend := range usedBackends {
-		out, waitgroup := retryUploadChainer(ctx, channels[len(channels)-1], backend, jobInfo, jobInfo.Destinations[idx])
+	for _, d := range dests {
+		out, waitgroup := retryUploadChainer(ctx, channels[len(channels)-1], d.backend, jobInfo, d.uri)
 		channels = append(channels, out)
 		group.Go(waitgroup.Wait)
 	}
@@ -511,13 +523,13 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 // volumes in place and leave its manifest pointing at changed objects. A set whose manifest is at
 // only some destinations (its upload failed at the others) is completed instead under --resume, by
 // copying that manifest to the rest; done reports that nothing is left to send.
-func refuseExistingSet(ctx context.Context, jobInfo *files.JobInfo, destinations []backends.Backend) (done bool, err error) {
+func refuseExistingSet(ctx context.Context, jobInfo *files.JobInfo, destinations []destination) (done bool, err error) {
 	name := jobInfo.ManifestObjectName()
 	var have, missing []int
-	for idx, backend := range destinations {
-		existing, lerr := backend.List(ctx, name)
+	for idx, d := range destinations {
+		existing, lerr := d.backend.List(ctx, name)
 		if lerr != nil {
-			log.AppLogger.Errorf("Could not list %s at %s due to error - %v", name, jobInfo.Destinations[idx], lerr)
+			log.AppLogger.Errorf("Could not list %s at %s due to error - %v", name, d, lerr)
 			return false, lerr
 		}
 		found := false
@@ -537,12 +549,12 @@ func refuseExistingSet(ctx context.Context, jobInfo *files.JobInfo, destinations
 	case len(missing) == 0:
 		err = fmt.Errorf(
 			"backup set %s already exists at %s; refusing to overwrite it. Delete it at the destination to send it again",
-			name, jobInfo.Destinations[have[0]],
+			name, destinations[have[0]],
 		)
 	case !jobInfo.Resume:
 		err = fmt.Errorf(
 			"backup set %s already exists at %s but not at %s; refusing to overwrite it. Run again with --resume to copy its manifest to %s",
-			name, jobInfo.Destinations[have[0]], jobInfo.Destinations[missing[0]], jobInfo.Destinations[missing[0]],
+			name, destinations[have[0]], destinations[missing[0]], destinations[missing[0]],
 		)
 	default:
 		return true, copyManifest(ctx, jobInfo, destinations, have[0], missing)
@@ -554,7 +566,7 @@ func refuseExistingSet(ctx context.Context, jobInfo *files.JobInfo, destinations
 // copyManifest uploads the manifest of jobInfo's backup set from destinations[from] to each of
 // destinations[missing], once every volume it lists is present there. A manifest is only uploaded
 // after its volumes have passed every destination, so present volumes are complete ones.
-func copyManifest(ctx context.Context, jobInfo *files.JobInfo, destinations []backends.Backend, from int, missing []int) error {
+func copyManifest(ctx context.Context, jobInfo *files.JobInfo, destinations []destination, from int, missing []int) error {
 	name := jobInfo.ManifestObjectName()
 	tmp, err := ioutil.TempFile(config.BackupTempdir, config.ProgramName)
 	if err != nil {
@@ -562,20 +574,20 @@ func copyManifest(ctx context.Context, jobInfo *files.JobInfo, destinations []ba
 	}
 	tmp.Close()
 	defer os.Remove(tmp.Name())
-	if err = downloadTo(ctx, destinations[from], name, tmp.Name()); err != nil {
+	if err = downloadTo(ctx, destinations[from].backend, name, tmp.Name()); err != nil {
 		return err
 	}
 	manifest, err := readManifest(ctx, tmp.Name(), jobInfo)
 	if err != nil {
-		log.AppLogger.Errorf("Could not read manifest %s from %s due to error - %v", name, jobInfo.Destinations[from], err)
+		log.AppLogger.Errorf("Could not read manifest %s from %s due to error - %v", name, destinations[from], err)
 		return err
 	}
 
 	prefix := jobInfo.BackupVolumeObjectPrefix()
 	for _, idx := range missing {
-		listed, lerr := destinations[idx].List(ctx, prefix)
+		listed, lerr := destinations[idx].backend.List(ctx, prefix)
 		if lerr != nil {
-			log.AppLogger.Errorf("Could not list the volumes at %s due to error - %v", jobInfo.Destinations[idx], lerr)
+			log.AppLogger.Errorf("Could not list the volumes at %s due to error - %v", destinations[idx], lerr)
 			return lerr
 		}
 		present := make(map[string]bool, len(listed))
@@ -586,7 +598,7 @@ func copyManifest(ctx context.Context, jobInfo *files.JobInfo, destinations []ba
 			if !present[vol.ObjectName] {
 				err = fmt.Errorf(
 					"cannot complete backup set %s at %s: its volume %s is missing there. Delete the set at %s to send it again",
-					name, jobInfo.Destinations[idx], vol.ObjectName, jobInfo.Destinations[from],
+					name, destinations[idx], vol.ObjectName, destinations[from],
 				)
 				log.AppLogger.Errorf("%v.", err)
 				return err
@@ -604,12 +616,12 @@ func copyManifest(ctx context.Context, jobInfo *files.JobInfo, destinations []ba
 		}
 	}()
 	for _, idx := range missing {
-		dest := jobInfo.Destinations[idx]
-		if err = volUploadWrapper(ctx, destinations[idx], vol, strings.Split(dest, "://")[0])(); err != nil {
+		dest := destinations[idx]
+		if err = volUploadWrapper(ctx, dest.backend, vol, strings.Split(dest.uri, "://")[0])(); err != nil {
 			log.AppLogger.Errorf("Could not upload manifest %s to %s due to error - %v", name, dest, err)
 			return err
 		}
-		log.AppLogger.Noticef("Completed backup set %s at %s with the manifest from %s.", name, dest, jobInfo.Destinations[from])
+		log.AppLogger.Noticef("Completed backup set %s at %s with the manifest from %s.", name, dest, destinations[from])
 	}
 	return nil
 }
@@ -649,7 +661,7 @@ func saveManifest(ctx context.Context, j *files.JobInfo, final bool) (*files.Vol
 			log.AppLogger.Warningf("Could not write manifest volume due to error - %v", err)
 			return nil, err
 		}
-		log.AppLogger.Debugf("Copied manifest to local cache for destination %s.", destination)
+		log.AppLogger.Debugf("Copied manifest to local cache for destination %s.", backends.RedactURI(destination))
 	}
 	return manifest, nil
 }
@@ -831,9 +843,9 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 }
 
 // tryResume continues a previous attempt from its cached partial manifest. destinations are the
-// prepared backends of j.Destinations, in order: every volume it skips must still exist at each.
+// prepared destinations of j.Destinations, in order: every volume it skips must still exist at each.
 // nolint:funlen,gocyclo // Difficult to break this apart
-func tryResume(ctx context.Context, j *files.JobInfo, destinations []backends.Backend) error {
+func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination) error {
 	// Temproary Final Manifest File
 	manifest, merr := files.CreateManifestVolume(ctx, j)
 	if merr != nil {
@@ -852,8 +864,7 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []backends.Ba
 	// nolint:gosec // MD5 not used for cryptographic purposes here
 	safeManifestFile := fmt.Sprintf("%x", md5.Sum([]byte(manifest.ObjectName)))
 
-	destination := j.Destinations[0]
-	safeFolder := fmt.Sprintf("%x", md5.Sum([]byte(destination))) // nolint:gosec // MD5 not used for cryptographic purposes here
+	safeFolder := fmt.Sprintf("%x", md5.Sum([]byte(destinations[0].uri))) // nolint:gosec // MD5 not used for cryptographic purposes here
 	origManiPath := filepath.Join(config.WorkingDir, "cache", safeFolder, safeManifestFile)
 
 	switch originalManifest, oerr := readManifest(ctx, origManiPath, j); {
@@ -889,11 +900,11 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []backends.Ba
 
 		currentCMD := zfs.GetZFSSendCommand(ctx, j)
 		oldCMD := zfs.GetZFSSendCommand(ctx, originalManifest)
-		oldCMDLine := strings.Join(currentCMD.Args, " ")
-		currentCMDLine := strings.Join(oldCMD.Args, " ")
+		oldCMDLine := strings.Join(oldCMD.Args, " ")
+		currentCMDLine := strings.Join(currentCMD.Args, " ")
 		if strings.Compare(oldCMDLine, currentCMDLine) != 0 {
 			log.AppLogger.Errorf(
-				"Cannot resume backup, different options given for zfs send command: `%s` != current `%s`",
+				"Cannot resume backup, different options given for zfs send command: original `%s` != current `%s`",
 				oldCMDLine, currentCMDLine,
 			)
 			return fmt.Errorf("option mismatch")
@@ -924,7 +935,7 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []backends.Ba
 // destinations are overwritten by the new attempt's same-numbered objects or, being referenced
 // by no final manifest, removed by clean once the manifest lands.
 func verifiedVolumes(
-	ctx context.Context, j *files.JobInfo, cached []*files.VolumeInfo, destinations []backends.Backend,
+	ctx context.Context, j *files.JobInfo, cached []*files.VolumeInfo, destinations []destination,
 ) ([]*files.VolumeInfo, error) {
 	cached = append([]*files.VolumeInfo(nil), cached...)
 	sort.Sort(files.ByVolumeNumber(cached))
@@ -932,22 +943,22 @@ func verifiedVolumes(
 	// "<volume>|<snap>[...].zstream[.ext].vol": every volume of this set, and nothing else.
 	prefix := j.BackupVolumeObjectPrefix()
 	keep := len(cached)
-	for idx, backend := range destinations {
-		listed, err := backend.List(ctx, prefix)
+	for _, d := range destinations {
+		listed, err := d.backend.List(ctx, prefix)
 		if err != nil {
-			log.AppLogger.Errorf("Could not list the volumes at %s due to error - %v", j.Destinations[idx], err)
+			log.AppLogger.Errorf("Could not list the volumes at %s due to error - %v", d, err)
 			return nil, err
 		}
 		present := make(map[string]bool, len(listed))
 		for _, name := range listed {
 			present[name] = true
 		}
-		sizer, _ := backend.(backends.Sizer)
+		sizer, _ := d.backend.(backends.Sizer)
 		for n := 0; n < keep; n++ {
 			vol := cached[n]
 			if vol.VolumeNumber != int64(n+1) || !present[vol.ObjectName] {
 				log.AppLogger.Noticef(
-					"Volume %s missing at %s; it and later volumes will be re-sent.", vol.ObjectName, j.Destinations[idx],
+					"Volume %s missing at %s; it and later volumes will be re-sent.", vol.ObjectName, d,
 				)
 				keep = n
 				break
@@ -958,13 +969,13 @@ func verifiedVolumes(
 			// A send killed mid-upload leaves a truncated volume under its final name.
 			size, err := sizer.Size(ctx, vol.ObjectName)
 			if err != nil {
-				log.AppLogger.Errorf("Could not stat %s at %s due to error - %v", vol.ObjectName, j.Destinations[idx], err)
+				log.AppLogger.Errorf("Could not stat %s at %s due to error - %v", vol.ObjectName, d, err)
 				return nil, err
 			}
 			if size != vol.Size {
 				log.AppLogger.Noticef(
 					"Volume %s at %s is %d bytes, want %d; it and later volumes will be re-sent.",
-					vol.ObjectName, j.Destinations[idx], size, vol.Size,
+					vol.ObjectName, d, size, vol.Size,
 				)
 				keep = n
 				break

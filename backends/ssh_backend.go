@@ -128,7 +128,12 @@ func (s *SSHBackend) Init(ctx context.Context, conf *BackendConfig, opts ...Opti
 
 	targetUrl, err := url.Parse(s.conf.TargetURI)
 	if err != nil {
-		log.AppLogger.Errorf("ssh backend: Error while parsing target uri %s - %v", s.conf.TargetURI, err)
+		// url.Error carries the URI verbatim, password included.
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			uerr.URL = RedactURI(uerr.URL)
+		}
+		log.AppLogger.Errorf("ssh backend: Error while parsing target uri %s - %v", RedactURI(s.conf.TargetURI), err)
 		return err
 	}
 
