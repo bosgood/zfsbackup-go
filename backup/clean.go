@@ -48,6 +48,34 @@ func parseBackupVolume(name string, separators []string) (string, bool) {
 	return "", false
 }
 
+// nestedDestinations returns "<dir>/" for every listed object that is the manifest of another
+// destination nested below this one ("<dir>/<manifestPrefix>...manifest..."). Objects under such
+// a directory belong to that destination, whatever their names parse as from here.
+func nestedDestinations(objects []string, manifestPrefix string) []string {
+	var roots []string
+	for _, obj := range objects {
+		if strings.HasPrefix(obj, manifestPrefix) {
+			continue
+		}
+		idx := strings.Index(obj, "/"+manifestPrefix)
+		if idx < 0 || !strings.Contains(obj[idx:], ".manifest") {
+			continue
+		}
+		roots = append(roots, obj[:idx+1])
+	}
+	return roots
+}
+
+// nestedUnder returns the root of roots that obj is under, or "".
+func nestedUnder(obj string, roots []string) string {
+	for _, root := range roots {
+		if strings.HasPrefix(obj, root) {
+			return root
+		}
+	}
+	return ""
+}
+
 // Clean will remove files found in the desination that are not found in any of the manifests found locally or in the destination.
 // If cleanLocal is true, then local manifests not found in the destination are ignored and deleted. This function will optionally
 // delete broken backup sets in the destination if the --force flag is provided.
@@ -185,10 +213,16 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	if jobInfo.Separator == "" {
 		manifestPrefix = jobInfo.ManifestPrefix + files.DefaultSeparator
 	}
+	nested := nestedDestinations(allObjects, manifestPrefix)
 	candidates := make([]string, 0, len(allObjects))
 	skipped := 0
 	for _, obj := range allObjects {
 		if strings.HasPrefix(obj, manifestPrefix) {
+			continue
+		}
+		if root := nestedUnder(obj, nested); root != "" {
+			log.AppLogger.Noticef("Skipping %s: %s holds its own manifests, so it is another destination.", obj, root)
+			skipped++
 			continue
 		}
 		dataset, ok := parseBackupVolume(obj, separators)

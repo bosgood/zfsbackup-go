@@ -230,7 +230,7 @@ func TestCleanS3Prefixes(t *testing.T) {
 			name:    "bucket root with a nested destination",
 			objects: merge(backupSet(t, "", "tank/data"), backupSet(t, "p/", "tank/data")),
 			args:    []string{"s3://bucket"},
-			logText: "no manifest at this destination is for dataset p/tank/data",
+			logText: "is another destination",
 		},
 		{
 			name:    "bucket root holding only a nested destination",
@@ -259,6 +259,17 @@ func TestCleanS3Prefixes(t *testing.T) {
 			}),
 			args:    []string{"s3://bucket/p/"},
 			logText: "looks like a backup volume written by an older version",
+		},
+		{
+			// s3://bucket/tank/ backs up pool "data": its volume keys are "tank/data|...",
+			// which from the bucket root parse as volumes of tank/data.
+			name: "nested destination named like a dataset",
+			objects: merge(
+				backupSet(t, "", "tank/data"),
+				backupSetAt(t, "tank/", "data", "autosnap_2026-10-01_00:00:00_monthly"),
+			),
+			args:    []string{"s3://bucket"},
+			logText: "is another destination",
 		},
 	}
 
