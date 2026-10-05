@@ -99,16 +99,27 @@ checks: OK
 ```
 
 If the destination holds manifests from earlier attempts, the plan chains from
-them (`INCR ... from ...`, or `NOOP`). Decide whether to keep them. To start over,
-delete them at the destination **and** their cached copies under
-`<workingDirectory>/cache/<md5 of the URI>/`. Plain `zfsbackup clean` never
-deletes manifests, nor any object it does not recognize as a backup volume
-written by this tool for a dataset that has a manifest at that destination
-(it lists those as skipped). It refuses to run against a destination that has
-objects but no manifests at all, which usually means a wrong URI. Only
-`clean --force` deletes whole broken sets, manifest included. The planner
-ignores a cached manifest that is gone from the destination, but `clean` still
-treats it as live and keeps the volumes it lists.
+them (`INCR ... from ...`, or `NOOP`). Decide whether to keep them. To start
+over, delete them at the destination **and** their cached copies under
+`<workingDirectory>/cache/<md5 of the canonical URI>/`. The canonical URI is
+what the logs print: an object-store prefix always ends in `/`
+(`s3://bucket/prefix/`) and a bucket root never does (`s3://bucket`), however
+you typed it. A cache directory left by an older version under another spelling
+is moved there on the next run (`Moved N cached manifests ...`). Plain
+`zfsbackup clean` never deletes manifests, nor any object it does not recognize
+as a backup volume written by this tool for a dataset that has a manifest at
+that destination (it lists those as skipped). It also skips everything under a
+directory that holds its own manifests (another destination nested below this
+one), and every dataset that a `send` on this host is working on right now (`A
+send of ... appears to be running`). It cannot see a `send` running on another
+host: do not run `clean` against a destination while another machine is sending
+to it. If it warns that a key `looks like a backup volume written by an older
+version`, that volume sits outside the destination's prefix and has to be
+deleted by hand. It refuses to run against a destination that has objects but no
+manifests at all, which usually means a wrong URI. Only `clean --force` deletes
+whole broken sets, manifest included. The planner ignores a cached manifest that
+is gone from the destination, but `clean` still treats it as live and keeps the
+volumes it lists.
 
 ## 4. Dry-run the send
 
@@ -142,8 +153,9 @@ What `send` refuses to do:
   `--full` of a monthly that is already backed up as a full is a no-op
   (`Nothing new to back up.`, exit 0);
 - skip volumes on `--resume` that it cannot see at every destination;
-- resume against a `zfs send` stream shorter than the cached manifest records. The exit
-status is 0 both when it uploads a backup and when there is nothing new
+- resume against a `zfs send` stream shorter than the cached manifest records.
+
+The exit status is 0 both when it uploads a backup and when there is nothing new
 (`Nothing new to back up.`, the normal case on most runs), so any other status
 is a real failure.
 
