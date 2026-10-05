@@ -404,3 +404,74 @@ func smartCompletesPartial(t *testing.T, volumesThere bool) {
 	}
 	env.checkRestores(t, "file://"+dest2, "a", 3<<20)
 }
+
+// A stream that ends exactly where a volume is cut must not get an empty volume after it.
+func TestE2EStreamOnVolumeBoundaryHasNoEmptyVolume(t *testing.T) {
+	for _, tc := range []struct {
+		streamBytes int64
+		volumes     int
+		buffers     string // --maxFileBuffer; 0 streams each volume through a pipe
+	}{{1 << 20, 1, "5"}, {3 << 20, 3, "5"}, {0, 1, "5"}, {1 << 20, 1, "0"}, {3 << 20, 3, "0"}} {
+		t.Run(fmt.Sprintf("%d bytes maxFileBuffer %s", tc.streamBytes, tc.buffers), func(t *testing.T) {
+			env := newE2EEnv(t)
+			t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(tc.streamBytes))
+			env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+			dest := "file://" + env.dest
+			env.sendOK(t, "--volsize", "1", "--compressor", "", "--maxFileBuffer", tc.buffers, "tank/data@a", dest)
+			var sizes []uint64
+			for _, v := range newestBackup(t, "tank/data", dest).Volumes {
+				sizes = append(sizes, v.Size)
+			}
+			if len(sizes) != tc.volumes {
+				t.Errorf("a %d-byte stream was split into volumes of %v bytes, want %d volumes", tc.streamBytes, sizes, tc.volumes)
+			}
+			env.checkRestores(t, dest, "a", tc.streamBytes)
+		})
+	}
+}
+
+// When only the final manifest's upload failed, everything else is done: --resume uploads the
+// manifest, and does not read the whole snapshot through zfs send again.
+func TestE2EResumeAfterManifestUploadFailureUploadsOnlyManifest(t *testing.T) {
+	const streamBytes = 3 << 20
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(streamBytes))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	blocker := filepath.Join(env.dest, "manifests|tank")
+	if err := ioutil.WriteFile(blocker, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	dest := "file://" + env.dest
+	args := []string{"--volsize", "1", "--compressor", "", "--maxRetryTime", "2s", "--maxBackoffTime", "1s", "tank/data@a", dest}
+	if logs, err := guarded(t, func() (string, error) { return env.send(args...) }); err == nil {
+		t.Fatalf("send succeeded although the manifest upload failed:\n%s", logs)
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	before := destObjects(t, env.dest)
+	if err := os.Remove(env.zfsLog); err != nil {
+		t.Fatal(err)
+	}
+
+	env.sendOK(t, append([]string{"--resume"}, args...)...)
+	after := destObjects(t, env.dest)
+	var added []string
+	for name, data := range after {
+		if old, ok := before[name]; !ok {
+			added = append(added, name)
+		} else if !bytes.Equal(old, data) {
+			t.Errorf("%s changed", name)
+		}
+	}
+	if len(added) != 1 || !strings.HasPrefix(added[0], "manifests|") {
+		t.Errorf("the resume added %q, want only the manifest", added)
+	}
+	zfsLog, _ := ioutil.ReadFile(env.zfsLog)
+	for _, line := range strings.Split(string(zfsLog), "\n") {
+		if strings.HasPrefix(line, "send ") && !strings.Contains(line, " -n") {
+			t.Errorf("the resume ran zfs %s", line)
+		}
+	}
+	env.checkRestores(t, dest, "a", streamBytes)
+}

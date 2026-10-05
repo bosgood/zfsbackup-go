@@ -505,11 +505,13 @@ func TestE2EResumeWithNewDestinationStartsOver(t *testing.T) {
 
 func TestE2EResumeShortStreamFails(t *testing.T) {
 	env := newE2EEnv(t)
-	env.interruptedSend(t, 3<<20, env.dest, "--volsize", "1")
+	env.interruptedSend(t, 3<<20, env.dest, "--volsize", "1", "--compressor", "")
+	// With every volume there, the resume would only upload the manifest; make it read the stream.
+	dropVolumesFrom(t, env.dest, 3)
 	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(1<<20)) // shorter than what the cache says was sent
 
 	logs, err := guarded(t, func() (string, error) {
-		return env.send("--volsize", "1", "--resume", "tank/data@a", "file://"+env.dest)
+		return env.send("--volsize", "1", "--compressor", "", "--resume", "tank/data@a", "file://"+env.dest)
 	})
 	if err == nil || !strings.Contains(logs, "zfs stream ended before") {
 		t.Errorf("resume against a short stream: got %v, want the short-stream error\n%s", err, logs)

@@ -21,6 +21,7 @@
 package backup
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/md5" //nolint:gosec // Not used for cryptography
@@ -461,7 +462,7 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	}
 
 	if jobInfo.Resume {
-		if err := tryResume(ctx, jobInfo, dests); err != nil {
+		if done, err := tryResume(ctx, jobInfo, dests); err != nil || done {
 			return err
 		}
 	}
@@ -791,7 +792,18 @@ func copyManifest(ctx context.Context, jobInfo *files.JobInfo, destinations []de
 		}
 	}
 
-	vol, err := files.LoadVolume(ctx, tmp.Name(), name, true)
+	lagging := make([]destination, 0, len(missing))
+	for _, idx := range missing {
+		lagging = append(lagging, destinations[idx])
+	}
+	return uploadManifest(ctx, tmp.Name(), name, lagging, destinations[from].String())
+}
+
+// uploadManifest uploads the manifest file at path as the object name to each of dests, and caches
+// it for each: whatever an earlier attempt cached under that name is not what dest now has. from
+// says where the manifest came from, for the log.
+func uploadManifest(ctx context.Context, path, name string, dests []destination, from string) error {
+	vol, err := files.LoadVolume(ctx, path, name, true)
 	if err != nil {
 		return err
 	}
@@ -800,20 +812,16 @@ func copyManifest(ctx context.Context, jobInfo *files.JobInfo, destinations []de
 			log.AppLogger.Warningf("Error deleting temporary manifest file  - %v", derr)
 		}
 	}()
-	// nolint:gosec // MD5 not used for cryptographic purposes here
-	safeManifestFile := fmt.Sprintf("%x", md5.Sum([]byte(name)))
-	for _, idx := range missing {
-		dest := destinations[idx]
+	for _, dest := range dests {
 		if err = volUploadWrapper(ctx, dest.backend, vol, strings.Split(dest.uri, "://")[0])(); err != nil {
 			log.AppLogger.Errorf("Could not upload manifest %s to %s due to error - %v", name, dest, err)
 			return err
 		}
-		// Whatever an earlier attempt cached under this name is not what dest now has.
-		if err = cacheFile(cacheDirFor(dest.uri), safeManifestFile, tmp.Name()); err != nil {
+		if err = cacheFile(cacheDirFor(dest.uri), cachedManifestName(name), path); err != nil {
 			log.AppLogger.Errorf("Could not cache manifest %s for %s due to error - %v", name, dest, err)
 			return err
 		}
-		log.AppLogger.Noticef("Completed backup set %s at %s with the manifest from %s.", name, dest, destinations[from])
+		log.AppLogger.Noticef("Completed backup set %s at %s with the manifest from %s.", name, dest, from)
 	}
 	return nil
 }
@@ -971,7 +979,8 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 	// Everything read from the stream, skipped or not, is hashed: each volume records the hash so
 	// far, and a resume checks the bytes it skips against the last volume it keeps.
 	streamHash := sha256.New()
-	counter := datacounter.NewReaderCounter(io.TeeReader(cin, streamHash))
+	stream := bufio.NewReaderSize(cin, files.BufferSize) // Peek tells a stream's end from a pause
+	counter := datacounter.NewReaderCounter(io.TeeReader(stream, streamHash))
 	usingPipe := false
 	if j.MaxFileBuffer == 0 {
 		usingPipe = true
@@ -1048,6 +1057,17 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 						case <-ctx.Done():
 							return ctx.Err()
 						}
+					}
+				}
+				// A stream that ends exactly at the cut gets no empty volume after it. (A send's
+				// first volume is created even for an empty stream: a set is never empty.)
+				if volume != nil || volNum > 1 {
+					if _, perr := stream.Peek(1); perr == io.EOF {
+						log.AppLogger.Debugf("The zfs stream ended at a volume boundary.")
+						return nil
+					} else if perr != nil {
+						log.AppLogger.Errorf("Error while trying to read from the zfs stream - %v", perr)
+						return perr
 					}
 				}
 				<-buffer
@@ -1161,13 +1181,15 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 
 // tryResume continues a previous attempt from its cached partial manifest. destinations are the
 // prepared destinations of j.Destinations, in order: every volume it skips must still exist at each.
+// When the attempt got as far as its final manifest, and only that upload failed, it uploads the
+// manifest and reports done: there is nothing left to send.
 // nolint:funlen,gocyclo // Difficult to break this apart
-func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination) error {
+func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination) (done bool, err error) {
 	// Temproary Final Manifest File
 	manifest, merr := files.CreateManifestVolume(ctx, j)
 	if merr != nil {
 		log.AppLogger.Errorf("Error trying to create manifest volume - %v", merr)
-		return merr
+		return false, merr
 	}
 	defer func() {
 		if err := manifest.Close(); err != nil {
@@ -1191,10 +1213,10 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination
 		log.AppLogger.Warningf("Could not read previous manifest file %s (%v); starting over.", origManiPath, oerr)
 	default:
 		if j.BaseSnapshot.GUID == "" {
-			return fmt.Errorf("cannot resume: could not read the guid of %s@%s", j.VolumeName, j.BaseSnapshot.Name)
+			return false, fmt.Errorf("cannot resume: could not read the guid of %s@%s", j.VolumeName, j.BaseSnapshot.Name)
 		}
 		if err := sameStream(ctx, originalManifest, j); err != nil {
-			return err
+			return false, err
 		}
 		for _, vol := range originalManifest.Volumes {
 			if vol.StreamSHA256 == "" {
@@ -1203,7 +1225,7 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination
 						"check the stream against; start over without --resume",
 				)
 				log.AppLogger.Errorf("%v.", err)
-				return err
+				return false, err
 			}
 		}
 
@@ -1211,11 +1233,16 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination
 		// attempt shows up here as one that is missing every volume: the resume starts over.
 		volumes, err := verifiedVolumes(ctx, j, originalManifest.Volumes, destinations)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if len(volumes) == 0 {
 			log.AppLogger.Noticef("Nothing verifiable to resume; starting over.")
-			return nil
+			return false, nil
+		}
+		// A final manifest (it has an EndTime) whose volumes are all there: only its upload failed.
+		if !originalManifest.EndTime.IsZero() && len(volumes) == len(originalManifest.Volumes) {
+			log.AppLogger.Noticef("Every volume of the interrupted attempt is uploaded; uploading its manifest.")
+			return true, uploadManifest(ctx, origManiPath, j.ManifestObjectName(), destinations, "the interrupted attempt")
 		}
 
 		manifestmutex.Lock()
@@ -1224,7 +1251,7 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination
 		manifestmutex.Unlock()
 		log.AppLogger.Infof("Will be resuming previous backup attempt.")
 	}
-	return nil
+	return false, nil
 }
 
 // verifiedVolumes returns the longest run of cached volumes, numbered contiguously from 1, that
