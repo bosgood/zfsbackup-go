@@ -63,7 +63,11 @@ type BackendConfig struct {
 	MaxBackoffTime          time.Duration
 	MaxRetryTime            time.Duration
 	TargetURI               string
-	UploadChunkSize         int
+	// TypedURI is TargetURI as the user spelled it, before CanonicalURI. Object-store backends
+	// derive from it the key prefix an older version would have used (see legacyPrefixes).
+	// Empty means the same as TargetURI.
+	TypedURI        string
+	UploadChunkSize int
 	// ManifestPrefix lets object-store backends detect the pre-normalization
 	// key layout (see checkLegacyLayout). Empty disables the check.
 	ManifestPrefix string

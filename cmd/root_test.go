@@ -22,6 +22,7 @@ package cmd
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -47,5 +48,17 @@ func TestExitCode(t *testing.T) {
 		if got := exitCode(tc.cmd, tc.err); got != tc.want {
 			t.Errorf("exitCode(%s, %v) = %d, want %d", tc.cmd.Name(), tc.err, got, tc.want)
 		}
+	}
+}
+
+func TestParseDestinationsKeepsTypedSpelling(t *testing.T) {
+	dests, typed := parseDestinations("s3://b//p,s3://c/,file:///tmp/d")
+	want := []string{"s3://b/p/", "s3://c", "file:///tmp/d"}
+	if !reflect.DeepEqual(dests, want) {
+		t.Errorf("destinations = %q, want %q", dests, want)
+	}
+	wantTyped := map[string]string{"s3://b/p/": "s3://b//p", "s3://c": "s3://c/", "file:///tmp/d": "file:///tmp/d"}
+	if !reflect.DeepEqual(typed, wantTyped) {
+		t.Errorf("typed = %q, want %q", typed, wantTyped)
 	}
 }

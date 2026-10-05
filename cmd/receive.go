@@ -175,7 +175,7 @@ func validateReceiveFlags(cmd *cobra.Command, args []string) error {
 	}
 
 	jobInfo.VolumeName = parts[0]
-	jobInfo.Destinations = parseDestinations(args[1])
+	jobInfo.Destinations, jobInfo.DestinationsAsTyped = parseDestinations(args[1])
 	jobInfo.LocalVolume = args[2]
 
 	// Intelligently restore to the snapshot wanted

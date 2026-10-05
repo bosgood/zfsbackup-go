@@ -23,7 +23,6 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/someone1/zfsbackup-go/backends"
 	"github.com/someone1/zfsbackup-go/backup"
 )
 
@@ -38,7 +37,7 @@ var cleanCmd = &cobra.Command{
 	SilenceErrors: true,
 	PreRunE:       validateCleanFlags,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		jobInfo.Destinations = []string{backends.CanonicalURI(args[0])}
+		jobInfo.Destinations, jobInfo.DestinationsAsTyped = parseDestinations(args[0])
 		return backup.Clean(cmd.Context(), &jobInfo, cleanLocal, cleanDryRun)
 	},
 }

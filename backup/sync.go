@@ -64,6 +64,7 @@ func prepareBackend(ctx context.Context, j *files.JobInfo, backendURI string, up
 	conf := &backends.BackendConfig{
 		MaxParallelUploadBuffer: uploadBuffer,
 		TargetURI:               backendURI,
+		TypedURI:                j.DestinationsAsTyped[backendURI],
 		MaxParallelUploads:      j.MaxParallelUploads,
 		MaxBackoffTime:          j.MaxBackoffTime,
 		MaxRetryTime:            j.MaxRetryTime,

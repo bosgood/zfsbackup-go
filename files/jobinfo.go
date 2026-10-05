@@ -91,17 +91,20 @@ type JobInfo struct {
 	LocalVolume string `json:"-"`
 	AutoRestore bool   `json:"-"`
 
-	Destinations       []string        `json:"-"`
-	VolumeSize         uint64          `json:"-"`
-	ManifestPrefix     string          `json:"-"`
-	MaxBackoffTime     time.Duration   `json:"-"`
-	MaxRetryTime       time.Duration   `json:"-"`
-	MaxParallelUploads int             `json:"-"`
-	MaxFileBuffer      int             `json:"-"`
-	EncryptKey         *openpgp.Entity `json:"-"`
-	SignKey            *openpgp.Entity `json:"-"`
-	ParentSnap         *JobInfo        `json:"-"`
-	UploadChunkSize    int             `json:"-"`
+	Destinations []string `json:"-"`
+	// DestinationsAsTyped maps each of Destinations (canonical URIs) to the spelling given on
+	// the command line. Older versions keyed the local cache and the object key prefix by it.
+	DestinationsAsTyped map[string]string `json:"-"`
+	VolumeSize          uint64            `json:"-"`
+	ManifestPrefix      string            `json:"-"`
+	MaxBackoffTime      time.Duration     `json:"-"`
+	MaxRetryTime        time.Duration     `json:"-"`
+	MaxParallelUploads  int               `json:"-"`
+	MaxFileBuffer       int               `json:"-"`
+	EncryptKey          *openpgp.Entity   `json:"-"`
+	SignKey             *openpgp.Entity   `json:"-"`
+	ParentSnap          *JobInfo          `json:"-"`
+	UploadChunkSize     int               `json:"-"`
 }
 
 // SnapshotInfo represents a snapshot with relevant information.

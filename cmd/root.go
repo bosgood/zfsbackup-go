@@ -430,10 +430,13 @@ func validatePassphrase() {
 
 // parseDestinations splits a comma-separated destination argument and canonicalizes each URI,
 // so that e.g. s3://bucket/prefix and s3://bucket/prefix/ name the same destination and cache.
-func parseDestinations(arg string) []string {
-	destinations := strings.Split(arg, ",")
-	for idx := range destinations {
-		destinations[idx] = backends.CanonicalURI(destinations[idx])
+// typed maps each canonical URI back to the spelling given.
+func parseDestinations(arg string) (destinations []string, typed map[string]string) {
+	destinations = strings.Split(arg, ",")
+	typed = make(map[string]string, len(destinations))
+	for idx, raw := range destinations {
+		destinations[idx] = backends.CanonicalURI(raw)
+		typed[destinations[idx]] = raw
 	}
-	return destinations
+	return destinations, typed
 }

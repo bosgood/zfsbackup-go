@@ -208,7 +208,7 @@ func updateJobInfo(args []string) error {
 
 	parts := strings.Split(args[0], "@")
 	jobInfo.VolumeName = parts[0]
-	jobInfo.Destinations = parseDestinations(args[1])
+	jobInfo.Destinations, jobInfo.DestinationsAsTyped = parseDestinations(args[1])
 
 	if len(jobInfo.Destinations) > 1 && jobInfo.MaxFileBuffer == 0 {
 		log.AppLogger.Errorf("Specifying multiple destinations and a MaxFileBuffer size of 0 is unsupported.")
