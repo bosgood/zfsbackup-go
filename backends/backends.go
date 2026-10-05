@@ -154,26 +154,58 @@ func relativeKey(backend, prefix, key string) (string, bool) {
 	return name, ok
 }
 
-// checkLegacyLayout fails when the destination holds manifests written before object-store
-// prefixes were normalized, i.e. at "<rawPrefix><ManifestPrefix>..." with no "/" in between.
-// firstKey must return the first key in the bucket starting with the given (bucket-absolute)
-// prefix, or "" if there is none.
-func checkLegacyLayout(conf *BackendConfig, rawPrefix string, firstKey func(prefix string) (string, error)) error {
-	if rawPrefix == "" || conf.ManifestPrefix == "" {
-		return nil
-	}
-	key, err := firstKey(rawPrefix + conf.ManifestPrefix)
+// legacyPrefixes returns the key prefixes under which a version from before prefixes were
+// normalized could have written the destination uri (canonical): the path with no trailing
+// slash ("p" for s3://b/p/), and the path exactly as typed when that is something else again
+// ("/p" for s3://b//p). Those versions used everything after "<bucket>/" verbatim.
+func legacyPrefixes(uri, typedURI, scheme string) []string {
+	_, rawPrefix, prefix, err := parseObjectURI(uri, scheme)
 	if err != nil {
-		return err
-	}
-	if key == "" {
 		return nil
 	}
-	return fmt.Errorf(
-		"found %s, a backup written by an older version that used the URI path %q as a raw key prefix; "+
-			"move every object starting with %q to %q (i.e. under %s/) and retry",
-		key, rawPrefix, rawPrefix, rawPrefix+"/", rawPrefix,
-	)
+	var legacy []string
+	add := func(old string) {
+		if old == "" || old == prefix {
+			return
+		}
+		for _, have := range legacy {
+			if have == old {
+				return
+			}
+		}
+		legacy = append(legacy, old)
+	}
+	add(rawPrefix)
+	if rest := strings.TrimPrefix(typedURI, scheme+"://"); rest != typedURI {
+		_, typedPath, _ := strings.Cut(rest, "/")
+		add(typedPath)
+	}
+	return legacy
+}
+
+// checkLegacyLayout fails when the destination holds manifests written before object-store
+// prefixes were normalized, i.e. at "<legacy prefix><ManifestPrefix>..." for one of legacy
+// (see legacyPrefixes). firstKey must return the first key in the bucket starting with the
+// given (bucket-absolute) prefix, or "" if there is none.
+func checkLegacyLayout(conf *BackendConfig, legacy []string, prefix string, firstKey func(prefix string) (string, error)) error {
+	if conf.ManifestPrefix == "" {
+		return nil
+	}
+	for _, old := range legacy {
+		key, err := firstKey(old + conf.ManifestPrefix)
+		if err != nil {
+			return err
+		}
+		if key == "" {
+			continue
+		}
+		return fmt.Errorf(
+			"found %s, a backup written by an older version that used the URI path %q as a raw key prefix; "+
+				"move every object starting with %q to %q and retry",
+			key, old, old, prefix,
+		)
+	}
+	return nil
 }
 
 // CanonicalURI normalizes object-store URIs so that spellings with and without a trailing

@@ -244,6 +244,13 @@ func TestCleanS3Prefixes(t *testing.T) {
 			args:    []string{"s3://bucket/p/"},
 			errText: "pmanifests|tank/data|",
 		},
+		{
+			// s3://bucket//p used to write "/pmanifests|...", not "pmanifests|...".
+			name:    "legacy layout behind a doubled slash",
+			objects: backupSet(t, "/p", "tank/data"),
+			args:    []string{"s3://bucket//p"},
+			errText: "/pmanifests|tank/data|",
+		},
 	}
 
 	for _, c := range testCases {

@@ -42,6 +42,7 @@ type B2Backend struct {
 	bucketCli  *b2.Bucket
 	mutex      sync.Mutex
 	prefix     string
+	legacy     []string
 	bucketName string
 }
 
@@ -59,7 +60,7 @@ func (b bufferedRT) RoundTrip(r *http.Request) (*http.Response, error) {
 func (b *B2Backend) Init(ctx context.Context, conf *BackendConfig, opts ...Option) error {
 	b.conf = conf
 
-	bucket, rawPrefix, prefix, err := parseObjectURI(b.conf.TargetURI, B2BackendPrefix)
+	bucket, _, prefix, err := parseObjectURI(b.conf.TargetURI, B2BackendPrefix)
 	if err != nil {
 		return err
 	}
@@ -69,6 +70,7 @@ func (b *B2Backend) Init(ctx context.Context, conf *BackendConfig, opts ...Optio
 
 	b.bucketName = bucket
 	b.prefix = prefix
+	b.legacy = legacyPrefixes(conf.TargetURI, conf.TypedURI, B2BackendPrefix)
 
 	for _, opt := range opts {
 		opt.Apply(b)
@@ -96,7 +98,7 @@ func (b *B2Backend) Init(ctx context.Context, conf *BackendConfig, opts ...Optio
 		return err
 	}
 
-	return checkLegacyLayout(conf, rawPrefix, func(keyPrefix string) (string, error) {
+	return checkLegacyLayout(conf, b.legacy, prefix, func(keyPrefix string) (string, error) {
 		it := b.bucketCli.List(ctx, b2.ListPrefix(keyPrefix), b2.ListPageSize(1))
 		if it.Next() {
 			return it.Object().Name(), nil

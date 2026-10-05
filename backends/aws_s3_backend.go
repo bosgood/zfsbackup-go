@@ -59,6 +59,7 @@ type AWSS3Backend struct {
 	client     s3iface.S3API
 	uploader   s3manageriface.UploaderAPI
 	prefix     string
+	legacy     []string
 	bucketName string
 }
 
@@ -102,12 +103,13 @@ func WithS3Uploader(c s3manageriface.UploaderAPI) Option {
 func (a *AWSS3Backend) Init(ctx context.Context, conf *BackendConfig, opts ...Option) error {
 	a.conf = conf
 
-	bucket, rawPrefix, prefix, err := parseObjectURI(a.conf.TargetURI, AWSS3BackendPrefix)
+	bucket, _, prefix, err := parseObjectURI(a.conf.TargetURI, AWSS3BackendPrefix)
 	if err != nil {
 		return err
 	}
 	a.bucketName = bucket
 	a.prefix = prefix
+	a.legacy = legacyPrefixes(conf.TargetURI, conf.TypedURI, AWSS3BackendPrefix)
 
 	for _, opt := range opts {
 		opt.Apply(a)
@@ -147,7 +149,7 @@ func (a *AWSS3Backend) Init(ctx context.Context, conf *BackendConfig, opts ...Op
 		return err
 	}
 
-	return checkLegacyLayout(conf, rawPrefix, func(keyPrefix string) (string, error) {
+	return checkLegacyLayout(conf, a.legacy, prefix, func(keyPrefix string) (string, error) {
 		resp, lerr := a.client.ListObjectsV2WithContext(ctx, &s3.ListObjectsV2Input{
 			Bucket:  aws.String(a.bucketName),
 			MaxKeys: aws.Int64(1),

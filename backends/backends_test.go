@@ -347,3 +347,24 @@ func TestLegacySpellings(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacyPrefixes(t *testing.T) {
+	testCases := []struct {
+		uri, typed string
+		want       []string
+	}{
+		{"s3://b/p/", "", []string{"p"}},
+		{"s3://b/p/", "s3://b/p/", []string{"p"}},
+		{"s3://b/p/", "s3://b/p", []string{"p"}},
+		{"s3://b/p/", "s3://b//p", []string{"p", "/p"}},
+		{"s3://b/p/", "s3://b/p//", []string{"p", "p//"}},
+		{"s3://b/p/q/", "s3://b/p/q", []string{"p/q"}},
+		{"s3://b", "s3://b/", nil},
+		{"s3://b", "s3://b//", []string{"/"}},
+	}
+	for _, c := range testCases {
+		if got := legacyPrefixes(c.uri, c.typed, AWSS3BackendPrefix); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("legacyPrefixes(%q, %q) = %q, want %q", c.uri, c.typed, got, c.want)
+		}
+	}
+}

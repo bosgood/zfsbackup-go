@@ -58,6 +58,7 @@ type AzureBackend struct {
 	containersas  string
 	azureURL      string
 	prefix        string
+	legacy        []string
 	containerName string
 	containerSvc  azblob.ContainerURL
 }
@@ -66,7 +67,7 @@ type AzureBackend struct {
 func (a *AzureBackend) Init(ctx context.Context, conf *BackendConfig, opts ...Option) error {
 	a.conf = conf
 
-	container, rawPrefix, prefix, err := parseObjectURI(a.conf.TargetURI, AzureBackendPrefix)
+	container, _, prefix, err := parseObjectURI(a.conf.TargetURI, AzureBackendPrefix)
 	if err != nil {
 		return err
 	}
@@ -81,6 +82,7 @@ func (a *AzureBackend) Init(ctx context.Context, conf *BackendConfig, opts ...Op
 
 	a.containerName = container
 	a.prefix = prefix
+	a.legacy = legacyPrefixes(conf.TargetURI, conf.TypedURI, AzureBackendPrefix)
 
 	for _, opt := range opts {
 		opt.Apply(a)
@@ -121,7 +123,7 @@ func (a *AzureBackend) Init(ctx context.Context, conf *BackendConfig, opts ...Op
 		return err
 	}
 
-	return checkLegacyLayout(conf, rawPrefix, func(keyPrefix string) (string, error) {
+	return checkLegacyLayout(conf, a.legacy, prefix, func(keyPrefix string) (string, error) {
 		resp, lerr := a.containerSvc.ListBlobsFlatSegment(ctx, azblob.Marker{}, azblob.ListBlobsSegmentOptions{
 			Prefix:     keyPrefix,
 			MaxResults: 1,

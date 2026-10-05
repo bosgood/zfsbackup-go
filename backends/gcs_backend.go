@@ -43,6 +43,7 @@ type GoogleCloudStorageBackend struct {
 	conf       *BackendConfig
 	client     *storage.Client
 	prefix     string
+	legacy     []string
 	bucketName string
 }
 
@@ -63,12 +64,13 @@ func WithGoogleCloudStorageClient(c *storage.Client) Option {
 func (g *GoogleCloudStorageBackend) Init(ctx context.Context, conf *BackendConfig, opts ...Option) error {
 	g.conf = conf
 
-	bucket, rawPrefix, prefix, err := parseObjectURI(g.conf.TargetURI, GoogleCloudStorageBackendPrefix)
+	bucket, _, prefix, err := parseObjectURI(g.conf.TargetURI, GoogleCloudStorageBackendPrefix)
 	if err != nil {
 		return err
 	}
 	g.bucketName = bucket
 	g.prefix = prefix
+	g.legacy = legacyPrefixes(conf.TargetURI, conf.TypedURI, GoogleCloudStorageBackendPrefix)
 
 	for _, opt := range opts {
 		opt.Apply(g)
@@ -86,7 +88,7 @@ func (g *GoogleCloudStorageBackend) Init(ctx context.Context, conf *BackendConfi
 		return err
 	}
 
-	return checkLegacyLayout(conf, rawPrefix, func(keyPrefix string) (string, error) {
+	return checkLegacyLayout(conf, g.legacy, prefix, func(keyPrefix string) (string, error) {
 		attrs, lerr := g.client.Bucket(g.bucketName).Objects(ctx, &storage.Query{Prefix: keyPrefix}).Next()
 		if lerr == iterator.Done {
 			return "", nil
