@@ -272,3 +272,82 @@ func TestCleanSkipsDatasetOfRunningSend(t *testing.T) {
 		t.Errorf("clean left its lock file behind (stat: %v)", serr)
 	}
 }
+
+// TestCleanHonoursSendLockAcrossTMPDIR: a send and a clean that see different TMPDIRs (systemd
+// PrivateTmp, cron vs a shell) must still see each other's lock.
+func TestCleanHonoursSendLockAcrossTMPDIR(t *testing.T) {
+	targetDir, jobInfo := setupCleanTest(t)
+
+	set := &files.JobInfo{
+		VolumeName:     "tank/data",
+		BaseSnapshot:   files.SnapshotInfo{Name: "a"},
+		ManifestPrefix: "manifests",
+		Separator:      "|",
+		Compressor:     files.InternalCompressor,
+	}
+	live := set.BackupVolumeObjectName(1)
+	set.Volumes = []*files.VolumeInfo{{ObjectName: live, VolumeNumber: 1}}
+	writeTestManifest(t, targetDir, set)
+	writeTestObject(t, targetDir, live)
+	inFlight := writeTestObject(t, targetDir, set.BackupVolumeObjectName(2))
+
+	// The send, with its TMPDIR, holds the lock (our parent is a live pid).
+	_, lockPath, err := volumeLock("tank/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = ioutil.WriteFile(lockPath, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(lockPath)
+
+	t.Setenv("TMPDIR", t.TempDir()) // clean runs with another
+	if cerr := Clean(context.Background(), jobInfo, false, false); cerr != nil {
+		t.Fatalf("Clean returned error - %v", cerr)
+	}
+	if _, serr := os.Stat(inFlight); serr != nil {
+		t.Fatalf("clean with another TMPDIR deleted a volume of a running send - %v", serr)
+	}
+}
+
+// TestCleanHonoursLegacySendLock: a send of the previous version, still running, holds its lock in
+// os.TempDir(). clean must leave that dataset alone too.
+func TestCleanHonoursLegacySendLock(t *testing.T) {
+	targetDir, jobInfo := setupCleanTest(t)
+	t.Setenv("TMPDIR", t.TempDir())
+
+	set := &files.JobInfo{
+		VolumeName:     "tank/data",
+		BaseSnapshot:   files.SnapshotInfo{Name: "a"},
+		ManifestPrefix: "manifests",
+		Separator:      "|",
+		Compressor:     files.InternalCompressor,
+	}
+	live := set.BackupVolumeObjectName(1)
+	set.Volumes = []*files.VolumeInfo{{ObjectName: live, VolumeNumber: 1}}
+	writeTestManifest(t, targetDir, set)
+	writeTestObject(t, targetDir, live)
+	inFlight := writeTestObject(t, targetDir, set.BackupVolumeObjectName(2))
+
+	legacy := legacyVolumeLockPath("tank/data")
+	if err := ioutil.WriteFile(legacy, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if cerr := Clean(context.Background(), jobInfo, false, false); cerr != nil {
+		t.Fatalf("Clean returned error - %v", cerr)
+	}
+	if _, serr := os.Stat(inFlight); serr != nil {
+		t.Fatalf("clean deleted a volume of a send holding the legacy lock - %v", serr)
+	}
+
+	// A legacy lock of a dead process is stale: the orphan goes.
+	if err := ioutil.WriteFile(legacy, []byte("999999999\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if cerr := Clean(context.Background(), jobInfo, false, false); cerr != nil {
+		t.Fatalf("Clean returned error - %v", cerr)
+	}
+	if _, serr := os.Stat(inFlight); !os.IsNotExist(serr) {
+		t.Fatalf("a stale legacy lock kept the orphan, stat error - %v", serr)
+	}
+}

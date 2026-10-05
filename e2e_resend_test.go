@@ -123,7 +123,7 @@ func TestE2EChecksExistingSetUnderLock(t *testing.T) {
 	}
 
 	// Another live process (our parent) holds the lock.
-	lock := lockFile("tank/data")
+	lock := env.lockFile("tank/data")
 	if err := os.WriteFile(lock, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
 		t.Fatal(err)
 	}

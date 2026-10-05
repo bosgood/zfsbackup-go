@@ -215,7 +215,8 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	}
 	// A running send has volumes at the destination that its cached manifest does not list yet.
 	// Hold each dataset's send lock for the rest of the run; where a send holds it, leave that
-	// dataset alone. This only sees sends on this host: the lock is a local file.
+	// dataset alone. This only sees sends on this host with the same --workingDirectory: the lock
+	// is a file in it.
 	busy := make(map[string]bool)
 	for dataset := range datasets {
 		lock, lockPath, lerr := volumeLock(dataset)
@@ -227,6 +228,17 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 			log.AppLogger.Noticef(
 				"A send of %s appears to be running (%s: %v); leaving its volumes alone. Run clean again when it is done.",
 				dataset, lockPath, lerr,
+			)
+			busy[dataset] = true
+			continue
+		}
+		if p, held := legacyLockHolder(dataset); held {
+			if uerr := lock.Unlock(); uerr != nil {
+				log.AppLogger.Warningf("Could not release lock %s: %v", lockPath, uerr)
+			}
+			log.AppLogger.Noticef(
+				"A send of %s by an older version appears to be running (pid %d holds %s); leaving its volumes alone. Run clean again when it is done.",
+				dataset, p.Pid, legacyVolumeLockPath(dataset),
 			)
 			busy[dataset] = true
 			continue

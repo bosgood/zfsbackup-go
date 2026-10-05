@@ -281,12 +281,43 @@ func (p *pendingVolumes) done() {
 }
 
 // volumeLock is the lock a send holds while it works on volume. clean takes it too, so that it
-// never judges the volumes of a set that is still being uploaded.
+// never judges the volumes of a set that is still being uploaded. It lives in the working
+// directory, beside the cache it protects: unlike os.TempDir(), that does not change with TMPDIR
+// (systemd's PrivateTmp, cron vs a shell). So a send and a clean only see each other on the same
+// host, with the same --workingDirectory.
 func volumeLock(volume string) (lock lockfile.Lockfile, path string, err error) {
+	dir, err := filepath.Abs(filepath.Join(config.WorkingDir, "locks"))
+	if err != nil {
+		return "", "", err
+	}
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		return "", "", err
+	}
 	// nolint:gosec // MD5 not used for cryptographic purposes
-	path = filepath.Join(os.TempDir(), fmt.Sprintf("zfsbackup.%x.lck", md5.Sum([]byte(volume))))
+	path = filepath.Join(dir, fmt.Sprintf("%x.lck", md5.Sum([]byte(volume))))
 	lock, err = lockfile.New(path)
 	return lock, path, err
+}
+
+// legacyVolumeLockPath is where versions before the lock moved to the working directory locked
+// volume. A send of such a version may still be running while this one is installed.
+func legacyVolumeLockPath(volume string) string {
+	// nolint:gosec // MD5 not used for cryptographic purposes
+	return filepath.Join(os.TempDir(), fmt.Sprintf("zfsbackup.%x.lck", md5.Sum([]byte(volume))))
+}
+
+// legacyLockHolder reports the live process that holds volume's legacy lock, if any.
+// TODO: drop it one release after the lock moved to the working directory.
+func legacyLockHolder(volume string) (*os.Process, bool) {
+	lock, err := lockfile.New(legacyVolumeLockPath(volume))
+	if err != nil {
+		return nil, false
+	}
+	p, err := lock.GetOwner()
+	if err != nil || p.Pid == os.Getpid() {
+		return nil, false
+	}
+	return p, true
 }
 
 // destination is one place a backup set is sent to: its URI and the backend initialized for it.
@@ -356,6 +387,14 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 			log.AppLogger.Warningf("Could not release lock %s: %v", lockFilePath, err)
 		}
 	}()
+	if p, held := legacyLockHolder(jobInfo.VolumeName); held {
+		err := fmt.Errorf(
+			"an older version of %s (pid %d) is sending %s; its lock is %s",
+			config.ProgramName, p.Pid, jobInfo.VolumeName, legacyVolumeLockPath(jobInfo.VolumeName),
+		)
+		log.AppLogger.Errorf("%v.", err)
+		return err
+	}
 
 	// Only now, holding the lock: checked any earlier, an overlapping send of the same set
 	// could finish between the check and the lock, and this one would then overwrite it.

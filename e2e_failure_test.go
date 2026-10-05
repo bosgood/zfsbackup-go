@@ -106,9 +106,9 @@ func (env *e2eEnv) receive(args ...string) (string, error) {
 }
 
 // lockFile is where send locks volume.
-func lockFile(volume string) string {
+func (env *e2eEnv) lockFile(volume string) string {
 	// nolint:gosec // MD5 not used for cryptographic purposes
-	return filepath.Join(os.TempDir(), fmt.Sprintf("zfsbackup.%x.lck", md5.Sum([]byte(volume))))
+	return filepath.Join(env.work, "locks", fmt.Sprintf("%x.lck", md5.Sum([]byte(volume))))
 }
 
 // destObjects returns every object (path relative to dir) under a file:// destination.
@@ -226,8 +226,8 @@ func TestE2EUploadFailureExits(t *testing.T) {
 	if err == nil {
 		t.Fatalf("send succeeded although no volume could be uploaded:\n%s", logs)
 	}
-	if _, serr := os.Stat(lockFile("tank/data")); !os.IsNotExist(serr) {
-		t.Errorf("lock file %s left behind (stat: %v)", lockFile("tank/data"), serr)
+	if _, serr := os.Stat(env.lockFile("tank/data")); !os.IsNotExist(serr) {
+		t.Errorf("lock file %s left behind (stat: %v)", env.lockFile("tank/data"), serr)
 	}
 	if names := manifestNames(destObjects(t, env.dest)); len(names) != 0 {
 		t.Errorf("a failed send uploaded manifests %q", names)
@@ -256,8 +256,8 @@ func TestE2EZFSSendFailureExits(t *testing.T) {
 	if names := manifestNames(destObjects(t, env.dest)); len(names) != 0 {
 		t.Errorf("a failed send uploaded manifests %q", names)
 	}
-	if _, serr := os.Stat(lockFile("tank/data")); !os.IsNotExist(serr) {
-		t.Errorf("lock file %s left behind (stat: %v)", lockFile("tank/data"), serr)
+	if _, serr := os.Stat(env.lockFile("tank/data")); !os.IsNotExist(serr) {
+		t.Errorf("lock file %s left behind (stat: %v)", env.lockFile("tank/data"), serr)
 	}
 	// The cached partial manifest may only list volumes cut before the stream died: all of
 	// them full-size (uncompressed, a volume is cut at 1 MiB - 50 KiB), none the truncated tail.
@@ -294,8 +294,8 @@ func TestE2EStreamingUploadFailureExits(t *testing.T) {
 	if err == nil {
 		t.Fatalf("send succeeded although no volume could be uploaded:\n%s", logs)
 	}
-	if _, serr := os.Stat(lockFile("tank/data")); !os.IsNotExist(serr) {
-		t.Errorf("lock file %s left behind (stat: %v)", lockFile("tank/data"), serr)
+	if _, serr := os.Stat(env.lockFile("tank/data")); !os.IsNotExist(serr) {
+		t.Errorf("lock file %s left behind (stat: %v)", env.lockFile("tank/data"), serr)
 	}
 	if names := manifestNames(destObjects(t, env.dest)); len(names) != 0 {
 		t.Errorf("a failed send uploaded manifests %q", names)
@@ -316,8 +316,8 @@ func TestE2EStreamingZFSSendFailureExits(t *testing.T) {
 	if err == nil {
 		t.Fatalf("send succeeded although zfs send failed:\n%s", logs)
 	}
-	if _, serr := os.Stat(lockFile("tank/data")); !os.IsNotExist(serr) {
-		t.Errorf("lock file %s left behind (stat: %v)", lockFile("tank/data"), serr)
+	if _, serr := os.Stat(env.lockFile("tank/data")); !os.IsNotExist(serr) {
+		t.Errorf("lock file %s left behind (stat: %v)", env.lockFile("tank/data"), serr)
 	}
 	if names := manifestNames(destObjects(t, env.dest)); len(names) != 0 {
 		t.Errorf("a failed send uploaded manifests %q", names)
