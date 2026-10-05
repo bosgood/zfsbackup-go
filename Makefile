@@ -42,6 +42,13 @@ integration:
 test-docker:
 	$(DOCKER_BUILD) --target test -t zfsbackup-test . && docker run --rm zfsbackup-test
 
+# Tests that need a full disk: the working directory's temp/ is a 40 KiB tmpfs. Plain `go test`
+# skips them (they need ZFSBACKUP_ENOSPC_WORK).
+test-enospc:
+	$(DOCKER_BUILD) --target test -t zfsbackup-test . && \
+	docker run --rm --tmpfs /work/temp:size=40k -e ZFSBACKUP_ENOSPC_WORK=/work zfsbackup-test \
+		go test -count=1 -run 'ENOSPC' -v .
+
 # Dev container with Claude Code sandboxed behind an egress firewall; see
 # .devcontainer/. `devcontainer-build` only builds the image (plain docker);
 # the other targets drive it with the devcontainer CLI

@@ -103,6 +103,7 @@ type VolumeInfo struct {
 	usingPipe bool
 	isClosed  bool
 	isOpened  bool
+	closeErr  error
 	lock      sync.Mutex
 }
 
@@ -274,7 +275,9 @@ func (v *VolumeInfo) Write(p []byte) (int, error) {
 	return v.w.Write(p)
 }
 
-// Close should be called after creating a new volume or after calling OpenVolume
+// Close should be called after creating a new volume or after calling OpenVolume. It closes every
+// layer even when one fails, and returns the first error. A volume whose Close failed records no
+// size or checksums, and every later Close returns the same error.
 // nolint:funlen,gocyclo // Difficult to break this apart
 func (v *VolumeInfo) Close() error {
 	// Protect against multiple calls to this function
@@ -282,9 +285,8 @@ func (v *VolumeInfo) Close() error {
 	defer v.lock.Unlock()
 
 	if v.isClosed {
-		return nil
+		return v.closeErr
 	}
-	v.isClosed = true
 
 	if !v.isOpened || v.pw != nil {
 		v.CloseTime = time.Now()
@@ -294,74 +296,81 @@ func (v *VolumeInfo) Close() error {
 		v.isOpened = false
 	}
 
+	var err error
+	keep := func(e error) {
+		if err == nil {
+			err = e
+		}
+	}
+
 	// Close the (de)compressor, if any
-	if v.cw != nil || v.rw != nil {
-		if v.cw != nil {
-			if err := v.cw.Close(); err != nil {
-				return err
-			}
-			v.cw = nil
-		}
-
-		if v.rw != nil {
-			if err := v.rw.Close(); err != nil {
-				return err
-			}
-			v.rw = nil
-		}
-
-		// If we used an external (de)compressor, wait for it to close as well
-		if v.cmd != nil {
-			if err := v.cmd.Wait(); err != nil {
-				return err
-			}
-			v.cmd = nil
-		}
+	if v.cw != nil {
+		keep(v.cw.Close())
+		v.cw = nil
+	}
+	if v.rw != nil {
+		keep(v.rw.Close())
+		v.rw = nil
+	}
+	// If we used an external (de)compressor, wait for it to close as well
+	if v.cmd != nil {
+		keep(v.cmd.Wait())
+		v.cmd = nil
 	}
 
 	// Close the (de/en)crypter, if any
-	if v.pgpw != nil || v.pgpr != nil {
-		if v.pgpw != nil {
-			if err := v.pgpw.Close(); err != nil {
-				return err
-			}
-			v.pgpw = nil
-		}
-
-		if v.pgpr != nil {
-			v.pgpw = nil
-		}
+	if v.pgpw != nil {
+		keep(v.pgpw.Close())
+		v.pgpw = nil
 	}
 
-	// Flush the buffered writer
+	// Flush the buffered writer. Into a pipe, only when nothing failed: nobody may be reading it.
 	if v.bufw != nil {
-		v.bufw.Flush()
+		if err == nil || v.pw == nil {
+			keep(v.bufw.Flush())
+		}
 		v.bufw = nil
 	}
 
 	// Finally, close the actual file or Pipe
 	if v.fw != nil {
-		if err := v.fw.Close(); err != nil {
-			return err
-		}
+		keep(v.fw.Close())
 		v.fw = nil
+		// The file must hold every byte written to it: catches a late ENOSPC/EDQUOT.
+		if v.counter != nil && err == nil {
+			if info, serr := os.Stat(v.filename); serr != nil {
+				keep(serr)
+			} else if uint64(info.Size()) != v.counter.Count() {
+				keep(fmt.Errorf("volume file %s is %d bytes, but %d were written to it", v.filename, info.Size(), v.counter.Count()))
+			}
+		}
 	}
 
 	if v.pw != nil {
-		// Special case for when we are using pipes, make the volume think its still
-		// open and needs to be closed by the reader.
-		v.isClosed = false
-		v.isOpened = true
-		if err := v.pw.Close(); err != nil {
-			return err
+		if err != nil {
+			// The reader must see the failure, not a clean end of the volume.
+			v.pw.CloseWithError(err)
+		} else {
+			// Special case for when we are using pipes, make the volume think its still
+			// open and needs to be closed by the reader.
+			v.isOpened = true
+			keep(v.pw.Close())
 		}
 		v.pw = nil
 	} else if v.pr != nil {
-		if err := v.pr.Close(); err != nil {
-			return err
-		}
+		keep(v.pr.Close())
 		v.pr = nil
 	}
+
+	if err != nil {
+		v.isClosed = true
+		v.closeErr = err
+		v.counter, v.SHA256, v.CRC32C, v.MD5, v.SHA1 = nil, nil, nil, nil, nil
+		v.w, v.r = nil, nil
+		return err
+	}
+	// A pipe's writer side closes it first; the reader closes it again.
+	v.isClosed = !v.isOpened
 
 	// Record computed metrics and release resources
 	if v.counter != nil {
