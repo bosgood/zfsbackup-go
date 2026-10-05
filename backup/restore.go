@@ -23,12 +23,10 @@ package backup
 import (
 	"bytes"
 	"context"
-	"crypto/md5" // nolint:gosec // MD5 not used for cryptographic purposes here
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -73,13 +71,13 @@ func AutoRestore(pctx context.Context, jobInfo *files.JobInfo) error {
 	}
 
 	// Sync the local cache
-	safeManifests, _, serr := syncCache(ctx, jobInfo, localCachePath, backend)
+	manifests, _, serr := syncCache(ctx, jobInfo, localCachePath, backend)
 	if serr != nil {
 		log.AppLogger.Errorf("Could not sync cache dir for target %s due to error - %v.", backends.RedactURI(target), serr)
 		return serr
 	}
 
-	decodedManifests, derr := readAndSortManifests(ctx, localCachePath, safeManifests, jobInfo)
+	decodedManifests, derr := readAndSortManifests(ctx, jobInfo, localCachePath, backend, manifests)
 	if derr != nil {
 		return derr
 	}
@@ -246,29 +244,10 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 		}
 	}
 
-	manifestObjectName := jobInfo.ManifestObjectName()
-	// nolint:gosec // MD5 not used for cryptographic purposes here
-	safeManifestFile := fmt.Sprintf("%x", md5.Sum([]byte(manifestObjectName)))
-	safeManifestPath := filepath.Join(localCachePath, safeManifestFile)
-
-	// Check to see if we have the manifest file locally
-	manifest, err := readManifest(ctx, safeManifestPath, jobInfo)
+	manifest, err := readCachedManifest(ctx, jobInfo, localCachePath, backend, jobInfo.ManifestObjectName())
 	if err != nil {
-		if os.IsNotExist(err) {
-			if bErr := backend.PreDownload(ctx, []string{manifestObjectName}); bErr != nil {
-				log.AppLogger.Errorf("Error trying to pre download manifest volume %s - %v", manifestObjectName, bErr)
-				return bErr
-			}
-			// Try and download the manifest file from the backend
-			if dErr := downloadTo(ctx, backend, manifestObjectName, safeManifestPath); dErr != nil {
-				return dErr
-			}
-			manifest, err = readManifest(ctx, safeManifestPath, jobInfo)
-		}
-		if err != nil {
-			log.AppLogger.Errorf("Error trying to retrieve manifest volume - %v", err)
-			return err
-		}
+		log.AppLogger.Errorf("Error trying to retrieve manifest volume - %v", err)
+		return err
 	}
 
 	manifest.ManifestPrefix = jobInfo.ManifestPrefix
@@ -558,26 +537,18 @@ func receiveStream(ctx context.Context, cmd *exec.Cmd, j *files.JobInfo, c <-cha
 	return nil
 }
 
+// downloadTo downloads objectName to toPath, atomically: toPath is never a partial download.
 func downloadTo(ctx context.Context, backend backends.Backend, objectName, toPath string) error {
 	r, rerr := backend.Download(ctx, objectName)
-	if rerr == nil {
-		defer r.Close()
-		out, oerr := os.Create(toPath)
-		if oerr != nil {
-			log.AppLogger.Errorf("Could not create file in the local cache dir due to error - %v.", oerr)
-			return oerr
-		}
-		defer out.Close()
-
-		_, err := io.Copy(out, r)
-		if err != nil {
-			log.AppLogger.Errorf("Could not download file %s to the local cache dir due to error - %v.", objectName, err)
-			return err
-		}
-		log.AppLogger.Debugf("Downloaded %s to local cache.", objectName)
-	} else {
+	if rerr != nil {
 		log.AppLogger.Errorf("Could not download file %s to the local cache dir due to error - %v.", objectName, rerr)
 		return rerr
 	}
+	defer r.Close()
+	if err := files.WriteFileAtomic(filepath.Dir(toPath), filepath.Base(toPath), r); err != nil {
+		log.AppLogger.Errorf("Could not download file %s to the local cache dir due to error - %v.", objectName, err)
+		return err
+	}
+	log.AppLogger.Debugf("Downloaded %s to local cache.", objectName)
 	return nil
 }

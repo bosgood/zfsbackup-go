@@ -173,17 +173,16 @@ func getBackupsForTarget(ctx context.Context, volume, target string, jobInfo *fi
 	}
 
 	// Sync the local cache
-	safeManifests, _, serr := syncCache(ctx, jobInfo, localCachePath, backend)
+	manifests, _, serr := syncCache(ctx, jobInfo, localCachePath, backend)
 	if serr != nil {
 		log.AppLogger.Errorf("Could not sync cache dir for target %s due to error - %v.", backends.RedactURI(target), serr)
 		return nil, serr
 	}
 
 	// Read in Manifests and display
-	decodedManifests := make([]*files.JobInfo, 0, len(safeManifests))
-	for _, manifest := range safeManifests {
-		manifestPath := filepath.Join(localCachePath, manifest)
-		decodedManifest, oerr := readManifest(ctx, manifestPath, jobInfo)
+	decodedManifests := make([]*files.JobInfo, 0, len(manifests))
+	for _, manifest := range manifests {
+		decodedManifest, oerr := readCachedManifest(ctx, jobInfo, localCachePath, backend, manifest)
 		if oerr != nil {
 			return nil, oerr
 		}
@@ -1134,8 +1133,8 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination
 	case os.IsNotExist(oerr):
 		log.AppLogger.Info("No previous manifest file exists, nothing to resume")
 	case oerr != nil:
-		log.AppLogger.Errorf("Could not open previous manifest file %s due to error: %v", origManiPath, oerr)
-		return oerr
+		// Cut short by a kill or a full disk: there is nothing to resume from.
+		log.AppLogger.Warningf("Could not read previous manifest file %s (%v); starting over.", origManiPath, oerr)
 	default:
 		if j.BaseSnapshot.GUID == "" {
 			return fmt.Errorf("cannot resume: could not read the guid of %s@%s", j.VolumeName, j.BaseSnapshot.Name)

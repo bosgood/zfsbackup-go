@@ -62,13 +62,13 @@ func List(pctx context.Context, jobInfo *files.JobInfo, startswith string, befor
 	}
 
 	// Sync the local cache
-	safeManifests, localOnlyFiles, serr := syncCache(ctx, jobInfo, localCachePath, backend)
+	manifests, localOnlyFiles, serr := syncCache(ctx, jobInfo, localCachePath, backend)
 	if serr != nil {
 		log.AppLogger.Errorf("Could not sync cache dir for target %s due to error - %v.", backends.RedactURI(target), serr)
 		return serr
 	}
 
-	decodedManifests, derr := readAndSortManifests(ctx, localCachePath, safeManifests, jobInfo)
+	decodedManifests, derr := readAndSortManifests(ctx, jobInfo, localCachePath, backend, manifests)
 	if derr != nil {
 		return derr
 	}
@@ -138,17 +138,16 @@ func List(pctx context.Context, jobInfo *files.JobInfo, startswith string, befor
 
 func readAndSortManifests(
 	ctx context.Context,
-	localCachePath string,
-	manifests []string,
 	jobInfo *files.JobInfo,
+	localCachePath string,
+	backend backends.Backend,
+	manifests []string,
 ) ([]*files.JobInfo, error) {
 	// Read in Manifests and display
 	decodedManifests := make([]*files.JobInfo, 0, len(manifests))
 	for _, manifest := range manifests {
-		manifestPath := filepath.Join(localCachePath, manifest)
-		decodedManifest, oerr := readManifest(ctx, manifestPath, jobInfo)
+		decodedManifest, oerr := readCachedManifest(ctx, jobInfo, localCachePath, backend, manifest)
 		if oerr != nil {
-			log.AppLogger.Errorf("Could not read manifest %s due to error - %v", manifestPath, oerr)
 			return nil, oerr
 		}
 		decodedManifests = append(decodedManifests, decodedManifest)

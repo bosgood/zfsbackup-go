@@ -139,7 +139,9 @@ func adoptCacheDir(from, to string) error {
 	return nil
 }
 
-// Returns local manifest paths that exist in the backend and those that do not
+// syncCache downloads the manifests at backend that localCache lacks. It returns the object names
+// of the manifests at backend (read them with readCachedManifest) and the cache file names of
+// manifests cached but not at backend.
 // nolint:gocritic // Don't need to name the results
 func syncCache(ctx context.Context, j *files.JobInfo, localCache string, backend backends.Backend) ([]string, []string, error) {
 	// List all manifests at the destination
@@ -147,6 +149,8 @@ func syncCache(ctx context.Context, j *files.JobInfo, localCache string, backend
 	if merr != nil {
 		return nil, nil, fmt.Errorf("could not list manifest files from the backed due to error - %v", merr)
 	}
+
+	atDestination := append([]string(nil), manifests...)
 
 	// Make it safe for local file system storage
 	safeManifests := make([]string, len(manifests))
@@ -164,7 +168,7 @@ func syncCache(ctx context.Context, j *files.JobInfo, localCache string, backend
 	var localOnlyFiles []string
 	var foundFiles []string
 	for _, file := range manifestFiles {
-		if file.IsDir() {
+		if file.IsDir() || files.IsAtomicTemp(file.Name()) {
 			continue
 		}
 		found := false
@@ -200,9 +204,44 @@ func syncCache(ctx context.Context, j *files.JobInfo, localCache string, backend
 		}
 	}
 
-	safeManifests = append(safeManifests, foundFiles...)
+	return atDestination, localOnlyFiles, nil
+}
 
-	return safeManifests, localOnlyFiles, nil
+// cachedManifestName is the file name objectName is cached under.
+func cachedManifestName(objectName string) string {
+	// nolint:gosec // MD5 not used for cryptographic purposes here
+	return fmt.Sprintf("%x", md5.Sum([]byte(objectName)))
+}
+
+// readCachedManifest decodes the manifest objectName at backend from its copy in localCache,
+// downloading it first if there is none. A cached copy that does not decode (cut short by a kill or
+// a failed download, before cache writes were atomic) is downloaded again, once.
+func readCachedManifest(
+	ctx context.Context, j *files.JobInfo, localCache string, backend backends.Backend, objectName string,
+) (*files.JobInfo, error) {
+	path := filepath.Join(localCache, cachedManifestName(objectName))
+	manifest, err := readManifest(ctx, path, j)
+	if err == nil {
+		return manifest, nil
+	}
+	if !os.IsNotExist(err) {
+		log.AppLogger.Warningf("Cached manifest %s (%s) is unreadable (%v); downloading it again.", path, objectName, err)
+		if rerr := os.Remove(path); rerr != nil {
+			return nil, rerr
+		}
+	}
+	if err = backend.PreDownload(ctx, []string{objectName}); err != nil {
+		log.AppLogger.Errorf("Error trying to pre download manifest %s - %v", objectName, err)
+		return nil, err
+	}
+	if err = downloadTo(ctx, backend, objectName, path); err != nil {
+		return nil, err
+	}
+	if manifest, err = readManifest(ctx, path, j); err != nil {
+		log.AppLogger.Errorf("Could not read manifest %s, freshly downloaded to %s, due to error - %v", objectName, path, err)
+		return nil, err
+	}
+	return manifest, nil
 }
 
 // nolint:unparam // Some errors are not ok to ignore

@@ -101,7 +101,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	}
 
 	// Sync the local cache
-	safeManifests, localOnlyFiles, serr := syncCache(ctx, jobInfo, localCachePath, backend)
+	manifests, localOnlyFiles, serr := syncCache(ctx, jobInfo, localCachePath, backend)
 	if serr != nil {
 		log.AppLogger.Errorf("Could not sync cache dir for target %s due to error - %v.", backends.RedactURI(target), serr)
 		return serr
@@ -116,7 +116,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 
 	// With no manifests at all there is nothing to protect: the URI is almost certainly wrong,
 	// or the manifests are already gone. Either way, a bulk delete must not be one command away.
-	if len(safeManifests) == 0 && len(localOnlyFiles) == 0 && len(allObjects) > 0 {
+	if len(manifests) == 0 && len(localOnlyFiles) == 0 && len(allObjects) > 0 {
 		err = fmt.Errorf(
 			"destination %s holds %d objects but no manifests; refusing to clean. If this is intended, delete the objects manually",
 			target, len(allObjects),
@@ -126,12 +126,10 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	}
 
 	// Read in Manifests
-	decodedManifests := make([]*files.JobInfo, 0, len(safeManifests))
-	for _, manifest := range safeManifests {
-		manifestPath := filepath.Join(localCachePath, manifest)
-		decodedManifest, oerr := readManifest(ctx, manifestPath, jobInfo)
+	decodedManifests := make([]*files.JobInfo, 0, len(manifests))
+	for _, manifest := range manifests {
+		decodedManifest, oerr := readCachedManifest(ctx, jobInfo, localCachePath, backend, manifest)
 		if oerr != nil {
-			log.AppLogger.Errorf("Could not read manifest %s due to error - %v", manifestPath, oerr)
 			return oerr
 		}
 		decodedManifests = append(decodedManifests, decodedManifest)
@@ -148,7 +146,13 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 				manifestPath := filepath.Join(localCachePath, manifest)
 				decodedManifest, oerr := readManifest(ctx, manifestPath, jobInfo)
 				if oerr != nil {
-					log.AppLogger.Errorf("Could not read manifest %s due to error - %v", manifestPath, oerr)
+					// Its volumes are unknown, so none can be told apart from orphans.
+					log.AppLogger.Errorf(
+						"Could not read local manifest %s due to error - %v. It is not at the destination, so it cannot be "+
+							"downloaded again: if it is the state of an interrupted send (cut short by a kill), delete it, "+
+							"or run clean with --cleanLocal.",
+						manifestPath, oerr,
+					)
 					return oerr
 				}
 				decodedManifests = append(decodedManifests, decodedManifest)

@@ -34,6 +34,7 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -409,23 +410,14 @@ func (v *VolumeInfo) Close() error {
 	return nil
 }
 
-// CopyTo will write out the volume to the path specified
-func (v *VolumeInfo) CopyTo(dest string) (err error) {
+// CopyTo will write out the volume to the path specified, atomically: dest is never a partial copy.
+func (v *VolumeInfo) CopyTo(dest string) error {
 	in, err := os.Open(v.filename)
 	if err != nil {
-		return
+		return err
 	}
 	defer in.Close()
-	out, err := os.Create(dest)
-	if err != nil {
-		return
-	}
-	defer out.Close()
-	if _, err = io.Copy(out, in); err != nil {
-		return
-	}
-	err = out.Sync()
-	return
+	return WriteFileAtomic(filepath.Dir(dest), filepath.Base(dest), in)
 }
 
 // LoadVolume copies the file at path, an already compressed/encrypted volume such as a cached

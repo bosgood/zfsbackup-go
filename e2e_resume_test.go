@@ -299,3 +299,56 @@ func volumeNamed(t *testing.T, dir string, n int64) string {
 	t.Fatalf("no volume %d under %s", n, dir)
 	return ""
 }
+
+// A cached manifest truncated by a kill or a failed download (by an older version, which wrote
+// the cache in place) must not wedge every later send to that destination.
+func TestE2ESmartSendHealsTruncatedCache(t *testing.T) {
+	for _, keep := range []string{"empty", "half"} {
+		t.Run(keep, func(t *testing.T) {
+			env := newE2EEnv(t)
+			env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+				{Name: "b", CreationTime: time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)},
+				{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+			})
+			dest := "file://" + env.dest
+			env.sendOK(t, "tank/data@a", dest)
+			paths, err := filepath.Glob(filepath.Join(env.work, "cache", "*", "*"))
+			if err != nil || len(paths) != 1 {
+				t.Fatalf("want one cached manifest, got %q (%v)", paths, err)
+			}
+			info, err := os.Stat(paths[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			size := int64(0)
+			if keep == "half" {
+				size = info.Size() / 2
+			}
+			if err = os.Truncate(paths[0], size); err != nil {
+				t.Fatal(err)
+			}
+			env.sendOK(t, "--increment", "tank/data", dest)
+			if got := newestBackup(t, "tank/data", dest); got.BaseSnapshot.Name != "b" || got.IncrementalSnapshot.Name != "a" {
+				t.Errorf("newest backup is %s from %q, want b from a", got.BaseSnapshot.Name, got.IncrementalSnapshot.Name)
+			}
+		})
+	}
+}
+
+// A truncated partial manifest is no resume state: the resume starts over.
+func TestE2EResumeIgnoresTruncatedPartial(t *testing.T) {
+	const streamBytes = 3 << 20
+	env := newE2EEnv(t)
+	args := []string{"--volsize", "1", "--compressor", ""}
+	env.interruptedSend(t, streamBytes, env.dest, args...)
+	paths, err := filepath.Glob(filepath.Join(env.work, "cache", "*", "*"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("want one cached manifest, got %q (%v)", paths, err)
+	}
+	if err = os.Truncate(paths[0], 100); err != nil {
+		t.Fatal(err)
+	}
+	dest := "file://" + env.dest
+	env.sendOK(t, append(args, "--resume", "tank/data@a", dest)...)
+	env.checkRestores(t, dest, "a", streamBytes)
+}
