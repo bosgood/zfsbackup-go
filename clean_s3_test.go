@@ -23,11 +23,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/md5" // nolint:gosec // MD5 not used for cryptographic purposes here
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -37,6 +39,7 @@ import (
 	"github.com/op/go-logging"
 
 	"github.com/someone1/zfsbackup-go/cmd"
+	"github.com/someone1/zfsbackup-go/config"
 	"github.com/someone1/zfsbackup-go/files"
 	"github.com/someone1/zfsbackup-go/log"
 )
@@ -117,9 +120,20 @@ func (f *fakeS3) list(w http.ResponseWriter, r *http.Request) {
 // a real gzip'd manifest and its volume.
 func backupSet(t *testing.T, prefix, volume string) map[string][]byte {
 	t.Helper()
+	return backupSetAt(t, prefix, volume, "autosnap_2026-09-01_00:00:00_monthly")
+}
+
+// backupSetAt is backupSet of a full backup of snapshot.
+func backupSetAt(t *testing.T, prefix, volume, snapshot string) map[string][]byte {
+	t.Helper()
+	// The manifest is built in config.BackupTempdir, which an earlier in-process run may have
+	// pointed at a directory it has since removed.
+	oldTempdir := config.BackupTempdir
+	config.BackupTempdir = t.TempDir()
+	defer func() { config.BackupTempdir = oldTempdir }()
 	j := &files.JobInfo{
 		VolumeName:     volume,
-		BaseSnapshot:   files.SnapshotInfo{Name: "autosnap_2026-09-01_00:00:00_monthly"},
+		BaseSnapshot:   files.SnapshotInfo{Name: snapshot},
 		ManifestPrefix: "manifests",
 		Separator:      "|",
 		Compressor:     files.InternalCompressor,
@@ -161,10 +175,16 @@ func merge(sets ...map[string][]byte) map[string][]byte {
 // cleanS3 runs `clean` in-process against uri and returns its log and error.
 func cleanS3(t *testing.T, args ...string) (string, error) {
 	t.Helper()
+	return cleanS3In(t, t.TempDir(), args...)
+}
+
+// cleanS3In is cleanS3 with the working directory (and so the manifest cache) work.
+func cleanS3In(t *testing.T, work string, args ...string) (string, error) {
+	t.Helper()
 	cmd.ResetReceiveJobInfo()
 	var logs bytes.Buffer
 	log.AppLogger.SetBackend(logging.AddModuleLevel(logging.NewLogBackend(&logs, "", 0)))
-	cmd.RootCmd.SetArgs(append([]string{"clean", "--workingDirectory", t.TempDir()}, args...))
+	cmd.RootCmd.SetArgs(append([]string{"clean", "--workingDirectory", work}, args...))
 	defer func() {
 		cmd.RootCmd.SetArgs(nil)
 		cmd.ResetReceiveJobInfo()
@@ -253,5 +273,40 @@ func TestCleanS3Prefixes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestCleanS3KeepsCacheAcrossCanonicalization: an interrupted send to s3://bucket/ left its
+// volume at the destination and its partial manifest only in the cache, which the old version
+// keyed by the URI as typed. clean must still find that manifest and keep the volume.
+func TestCleanS3KeepsCacheAcrossCanonicalization(t *testing.T) {
+	objects := backupSet(t, "", "tank/data")
+	work := t.TempDir()
+	// nolint:gosec // MD5 not used for cryptographic purposes here
+	cacheDir := filepath.Join(work, "cache", fmt.Sprintf("%x", md5.Sum([]byte("s3://bucket/"))))
+	if err := os.MkdirAll(cacheDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range backupSetAt(t, "", "tank/data", "autosnap_2026-10-01_00:00:00_monthly") {
+		if !strings.HasPrefix(name, "manifests|") {
+			objects[name] = data
+			continue
+		}
+		// nolint:gosec // MD5 not used for cryptographic purposes here
+		cached := filepath.Join(cacheDir, fmt.Sprintf("%x", md5.Sum([]byte(name))))
+		if err := ioutil.WriteFile(cached, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, uri := range []string{"s3://bucket/", "s3://bucket"} {
+		fake := newFakeS3(t, objects)
+		logs, err := cleanS3In(t, work, "--dry-run=true", uri)
+		if err != nil {
+			t.Fatalf("clean %s: %v\n%s", uri, err, logs)
+		}
+		if strings.Contains(logs, "Would delete") || len(fake.deleted) != 0 {
+			t.Errorf("clean %s would delete the interrupted send's volume\n%s", uri, logs)
+		}
 	}
 }

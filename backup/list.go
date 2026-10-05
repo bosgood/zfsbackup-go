@@ -55,7 +55,7 @@ func List(pctx context.Context, jobInfo *files.JobInfo, startswith string, befor
 	defer backend.Close()
 
 	// Get the local cache dir
-	localCachePath, cerr := getCacheDir(jobInfo.Destinations[0])
+	localCachePath, cerr := getCacheDir(jobInfo, jobInfo.Destinations[0])
 	if cerr != nil {
 		log.AppLogger.Errorf("Could not get cache dir for target %s due to error - %v.", backends.RedactURI(target), cerr)
 		return cerr

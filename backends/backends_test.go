@@ -326,3 +326,24 @@ func TestRedactURI(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacySpellings(t *testing.T) {
+	testCases := []struct {
+		canonical, typed string
+		want             []string
+	}{
+		{"s3://b", "s3://b/", []string{"s3://b/"}},
+		{"s3://b", "s3://b", []string{"s3://b/"}},
+		{"s3://b/p/", "s3://b/p", []string{"s3://b/p"}},
+		{"s3://b/p/", "", []string{"s3://b/p"}},
+		{"s3://b/p/", "s3://b//p", []string{"s3://b/p", "s3://b//p"}},
+		{"gs://b/p/", "gs://b/p//", []string{"gs://b/p", "gs://b/p//"}},
+		{"file:///tmp/d", "file:///tmp/d", nil},
+		{"ssh://h/path", "", nil},
+	}
+	for _, c := range testCases {
+		if got := LegacySpellings(c.canonical, c.typed); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("LegacySpellings(%q, %q) = %q, want %q", c.canonical, c.typed, got, c.want)
+		}
+	}
+}

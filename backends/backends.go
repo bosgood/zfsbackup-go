@@ -191,6 +191,24 @@ func CanonicalURI(uri string) string {
 	return scheme + "://" + bucket
 }
 
+// LegacySpellings returns the other spellings of a canonical destination URI under which an
+// older version, which keyed the local cache by the URI as typed, may have cached manifests:
+// the object-store URI with its trailing slash toggled, and the spelling typed now.
+func LegacySpellings(canonical, typed string) []string {
+	var spellings []string
+	if scheme, rest, ok := strings.Cut(canonical, "://"); ok && objectStoreSchemes[scheme] {
+		if strings.HasSuffix(rest, "/") {
+			spellings = append(spellings, strings.TrimSuffix(canonical, "/"))
+		} else {
+			spellings = append(spellings, canonical+"/")
+		}
+	}
+	if typed != "" && typed != canonical && (len(spellings) == 0 || spellings[0] != typed) {
+		spellings = append(spellings, typed)
+	}
+	return spellings
+}
+
 // RedactURI drops the userinfo ("user[:password]@") from a URI, for logs and error messages.
 func RedactURI(uri string) string {
 	scheme, rest, ok := strings.Cut(uri, "://")

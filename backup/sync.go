@@ -82,16 +82,61 @@ func prepareBackend(ctx context.Context, j *files.JobInfo, backendURI string, up
 	return backend, err
 }
 
-func getCacheDir(backendURI string) (string, error) {
+// cacheDirFor is where the manifests of the destination backendURI are cached.
+func cacheDirFor(backendURI string) string {
 	// nolint:gosec // MD5 not used for cryptographic purposes here
-	safeFolder := fmt.Sprintf("%x", md5.Sum([]byte(backendURI)))
-	dest := filepath.Join(config.WorkingDir, "cache", safeFolder)
+	return filepath.Join(config.WorkingDir, "cache", fmt.Sprintf("%x", md5.Sum([]byte(backendURI))))
+}
+
+// getCacheDir creates the cache directory of backendURI (a canonical URI) and first moves into
+// it whatever an older version cached under another spelling of the same destination.
+func getCacheDir(j *files.JobInfo, backendURI string) (string, error) {
+	dest := cacheDirFor(backendURI)
 	oerr := os.MkdirAll(dest, os.ModePerm)
 	if oerr != nil {
 		return "", fmt.Errorf("could not create cache directory %s due to an error: %v", dest, oerr)
 	}
 
+	for _, spelling := range backends.LegacySpellings(backendURI, j.DestinationsAsTyped[backendURI]) {
+		if err := adoptCacheDir(cacheDirFor(spelling), dest); err != nil {
+			return "", fmt.Errorf("could not move the cache of %s to %s due to an error: %v", backends.RedactURI(spelling), dest, err)
+		}
+	}
+
 	return dest, nil
+}
+
+// adoptCacheDir moves the cached manifests in from to to and removes from. A manifest cached in
+// both keeps to's copy: it was synced from the destination or written since the upgrade.
+func adoptCacheDir(from, to string) error {
+	entries, err := os.ReadDir(from)
+	if os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	moved := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		src, dst := filepath.Join(from, entry.Name()), filepath.Join(to, entry.Name())
+		if _, serr := os.Stat(dst); serr == nil {
+			if err = os.Remove(src); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = os.Rename(src, dst); err != nil {
+			return err
+		}
+		moved++
+	}
+	log.AppLogger.Noticef("Moved %d cached manifests from %s to %s: the cache is now keyed by the canonical URI.", moved, from, to)
+	if err = os.Remove(from); err != nil {
+		log.AppLogger.Debugf("Could not remove the old cache directory %s: %v", from, err)
+	}
+	return nil
 }
 
 // Returns local manifest paths that exist in the backend and those that do not

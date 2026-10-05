@@ -156,7 +156,7 @@ func getBackupsForTarget(ctx context.Context, volume, target string, jobInfo *fi
 	}
 
 	// Get the local cache dir
-	localCachePath, cerr := getCacheDir(target)
+	localCachePath, cerr := getCacheDir(jobInfo, target)
 	if cerr != nil {
 		log.AppLogger.Errorf("Could not get cache dir for target %s due to error - %v.", backends.RedactURI(target), cerr)
 		return nil, cerr
@@ -282,7 +282,7 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 			return berr
 		}
 		dests = append(dests, destination{uri: uri, backend: backend})
-		if _, cerr := getCacheDir(uri); cerr != nil {
+		if _, cerr := getCacheDir(jobInfo, uri); cerr != nil {
 			log.AppLogger.Errorf("Could not create cache for destination %s due to error - %v.", backends.RedactURI(uri), cerr)
 			return cerr
 		}
@@ -654,9 +654,7 @@ func saveManifest(ctx context.Context, j *files.JobInfo, final bool) (*files.Vol
 		if destination == backends.DeleteBackendPrefix+"://" {
 			continue
 		}
-		// nolint:gosec // MD5 not used for cryptographic purposes here
-		safeFolder := fmt.Sprintf("%x", md5.Sum([]byte(destination)))
-		dest := filepath.Join(config.WorkingDir, "cache", safeFolder, safeManifestFile)
+		dest := filepath.Join(cacheDirFor(destination), safeManifestFile)
 		if err = manifest.CopyTo(dest); err != nil {
 			log.AppLogger.Warningf("Could not write manifest volume due to error - %v", err)
 			return nil, err
@@ -864,8 +862,7 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination
 	// nolint:gosec // MD5 not used for cryptographic purposes here
 	safeManifestFile := fmt.Sprintf("%x", md5.Sum([]byte(manifest.ObjectName)))
 
-	safeFolder := fmt.Sprintf("%x", md5.Sum([]byte(destinations[0].uri))) // nolint:gosec // MD5 not used for cryptographic purposes here
-	origManiPath := filepath.Join(config.WorkingDir, "cache", safeFolder, safeManifestFile)
+	origManiPath := filepath.Join(cacheDirFor(destinations[0].uri), safeManifestFile)
 
 	switch originalManifest, oerr := readManifest(ctx, origManiPath, j); {
 	case os.IsNotExist(oerr):
