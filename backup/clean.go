@@ -213,6 +213,31 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	if jobInfo.Separator == "" {
 		manifestPrefix = jobInfo.ManifestPrefix + files.DefaultSeparator
 	}
+	// A running send has volumes at the destination that its cached manifest does not list yet.
+	// Hold each dataset's send lock for the rest of the run; where a send holds it, leave that
+	// dataset alone. This only sees sends on this host: the lock is a local file.
+	busy := make(map[string]bool)
+	for dataset := range datasets {
+		lock, lockPath, lerr := volumeLock(dataset)
+		if lerr != nil {
+			log.AppLogger.Errorf("Cannot init lock for %s. reason: %v", dataset, lerr)
+			return lerr
+		}
+		if lerr = lock.TryLock(); lerr != nil {
+			log.AppLogger.Noticef(
+				"A send of %s appears to be running (%s: %v); leaving its volumes alone. Run clean again when it is done.",
+				dataset, lockPath, lerr,
+			)
+			busy[dataset] = true
+			continue
+		}
+		defer func() {
+			if uerr := lock.Unlock(); uerr != nil {
+				log.AppLogger.Warningf("Could not release lock %s: %v", lockPath, uerr)
+			}
+		}()
+	}
+
 	nested := nestedDestinations(allObjects, manifestPrefix)
 	candidates := make([]string, 0, len(allObjects))
 	skipped := 0
@@ -238,6 +263,9 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 			skipped++
 			continue
 		}
+		if busy[dataset] {
+			continue
+		}
 		candidates = append(candidates, obj)
 	}
 	if skipped > 0 {
@@ -247,6 +275,10 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 
 	// Go through all manifests and remove from the allObjects list what we know should exist
 	for _, manifest := range decodedManifests {
+		// Not judged at all, so --force cannot remove a set a running send is still completing.
+		if busy[manifest.VolumeName] {
+			continue
+		}
 		for vidx, vol := range manifest.Volumes {
 			found := false
 			for idx := range allObjects {

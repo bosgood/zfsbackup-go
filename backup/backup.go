@@ -241,6 +241,15 @@ func reportDryRun(ctx context.Context, jobInfo *files.JobInfo) error {
 
 // Backup will initiate a backup with the provided configuration.
 // nolint:funlen,gocyclo // Difficult to break this up
+// volumeLock is the lock a send holds while it works on volume. clean takes it too, so that it
+// never judges the volumes of a set that is still being uploaded.
+func volumeLock(volume string) (lock lockfile.Lockfile, path string, err error) {
+	// nolint:gosec // MD5 not used for cryptographic purposes
+	path = filepath.Join(os.TempDir(), fmt.Sprintf("zfsbackup.%x.lck", md5.Sum([]byte(volume))))
+	lock, err = lockfile.New(path)
+	return lock, path, err
+}
+
 // destination is one place a backup set is sent to: its URI and the backend initialized for it.
 // Keeping them in one value means a backend can never be reported, or cached, under another's URI.
 type destination struct {
@@ -289,9 +298,7 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	}
 
 	// Make sure nobody else is working on the same volume/dataset we are!
-	// nolint:gosec // MD5 not used for cryptographic purposes
-	lockFilePath := filepath.Join(os.TempDir(), fmt.Sprintf("zfsbackup.%x.lck", md5.Sum([]byte(jobInfo.VolumeName))))
-	lock, lferr := lockfile.New(lockFilePath)
+	lock, lockFilePath, lferr := volumeLock(jobInfo.VolumeName)
 	if lferr != nil {
 		log.AppLogger.Errorf("Cannot init lock. reason: %v", lferr)
 		return lferr
@@ -930,7 +937,8 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination
 // verifiedVolumes returns the longest run of cached volumes, numbered contiguously from 1, that
 // exist at every destination. Volumes past that point are sent again; their old copies at the
 // destinations are overwritten by the new attempt's same-numbered objects or, being referenced
-// by no final manifest, removed by clean once the manifest lands.
+// by no final manifest, removed by clean once the manifest lands. clean skips this dataset while
+// a send on this host holds its lock.
 func verifiedVolumes(
 	ctx context.Context, j *files.JobInfo, cached []*files.VolumeInfo, destinations []destination,
 ) ([]*files.VolumeInfo, error) {

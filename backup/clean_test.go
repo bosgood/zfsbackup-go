@@ -23,6 +23,7 @@ package backup
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -196,7 +197,7 @@ func TestCleanDryRunLocalManifests(t *testing.T) {
 
 	// A cached manifest with no counterpart in the destination is exactly what
 	// --cleanLocal removes.
-	localCachePath, cerr := getCacheDir(target)
+	localCachePath, cerr := getCacheDir(jobInfo, target)
 	if cerr != nil {
 		t.Fatalf("could not resolve cache dir - %v", cerr)
 	}
@@ -219,5 +220,55 @@ func TestCleanDryRunLocalManifests(t *testing.T) {
 	}
 	if _, serr := os.Stat(strayManifest); !os.IsNotExist(serr) {
 		t.Fatalf("expected %s to be deleted, got stat error - %v", strayManifest, serr)
+	}
+}
+
+// TestCleanSkipsDatasetOfRunningSend: a running send has uploaded volumes that no manifest
+// lists yet. While its lock is held, clean must not treat them as orphans.
+func TestCleanSkipsDatasetOfRunningSend(t *testing.T) {
+	targetDir, jobInfo := setupCleanTest(t)
+
+	set := &files.JobInfo{
+		VolumeName:     "tank/data",
+		BaseSnapshot:   files.SnapshotInfo{Name: "a"},
+		ManifestPrefix: "manifests",
+		Separator:      "|",
+		Compressor:     files.InternalCompressor,
+	}
+	live := set.BackupVolumeObjectName(1)
+	set.Volumes = []*files.VolumeInfo{{ObjectName: live, VolumeNumber: 1}}
+	writeTestManifest(t, targetDir, set)
+	writeTestObject(t, targetDir, live)
+	inFlight := writeTestObject(t, targetDir, set.BackupVolumeObjectName(2))
+
+	// Another live process (our parent) holds the send lock.
+	_, lockPath, err := volumeLock("tank/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = ioutil.WriteFile(lockPath, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(lockPath)
+
+	if cerr := Clean(context.Background(), jobInfo, false, false); cerr != nil {
+		t.Fatalf("Clean returned error - %v", cerr)
+	}
+	if _, serr := os.Stat(inFlight); serr != nil {
+		t.Fatalf("clean deleted a volume of a dataset whose send lock is held - %v", serr)
+	}
+
+	// Once the send is done, the same volume is an orphan again.
+	if err = os.Remove(lockPath); err != nil {
+		t.Fatal(err)
+	}
+	if cerr := Clean(context.Background(), jobInfo, false, false); cerr != nil {
+		t.Fatalf("Clean returned error - %v", cerr)
+	}
+	if _, serr := os.Stat(inFlight); !os.IsNotExist(serr) {
+		t.Fatalf("expected the orphan to be deleted once the lock is free, got stat error - %v", serr)
+	}
+	if _, serr := os.Stat(lockPath); !os.IsNotExist(serr) {
+		t.Errorf("clean left its lock file behind (stat: %v)", serr)
 	}
 }
