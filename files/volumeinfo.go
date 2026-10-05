@@ -416,6 +416,33 @@ func (v *VolumeInfo) CopyTo(dest string) (err error) {
 	return
 }
 
+// LoadVolume copies the file at path, an already compressed/encrypted volume such as a cached
+// manifest, into a new temporary volume named objectName, computing the checksums backends need
+// to upload it unchanged. Delete it with DeleteVolume once uploaded.
+func LoadVolume(ctx context.Context, path, objectName string, isManifest bool) (*VolumeInfo, error) {
+	in, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer in.Close()
+	v, err := CreateSimpleVolume(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = io.Copy(v, in); err != nil {
+		v.Close()
+		v.DeleteVolume()
+		return nil, err
+	}
+	if err = v.Close(); err != nil {
+		v.DeleteVolume()
+		return nil, err
+	}
+	v.ObjectName = objectName
+	v.IsManifest = isManifest
+	return v, nil
+}
+
 // prepareVolume returns a VolumeInfo, filename parts, extension parts, and an error
 // compress -> encrypt/sign -> output
 func prepareVolume(ctx context.Context, j *JobInfo, pipe, isManifest bool) (*VolumeInfo, error) {

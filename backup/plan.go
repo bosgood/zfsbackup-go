@@ -51,6 +51,7 @@ const (
 	reasonExplicitFull        = "explicit-full"
 	reasonExplicitIncremental = "explicit-incremental"
 	reasonAlreadyBackedUp     = "already-backed-up"
+	reasonCompletePartial     = "complete-partial"
 )
 
 // Plan is the decision of one smart backup run: a full backup of Base, an
@@ -115,13 +116,24 @@ func planSmartSnapshots(jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, 
 		switch {
 		case len(have) > 0 && len(missing) == 0:
 			return Plan{Action: PlanNoop, Reason: reasonAlreadyBackedUp}, nil
-		case len(have) > 0:
+		case len(have) > 0 && !jobInfo.Resume:
+			// Usually a manifest upload that failed at some destinations; --resume completes the set.
 			return Plan{}, fmt.Errorf(
-				"destinations are out of sync: destination #%d already has a full of %s, destination #%d does not",
+				"destinations are out of sync: destination #%d already has a full of %s, destination #%d does not; "+
+					"run again with --resume to complete it there",
 				have[0]+1, fullBase.Name, missing[0]+1,
 			)
 		}
 		return Plan{Action: PlanFull, Base: *fullBase, Reason: reasonExplicitFull}, nil
+	}
+
+	// A manifest upload that failed at some destinations leaves them one set behind the rest.
+	// --resume re-plans that set, and Backup completes it there instead of sending anything.
+	if partial := partialSet(destBackups); partial != nil && jobInfo.Resume {
+		if partial.IncrementalSnapshot.Name == "" {
+			return Plan{Action: PlanFull, Base: partial.BaseSnapshot, Reason: reasonCompletePartial}, nil
+		}
+		return Plan{Action: PlanIncremental, Base: partial.BaseSnapshot, Source: partial.IncrementalSnapshot, Reason: reasonCompletePartial}, nil
 	}
 
 	// Gather the most recent backup and most recent full backup per destination.
@@ -541,6 +553,47 @@ func (sim *Simulation) formatTime(t time.Time) string {
 }
 
 // hasFullOf reports whether backups include a full backup of snapshot.
+// partialSet returns the newest backup set at some destinations when every other destination
+// has exactly the backups that precede it there, i.e. lacks just that set. Otherwise nil.
+func partialSet(destBackups [][]*files.JobInfo) *files.JobInfo {
+	var leader []*files.JobInfo
+	for _, backups := range destBackups {
+		if len(backups) > len(leader) {
+			leader = backups
+		}
+	}
+	if len(leader) == 0 {
+		return nil
+	}
+	behind := false
+	for _, backups := range destBackups {
+		switch {
+		case sameSets(backups, leader):
+		case sameSets(backups, leader[1:]):
+			behind = true
+		default:
+			return nil
+		}
+	}
+	if !behind {
+		return nil
+	}
+	return leader[0]
+}
+
+// sameSets reports whether a and b list the same backup sets in the same order.
+func sameSets(a, b []*files.JobInfo) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !a[i].BaseSnapshot.Equal(&b[i].BaseSnapshot) || !a[i].IncrementalSnapshot.Equal(&b[i].IncrementalSnapshot) {
+			return false
+		}
+	}
+	return true
+}
+
 func hasFullOf(backups []*files.JobInfo, snapshot *files.SnapshotInfo) bool {
 	for _, b := range backups {
 		if b.IncrementalSnapshot.Name == "" && b.BaseSnapshot.Equal(snapshot) {

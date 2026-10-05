@@ -301,7 +301,7 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 
 	// Only now, holding the lock: checked any earlier, an overlapping send of the same set
 	// could finish between the check and the lock, and this one would then overwrite it.
-	if err := refuseExistingSet(ctx, jobInfo, usedBackends); err != nil {
+	if done, err := refuseExistingSet(ctx, jobInfo, usedBackends); err != nil || done {
 		return err
 	}
 
@@ -508,25 +508,108 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 
 // refuseExistingSet fails when the manifest of the backup set about to be sent already exists at
 // any destination. Volume boundaries are not reproducible, so a re-send would overwrite the set's
-// volumes in place and leave its manifest pointing at changed objects.
-func refuseExistingSet(ctx context.Context, jobInfo *files.JobInfo, destinations []backends.Backend) error {
+// volumes in place and leave its manifest pointing at changed objects. A set whose manifest is at
+// only some destinations (its upload failed at the others) is completed instead under --resume, by
+// copying that manifest to the rest; done reports that nothing is left to send.
+func refuseExistingSet(ctx context.Context, jobInfo *files.JobInfo, destinations []backends.Backend) (done bool, err error) {
 	name := jobInfo.ManifestObjectName()
+	var have, missing []int
 	for idx, backend := range destinations {
-		existing, err := backend.List(ctx, name)
-		if err != nil {
-			log.AppLogger.Errorf("Could not list %s at %s due to error - %v", name, jobInfo.Destinations[idx], err)
-			return err
+		existing, lerr := backend.List(ctx, name)
+		if lerr != nil {
+			log.AppLogger.Errorf("Could not list %s at %s due to error - %v", name, jobInfo.Destinations[idx], lerr)
+			return false, lerr
 		}
+		found := false
 		for _, obj := range existing {
-			if obj == name {
+			found = found || obj == name
+		}
+		if found {
+			have = append(have, idx)
+		} else {
+			missing = append(missing, idx)
+		}
+	}
+
+	switch {
+	case len(have) == 0:
+		return false, nil
+	case len(missing) == 0:
+		err = fmt.Errorf(
+			"backup set %s already exists at %s; refusing to overwrite it. Delete it at the destination to send it again",
+			name, jobInfo.Destinations[have[0]],
+		)
+	case !jobInfo.Resume:
+		err = fmt.Errorf(
+			"backup set %s already exists at %s but not at %s; refusing to overwrite it. Run again with --resume to copy its manifest to %s",
+			name, jobInfo.Destinations[have[0]], jobInfo.Destinations[missing[0]], jobInfo.Destinations[missing[0]],
+		)
+	default:
+		return true, copyManifest(ctx, jobInfo, destinations, have[0], missing)
+	}
+	log.AppLogger.Errorf("%v.", err)
+	return false, err
+}
+
+// copyManifest uploads the manifest of jobInfo's backup set from destinations[from] to each of
+// destinations[missing], once every volume it lists is present there. A manifest is only uploaded
+// after its volumes have passed every destination, so present volumes are complete ones.
+func copyManifest(ctx context.Context, jobInfo *files.JobInfo, destinations []backends.Backend, from int, missing []int) error {
+	name := jobInfo.ManifestObjectName()
+	tmp, err := ioutil.TempFile(config.BackupTempdir, config.ProgramName)
+	if err != nil {
+		return err
+	}
+	tmp.Close()
+	defer os.Remove(tmp.Name())
+	if err = downloadTo(ctx, destinations[from], name, tmp.Name()); err != nil {
+		return err
+	}
+	manifest, err := readManifest(ctx, tmp.Name(), jobInfo)
+	if err != nil {
+		log.AppLogger.Errorf("Could not read manifest %s from %s due to error - %v", name, jobInfo.Destinations[from], err)
+		return err
+	}
+
+	prefix := strings.TrimSuffix(jobInfo.BackupVolumeObjectName(0), "0")
+	for _, idx := range missing {
+		listed, lerr := destinations[idx].List(ctx, prefix)
+		if lerr != nil {
+			log.AppLogger.Errorf("Could not list the volumes at %s due to error - %v", jobInfo.Destinations[idx], lerr)
+			return lerr
+		}
+		present := make(map[string]bool, len(listed))
+		for _, obj := range listed {
+			present[obj] = true
+		}
+		for _, vol := range manifest.Volumes {
+			if !present[vol.ObjectName] {
 				err = fmt.Errorf(
-					"backup set %s already exists at %s; refusing to overwrite it. Delete it at the destination to send it again",
-					name, jobInfo.Destinations[idx],
+					"cannot complete backup set %s at %s: its volume %s is missing there. Delete the set at %s to send it again",
+					name, jobInfo.Destinations[idx], vol.ObjectName, jobInfo.Destinations[from],
 				)
 				log.AppLogger.Errorf("%v.", err)
 				return err
 			}
 		}
+	}
+
+	vol, err := files.LoadVolume(ctx, tmp.Name(), name, true)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if derr := vol.DeleteVolume(); derr != nil {
+			log.AppLogger.Warningf("Error deleting temporary manifest file  - %v", derr)
+		}
+	}()
+	for _, idx := range missing {
+		dest := jobInfo.Destinations[idx]
+		if err = volUploadWrapper(ctx, destinations[idx], vol, strings.Split(dest, "://")[0])(); err != nil {
+			log.AppLogger.Errorf("Could not upload manifest %s to %s due to error - %v", name, dest, err)
+			return err
+		}
+		log.AppLogger.Noticef("Completed backup set %s at %s with the manifest from %s.", name, dest, jobInfo.Destinations[from])
 	}
 	return nil
 }

@@ -324,6 +324,73 @@ func TestE2EStreamingZFSSendFailureExits(t *testing.T) {
 	}
 }
 
+// A manifest upload that fails at one of two destinations leaves a complete set at the first and
+// volumes without a manifest at the second. A plain retry must refuse (it would overwrite the
+// first), and --resume must complete the second with the first's manifest.
+func TestE2EResumeCompletesManifestAtOneDestination(t *testing.T) {
+	env := newE2EEnv(t)
+	dest2 := filepath.Join(t.TempDir(), "dest2")
+	if err := os.Mkdir(dest2, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(3<<20))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	// A file where dest2's manifest directory must go: only the manifest upload fails there.
+	blocker := filepath.Join(dest2, "manifests|tank")
+	if err := ioutil.WriteFile(blocker, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{
+		"--volsize", "1", "--maxRetryTime", "2s", "--maxBackoffTime", "1s", "tank/data@a", "file://" + env.dest + ",file://" + dest2,
+	}
+	if logs, err := guarded(t, func() (string, error) { return env.send(args...) }); err == nil {
+		t.Fatalf("send succeeded although the manifest upload to dest2 failed:\n%s", logs)
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	before1, before2 := destObjects(t, env.dest), destObjects(t, dest2)
+	names := manifestNames(before1)
+	if len(names) != 1 || len(manifestNames(before2)) != 0 {
+		t.Fatalf("got manifests %q at dest1 and %q at dest2, want one at dest1 only", names, manifestNames(before2))
+	}
+
+	logs, err := guarded(t, func() (string, error) { return env.send(args...) })
+	if err == nil || !strings.Contains(logs, "--resume") {
+		t.Errorf("plain retry: err=%v, want a refusal pointing at --resume:\n%s", err, logs)
+	}
+	// Smart mode, as a cron job runs it, re-plans the set and completes it.
+	smart := append([]string{"--resume", "--fullIfOlderThan", "720h"}, args[:len(args)-2]...)
+	smart = append(smart, "tank/data", args[len(args)-1])
+	if logs, err = guarded(t, func() (string, error) { return env.send(smart...) }); err != nil {
+		t.Fatalf("smart resume: %v\n%s", err, logs)
+	}
+
+	after1, after2 := destObjects(t, env.dest), destObjects(t, dest2)
+	if len(after1) != len(before1) {
+		t.Errorf("dest1 went from %d to %d objects", len(before1), len(after1))
+	}
+	for name, data := range before1 {
+		if !bytes.Equal(after1[name], data) {
+			t.Errorf("dest1's %s changed", name)
+		}
+	}
+	for name, data := range before2 {
+		if !bytes.Equal(after2[name], data) {
+			t.Errorf("dest2's volume %s changed", name)
+		}
+	}
+	if !bytes.Equal(after2[names[0]], before1[names[0]]) {
+		t.Errorf("dest2's manifest %s is not dest1's", names[0])
+	}
+	env.checkRestores(t, "file://"+dest2, "a", 3<<20)
+
+	// Complete everywhere now: another --resume refuses rather than re-sending.
+	if logs, err = guarded(t, func() (string, error) { return env.send(append([]string{"--resume"}, args...)...) }); err == nil {
+		t.Errorf("resume of a set complete at every destination succeeded:\n%s", logs)
+	}
+}
+
 // interruptedSend leaves the state an interrupted send of tank/data@a leaves behind: volumes at
 // dest and a cached manifest listing them, but no manifest at dest. (It sends to completion,
 // then deletes the final manifest at dest; the cached copy lists every volume.)
