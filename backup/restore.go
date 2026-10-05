@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -323,31 +324,8 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 					if !ok {
 						return nil
 					}
-					defer close(sequence.c)
-					select {
-					case <-ctx.Done():
-						return ctx.Err()
-					case bufferChannel <- nil:
-					}
-
-					be := backoff.NewExponentialBackOff()
-					be.MaxInterval = jobInfo.MaxBackoffTime
-					be.MaxElapsedTime = jobInfo.MaxRetryTime
-					retryconf := backoff.WithContext(be, ctx)
-
-					operation := func() error {
-						oerr := processSequence(ctx, sequence, backend, usePipe)
-						if oerr != nil {
-							log.AppLogger.Warningf("error trying to download file %s - %v", sequence.volume.ObjectName, oerr)
-						}
-						return oerr
-					}
-
-					log.AppLogger.Debugf("Downloading volume %s.", sequence.volume.ObjectName)
-
-					if berr := backoff.Retry(operation, retryconf); berr != nil {
-						log.AppLogger.Errorf("Failed to download volume %s due to error: %v, aborting...", sequence.volume.ObjectName, berr)
-						return berr
+					if err := downloadSequenceVolume(ctx, jobInfo, sequence, backend, bufferChannel, usePipe); err != nil {
+						return err
 					}
 				}
 			}
@@ -359,11 +337,22 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 	wg.Go(func() error {
 		defer close(orderedVolumes)
 		for _, c := range orderedChannels {
+			var vol *files.VolumeInfo
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case orderedVolumes <- <-c:
-				continue
+			case v, ok := <-c:
+				if !ok {
+					// Its download failed, and that error cancels ctx: let it be the one reported.
+					<-ctx.Done()
+					return ctx.Err()
+				}
+				vol = v
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case orderedVolumes <- vol:
 			}
 		}
 		return nil
@@ -386,10 +375,48 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 	return nil
 }
 
+// downloadSequenceVolume downloads one volume, with retries, and closes its sequence's channel once
+// it is done with it, whether or not the download succeeded.
+func downloadSequenceVolume(
+	ctx context.Context, jobInfo *files.JobInfo, sequence downloadSequence, backend backends.Backend,
+	bufferChannel chan interface{}, usePipe bool,
+) error {
+	defer close(sequence.c)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case bufferChannel <- nil:
+	}
+
+	be := backoff.NewExponentialBackOff()
+	be.MaxInterval = jobInfo.MaxBackoffTime
+	be.MaxElapsedTime = jobInfo.MaxRetryTime
+	retryconf := backoff.WithContext(be, ctx)
+
+	operation := func() error {
+		oerr := processSequence(ctx, sequence, backend, usePipe)
+		if oerr != nil {
+			log.AppLogger.Warningf("error trying to download file %s - %v", sequence.volume.ObjectName, oerr)
+		}
+		return oerr
+	}
+
+	log.AppLogger.Debugf("Downloading volume %s.", sequence.volume.ObjectName)
+
+	if berr := backoff.Retry(operation, retryconf); berr != nil {
+		log.AppLogger.Errorf("Failed to download volume %s due to error: %v, aborting...", sequence.volume.ObjectName, berr)
+		return berr
+	}
+	return nil
+}
+
 func processSequence(ctx context.Context, sequence downloadSequence, backend backends.Backend, usePipe bool) error {
 	r, rerr := backend.Download(ctx, sequence.volume.ObjectName)
 	if rerr != nil {
 		log.AppLogger.Infof("Could not get %s due to error %v.", sequence.volume.ObjectName, rerr)
+		if errors.Is(rerr, fs.ErrNotExist) {
+			return backoff.Permanent(rerr) // waiting will not bring it back
+		}
 		return rerr
 	}
 	defer r.Close()
@@ -423,22 +450,18 @@ func processSequence(ctx context.Context, sequence downloadSequence, backend bac
 		return cerr
 	}
 
-	// Verify the SHA256 Hash, if it doesn't match, ditch it!
-	if vol.SHA256Sum != sequence.volume.SHA256Sum {
-		log.AppLogger.Infof(
-			"Hash mismatch for %s, got %s but expected %s. Retrying.",
-			sequence.volume.ObjectName, vol.SHA256Sum, sequence.volume.SHA256Sum,
-		)
-		if usePipe {
-			return backoff.Permanent(fmt.Errorf("cannot retry when using no file buffer, aborting"))
+	// Verify the size and SHA256 hash. A mismatch is the stored object, not the transfer: a
+	// retry would download the same bytes again, for up to --maxRetryTime.
+	if vol.Size != sequence.volume.Size || vol.SHA256Sum != sequence.volume.SHA256Sum {
+		if !usePipe {
+			if err = vol.DeleteVolume(); err != nil {
+				log.AppLogger.Noticef("Could not delete temporary file to download %s due to error - %v.", sequence.volume.ObjectName, err)
+			}
 		}
-		if err = vol.DeleteVolume(); err != nil {
-			log.AppLogger.Noticef("Could not delete temporary file to download %s due to error - %v.", sequence.volume.ObjectName, err)
-		}
-		return fmt.Errorf(
-			"SHA256 hash mismatch for %s, got %s but expected %s",
-			sequence.volume.ObjectName, vol.SHA256Sum, sequence.volume.SHA256Sum,
-		)
+		return backoff.Permanent(fmt.Errorf(
+			"%s does not match its manifest: got %d bytes with SHA256 %s, want %d bytes with SHA256 %s",
+			sequence.volume.ObjectName, vol.Size, vol.SHA256Sum, sequence.volume.Size, sequence.volume.SHA256Sum,
+		))
 	}
 	log.AppLogger.Debugf("Downloaded %s.", sequence.volume.ObjectName)
 
