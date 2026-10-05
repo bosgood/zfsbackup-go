@@ -304,6 +304,15 @@ func GetZFSProperty(ctx context.Context, prop, target string) (string, error) {
 	return strings.TrimSpace(b.String()), nil
 }
 
+// GetSnapshotGUID returns the guid of volume's snapshot (or bookmark) snap.
+func GetSnapshotGUID(ctx context.Context, volume string, snap *files.SnapshotInfo) (string, error) {
+	sep := "@"
+	if snap.Bookmark {
+		sep = "#"
+	}
+	return GetZFSProperty(ctx, "guid", volume+sep+snap.Name)
+}
+
 // GetZFSSendCommand will return the send command to use for the given JobInfo
 func GetZFSSendCommand(ctx context.Context, j *files.JobInfo) *exec.Cmd {
 	// Prepare the zfs send command

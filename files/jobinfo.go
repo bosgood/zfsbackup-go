@@ -48,22 +48,25 @@ var disallowedSeps = regexp.MustCompile(`^[\w\-:./]*$`)
 // JobInfo represents the relevant information for a job that can be used to read
 // in details of that job at a later time.
 type JobInfo struct {
-	StartTime               time.Time
-	EndTime                 time.Time
-	VolumeName              string
-	BaseSnapshot            SnapshotInfo
-	IncrementalSnapshot     SnapshotInfo
-	SnapshotPrefix          string
-	Raw                     bool
-	Compressor              string
-	CompressionLevel        int
-	Separator               string
-	ZFSCommandLine          string
-	ZFSStreamBytes          uint64
-	Volumes                 []*VolumeInfo
-	Version                 float64
-	EncryptTo               string
-	SignFrom                string
+	StartTime           time.Time
+	EndTime             time.Time
+	VolumeName          string
+	BaseSnapshot        SnapshotInfo
+	IncrementalSnapshot SnapshotInfo
+	SnapshotPrefix      string
+	Raw                 bool
+	Compressor          string
+	CompressionLevel    int
+	Separator           string
+	ZFSCommandLine      string
+	ZFSStreamBytes      uint64
+	Volumes             []*VolumeInfo
+	Version             float64
+	EncryptTo           string
+	SignFrom            string
+	// The keys EncryptTo and SignFrom resolved to: an address can name another key later.
+	EncryptKeyFingerprint   string `json:",omitempty"`
+	SignKeyFingerprint      string `json:",omitempty"`
 	Replication             bool
 	SkipMissing             bool
 	Deduplication           bool
@@ -112,6 +115,9 @@ type SnapshotInfo struct {
 	CreationTime time.Time
 	Name         string
 	Bookmark     bool
+	// GUID is zfs's guid property: unlike the name, it changes when a snapshot is recreated.
+	// Only recorded in the manifests of sends.
+	GUID string `json:",omitempty"`
 }
 
 // Equal will test two SnapshotInfo objects for equality. This is based on the snapshot name and the time of creation
@@ -120,6 +126,18 @@ func (s *SnapshotInfo) Equal(t *SnapshotInfo) bool {
 		return s == t
 	}
 	return strings.Compare(s.Name, t.Name) == 0 && s.CreationTime.Equal(t.CreationTime)
+}
+
+// RecordKeyFingerprints records the fingerprints of EncryptKey and SignKey, so that a manifest
+// names the keys it was written with, not just their addresses.
+func (j *JobInfo) RecordKeyFingerprints() {
+	j.EncryptKeyFingerprint, j.SignKeyFingerprint = "", ""
+	if j.EncryptKey != nil {
+		j.EncryptKeyFingerprint = fmt.Sprintf("%X", j.EncryptKey.PrimaryKey.Fingerprint)
+	}
+	if j.SignKey != nil {
+		j.SignKeyFingerprint = fmt.Sprintf("%X", j.SignKey.PrimaryKey.Fingerprint)
+	}
 }
 
 // TotalBytesWritten will sum up the size of all underlying Volumes to give a total

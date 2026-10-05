@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5" //nolint:gosec // Not used for cryptography
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -396,6 +397,10 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 		return err
 	}
 
+	// What the manifest records about the stream's identity, for a later --resume to compare.
+	jobInfo.RecordKeyFingerprints()
+	recordSnapshotGUIDs(ctx, jobInfo)
+
 	// Only now, holding the lock: checked any earlier, an overlapping send of the same set
 	// could finish between the check and the lock, and this one would then overwrite it.
 	if done, err := refuseExistingSet(ctx, jobInfo, dests); err != nil || done {
@@ -602,6 +607,60 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	return nil
 }
 
+// recordSnapshotGUIDs records the guids of j's snapshots. A snapshot that is gone gets none: a
+// set can still be completed by copying its manifest, while a send fails on it later anyway.
+func recordSnapshotGUIDs(ctx context.Context, j *files.JobInfo) {
+	snaps := []*files.SnapshotInfo{&j.BaseSnapshot}
+	if j.IncrementalSnapshot.Name != "" {
+		snaps = append(snaps, &j.IncrementalSnapshot)
+	}
+	for _, snap := range snaps {
+		guid, err := zfs.GetSnapshotGUID(ctx, j.VolumeName, snap)
+		if err != nil {
+			log.AppLogger.Debugf("Could not get the guid of %s: %v", snap.Name, err)
+			guid = ""
+		}
+		snap.GUID = guid
+	}
+}
+
+// sameStream fails, with the reason logged, unless a send of current would produce the stream
+// that original (a manifest written by an earlier attempt or another destination) describes:
+// the same zfs send arguments, snapshots (by guid), compressor and keys.
+func sameStream(ctx context.Context, original, current *files.JobInfo) error {
+	mismatch := func(what string, was, is interface{}) error {
+		log.AppLogger.Errorf("Cannot resume backup: %s differs (original %v, current %v)", what, was, is)
+		return fmt.Errorf("option mismatch: %s differs (original %v, current %v)", what, was, is)
+	}
+	if original.Compressor != current.Compressor {
+		return mismatch("compressor", original.Compressor, current.Compressor)
+	}
+	if original.EncryptTo != current.EncryptTo {
+		return mismatch("encryptTo", original.EncryptTo, current.EncryptTo)
+	}
+	if original.SignFrom != current.SignFrom {
+		return mismatch("signFrom", original.SignFrom, current.SignFrom)
+	}
+	if original.EncryptKeyFingerprint != current.EncryptKeyFingerprint {
+		return mismatch("encryption key", original.EncryptKeyFingerprint, current.EncryptKeyFingerprint)
+	}
+	if original.SignKeyFingerprint != current.SignKeyFingerprint {
+		return mismatch("signing key", original.SignKeyFingerprint, current.SignKeyFingerprint)
+	}
+	if original.BaseSnapshot.GUID != current.BaseSnapshot.GUID {
+		return mismatch("guid of "+current.BaseSnapshot.Name, original.BaseSnapshot.GUID, current.BaseSnapshot.GUID)
+	}
+	if original.IncrementalSnapshot.GUID != current.IncrementalSnapshot.GUID {
+		return mismatch("guid of "+current.IncrementalSnapshot.Name, original.IncrementalSnapshot.GUID, current.IncrementalSnapshot.GUID)
+	}
+	oldCMDLine := strings.Join(zfs.GetZFSSendCommand(ctx, original).Args, " ")
+	currentCMDLine := strings.Join(zfs.GetZFSSendCommand(ctx, current).Args, " ")
+	if oldCMDLine != currentCMDLine {
+		return mismatch("zfs send command", "`"+oldCMDLine+"`", "`"+currentCMDLine+"`")
+	}
+	return nil
+}
+
 // refuseExistingSet fails when the manifest of the backup set about to be sent already exists at
 // any destination. Volume boundaries are not reproducible, so a re-send would overwrite the set's
 // volumes in place and leave its manifest pointing at changed objects. A set whose manifest is at
@@ -757,7 +816,10 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 	cin, cout := io.Pipe()
 	cmd.Stdout = cout
 	cmd.Stderr = buf
-	counter := datacounter.NewReaderCounter(cin)
+	// Everything read from the stream, skipped or not, is hashed: each volume records the hash so
+	// far, and a resume checks the bytes it skips against the last volume it keeps.
+	streamHash := sha256.New()
+	counter := datacounter.NewReaderCounter(io.TeeReader(cin, streamHash))
 	usingPipe := false
 	if j.MaxFileBuffer == 0 {
 		usingPipe = true
@@ -784,10 +846,16 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 		defer cin.Close()
 		var err error
 		var volume *files.VolumeInfo
+		manifestmutex.Lock()
 		skipBytes, volNum := j.TotalBytesStreamedAndVols()
+		var keptStreamSHA256 string
+		if len(j.Volumes) > 0 {
+			keptStreamSHA256 = j.Volumes[len(j.Volumes)-1].StreamSHA256
+		}
+		manifestmutex.Unlock()
 		lastTotalBytes = skipBytes
 		for {
-			// Skip bytes if we are resuming
+			// Skip bytes if we are resuming, and check they are the bytes the kept volumes hold
 			if skipBytes > 0 {
 				log.AppLogger.Debugf("Want to skip %d bytes.", skipBytes)
 				written, serr := io.CopyN(ioutil.Discard, counter, int64(skipBytes))
@@ -801,8 +869,13 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 					log.AppLogger.Errorf("Error while trying to read from the zfs stream to skip %d bytes - %v", skipBytes, serr)
 					return serr
 				}
-				skipBytes -= uint64(written)
 				log.AppLogger.Debugf("Skipped %d bytes of the ZFS send stream.", written)
+				skipBytes = 0
+				if got := fmt.Sprintf("%x", streamHash.Sum(nil)); got != keptStreamSHA256 {
+					err = fmt.Errorf("zfs stream differs from the interrupted attempt's; run without --resume")
+					log.AppLogger.Errorf("%v (SHA256 of the first %d bytes: %s, recorded %s).", err, written, got, keptStreamSHA256)
+					return err
+				}
 				continue
 			}
 
@@ -811,6 +884,7 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 				if volume != nil {
 					log.AppLogger.Debugf("Finished creating volume %s", volume.ObjectName)
 					volume.ZFSStreamBytes = counter.Count() - lastTotalBytes
+					volume.StreamSHA256 = fmt.Sprintf("%x", streamHash.Sum(nil))
 					lastTotalBytes = counter.Count()
 					if err = volume.Close(); err != nil {
 						log.AppLogger.Errorf("Error while trying to close volume %s - %v", volume.ObjectName, err)
@@ -851,6 +925,7 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 				// We are done!
 				log.AppLogger.Debugf("Finished creating volume %s", volume.ObjectName)
 				volume.ZFSStreamBytes = counter.Count() - lastTotalBytes
+				volume.StreamSHA256 = fmt.Sprintf("%x", streamHash.Sum(nil))
 				if err = volume.Close(); err != nil {
 					log.AppLogger.Errorf("Error while trying to close volume %s - %v", volume.ObjectName, err)
 					return err
@@ -963,40 +1038,21 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination
 		log.AppLogger.Errorf("Could not open previous manifest file %s due to error: %v", origManiPath, oerr)
 		return oerr
 	default:
-		if originalManifest.Compressor != j.Compressor {
-			log.AppLogger.Errorf(
-				"Cannot resume backup, original compressor %s != compressor specified %s",
-				originalManifest.Compressor, j.Compressor,
-			)
-			return fmt.Errorf("option mismatch")
+		if j.BaseSnapshot.GUID == "" {
+			return fmt.Errorf("cannot resume: could not read the guid of %s@%s", j.VolumeName, j.BaseSnapshot.Name)
 		}
-
-		if originalManifest.EncryptTo != j.EncryptTo {
-			log.AppLogger.Errorf(
-				"Cannot resume backup, different encryptTo flags specified (original %v != current %v)",
-				originalManifest.EncryptTo, j.EncryptTo,
-			)
-			return fmt.Errorf("option mismatch")
+		if err := sameStream(ctx, originalManifest, j); err != nil {
+			return err
 		}
-
-		if originalManifest.SignFrom != j.SignFrom {
-			log.AppLogger.Errorf(
-				"Cannot resume backup, different signFrom flags specified (original %v != current %v)",
-				originalManifest.SignFrom, j.SignFrom,
-			)
-			return fmt.Errorf("option mismatch")
-		}
-
-		currentCMD := zfs.GetZFSSendCommand(ctx, j)
-		oldCMD := zfs.GetZFSSendCommand(ctx, originalManifest)
-		oldCMDLine := strings.Join(oldCMD.Args, " ")
-		currentCMDLine := strings.Join(currentCMD.Args, " ")
-		if strings.Compare(oldCMDLine, currentCMDLine) != 0 {
-			log.AppLogger.Errorf(
-				"Cannot resume backup, different options given for zfs send command: original `%s` != current `%s`",
-				oldCMDLine, currentCMDLine,
-			)
-			return fmt.Errorf("option mismatch")
+		for _, vol := range originalManifest.Volumes {
+			if vol.StreamSHA256 == "" {
+				err := fmt.Errorf(
+					"cannot resume: the interrupted attempt was made by an older version, which recorded nothing to " +
+						"check the stream against; start over without --resume",
+				)
+				log.AppLogger.Errorf("%v.", err)
+				return err
+			}
 		}
 
 		// Manifests do not record their destinations, so a destination added since the first

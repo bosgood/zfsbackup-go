@@ -64,18 +64,21 @@ const (
 
 // VolumeInfo holds all necessary information for a Volume as part of a backup
 type VolumeInfo struct {
-	ObjectName      string
-	VolumeNumber    int64
-	SHA256          hash.Hash   `json:"-"`
-	MD5             hash.Hash   `json:"-"`
-	CRC32C          hash.Hash32 `json:"-"`
-	SHA1            hash.Hash   `json:"-"`
-	SHA1Sum         string      `json:"-"`
-	SHA256Sum       string
-	MD5Sum          string
-	CRC32CSum32     uint32
-	Size            uint64
-	ZFSStreamBytes  uint64
+	ObjectName     string
+	VolumeNumber   int64
+	SHA256         hash.Hash   `json:"-"`
+	MD5            hash.Hash   `json:"-"`
+	CRC32C         hash.Hash32 `json:"-"`
+	SHA1           hash.Hash   `json:"-"`
+	SHA1Sum        string      `json:"-"`
+	SHA256Sum      string
+	MD5Sum         string
+	CRC32CSum32    uint32
+	Size           uint64
+	ZFSStreamBytes uint64
+	// StreamSHA256 is the SHA-256 of the raw zfs stream from its start through the end of this
+	// volume. A --resume checks the stream it skips against it.
+	StreamSHA256    string `json:",omitempty"`
 	CreateTime      time.Time
 	CloseTime       time.Time
 	IsManifest      bool

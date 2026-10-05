@@ -31,6 +31,8 @@
 //	FAKEZFS_STREAM_BYTES   bytes `zfs send` writes (default 65536)
 //	FAKEZFS_FAIL_AFTER_BYTES  when set, `zfs send` writes at most this many bytes, then prints
 //	                       "cannot send: I/O error" and exits 1, like a send that dies mid-stream
+//	FAKEZFS_STREAM_SALT    when set, changes the bytes `zfs send` writes (not the snapshots'
+//	                       guids), like a snapshot whose contents changed under the same name
 //	FAKEZFS_RECEIVE_LOG    file `zfs receive` appends "<bytes> <sha256 hex>" of its stdin to
 //	FAKEZFS_DRYRUN_OUTPUT  replaces what `zfs send -n -P` prints
 //	FAKEZFS_LOG            file every invocation's arguments are appended to, one line each
@@ -124,9 +126,15 @@ func list(args []string, stdout io.Writer) error {
 	return nil
 }
 
-// get: get -H -p -o value creation <dataset>[@snapshot|#bookmark]
+// get: get -H -p -o value creation|guid <dataset>[@snapshot|#bookmark]. A snapshot's guid is
+// derived from its name and creation time, so a snapshot recreated under the same name gets a
+// new one; a bookmark has its snapshot's guid.
 func get(args []string, stdout io.Writer) error {
-	target, ok := trailingArg(args, "-H", "-p", "-o", "value", "creation")
+	if len(args) != 6 || (args[4] != "creation" && args[4] != "guid") {
+		return errUnexpected
+	}
+	prop := args[4]
+	target, ok := trailingArg(args, "-H", "-p", "-o", "value", prop)
 	if !ok {
 		return errUnexpected
 	}
@@ -144,6 +152,12 @@ func get(args []string, stdout io.Writer) error {
 	}
 	s, err := lookup(dataset, target, snaps)
 	if err != nil {
+		return err
+	}
+	if prop == "guid" {
+		h := fnv.New64a()
+		_, _ = fmt.Fprintf(h, "%s@%s\x00%d", dataset, s.Name, s.CreationTime.Unix())
+		_, err = fmt.Fprintln(stdout, h.Sum64())
 		return err
 	}
 	_, err = fmt.Fprintln(stdout, s.CreationTime.Unix())
@@ -222,27 +236,36 @@ func send(args []string, stdout io.Writer) error {
 		return err
 	}
 
+	salt := os.Getenv("FAKEZFS_STREAM_SALT")
 	if value, ok := os.LookupEnv("FAKEZFS_FAIL_AFTER_BYTES"); ok {
 		failAfter, perr := strconv.ParseInt(value, 10, 64)
 		if perr != nil || failAfter < 0 {
 			return fmt.Errorf("fakezfs: invalid FAKEZFS_FAIL_AFTER_BYTES %q", value)
 		}
 		if failAfter < size {
-			if _, err = io.CopyN(stdout, Stream(source, target, size), failAfter); err != nil {
+			if _, err = io.CopyN(stdout, StreamSalted(source, target, salt, size), failAfter); err != nil {
 				return err
 			}
 			return errors.New("cannot send: I/O error")
 		}
 	}
-	_, err = io.CopyN(stdout, Stream(source, target, size), size)
+	_, err = io.CopyN(stdout, StreamSalted(source, target, salt, size), size)
 	return err
 }
 
 // Stream returns the size bytes `zfs send` writes for an incremental from source (or a full
 // when source is "") to target: a stream that differs for every pair, reproducibly.
 func Stream(source, target string, size int64) io.Reader {
+	return StreamSalted(source, target, "", size)
+}
+
+// StreamSalted is Stream as `zfs send` writes it with FAKEZFS_STREAM_SALT=salt.
+func StreamSalted(source, target, salt string, size int64) io.Reader {
 	h := fnv.New64a()
 	_, _ = io.WriteString(h, source+"\x00"+target)
+	if salt != "" {
+		_, _ = io.WriteString(h, "\x00"+salt)
+	}
 	return io.LimitReader(rand.New(rand.NewSource(int64(h.Sum64()))), size) // nolint:gosec // not for security
 }
 

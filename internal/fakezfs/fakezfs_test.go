@@ -150,3 +150,45 @@ func TestUnexpectedAndLog(t *testing.T) {
 		t.Errorf("log = %q, want %q", log, want)
 	}
 }
+
+func TestGetGUID(t *testing.T) {
+	setup(t)
+	guid := func(target string) string {
+		t.Helper()
+		code, out, errOut := run("get", "-H", "-p", "-o", "value", "guid", target)
+		if code != 0 || strings.TrimSpace(out) == "" {
+			t.Fatalf("guid of %s: got %d %q (stderr %q)", target, code, out, errOut)
+		}
+		return out
+	}
+	b, c := guid("tank/data@b"), guid("tank/data@c")
+	if b == c || b != guid("tank/data@b") {
+		t.Errorf("guids of b and c: %q %q, want distinct and stable", b, c)
+	}
+
+	// Recreated under the same name, b is another snapshot.
+	path := os.Getenv("FAKEZFS_SNAPSHOTS")
+	if err := os.WriteFile(path, []byte(strings.Replace(fixture, "tank/data@b\t200", "tank/data@b\t250", 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if again := guid("tank/data@b"); again == b {
+		t.Errorf("recreated b kept its guid %q", b)
+	}
+}
+
+func TestStreamSalt(t *testing.T) {
+	read := func(r interface{ Read([]byte) (int, error) }) []byte {
+		var buf bytes.Buffer
+		if _, err := buf.ReadFrom(r); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+	plain := read(Stream("", "tank/data@a", 1024))
+	if !bytes.Equal(plain, read(StreamSalted("", "tank/data@a", "", 1024))) {
+		t.Error("an empty salt changed the stream")
+	}
+	if bytes.Equal(plain, read(StreamSalted("", "tank/data@a", "x", 1024))) {
+		t.Error("a salt left the stream unchanged")
+	}
+}
