@@ -368,3 +368,25 @@ func TestLegacyPrefixes(t *testing.T) {
 		}
 	}
 }
+
+func TestFindLegacyVolume(t *testing.T) {
+	keys := []string{"p/tank/data|a.zstream.gz.vol1", "ptank/data|old.zstream.gz.vol1", "ptank/other|x.txt"}
+	firstKey := func(prefix string) (string, error) {
+		for _, k := range keys {
+			if strings.HasPrefix(k, prefix) {
+				return k, nil
+			}
+		}
+		return "", nil
+	}
+	got, err := findLegacyVolume([]string{"p"}, []string{"tank/data"}, []string{"|"}, firstKey)
+	if err != nil || got != "ptank/data|old.zstream.gz.vol1" {
+		t.Errorf("findLegacyVolume = %q, %v", got, err)
+	}
+	// Not a volume name, and a dataset nobody asked about: nothing to report.
+	for _, dataset := range []string{"tank/other", "tank/missing"} {
+		if got, err = findLegacyVolume([]string{"p"}, []string{dataset}, []string{"|", ""}, firstKey); err != nil || got != "" {
+			t.Errorf("findLegacyVolume(%s) = %q, %v; want nothing", dataset, got, err)
+		}
+	}
+}

@@ -183,6 +183,39 @@ func legacyPrefixes(uri, typedURI, scheme string) []string {
 	return legacy
 }
 
+// LegacyVolumeFinder is implemented by the object-store backends. FindLegacyVolume returns a key
+// that looks like a volume of one of datasets written under a pre-normalization key prefix
+// (see legacyPrefixes), or "". Such volumes are outside the destination's prefix: List never
+// returns them and clean cannot delete them.
+type LegacyVolumeFinder interface {
+	FindLegacyVolume(ctx context.Context, datasets, separators []string) (string, error)
+}
+
+// findLegacyVolume probes "<legacy prefix><dataset><separator>" for every combination and
+// returns the first key found that parses as a backup volume once the legacy prefix is removed.
+func findLegacyVolume(legacy, datasets, separators []string, firstKey func(prefix string) (string, error)) (string, error) {
+	for _, old := range legacy {
+		for _, dataset := range datasets {
+			for _, sep := range separators {
+				if sep == "" {
+					continue
+				}
+				key, err := firstKey(old + dataset + sep)
+				if err != nil {
+					return "", err
+				}
+				if key == "" {
+					continue
+				}
+				if _, _, _, _, ok := files.ParseBackupVolumeObjectName(key[len(old):], sep); ok {
+					return key, nil
+				}
+			}
+		}
+	}
+	return "", nil
+}
+
 // checkLegacyLayout fails when the destination holds manifests written before object-store
 // prefixes were normalized, i.e. at "<legacy prefix><ManifestPrefix>..." for one of legacy
 // (see legacyPrefixes). firstKey must return the first key in the bucket starting with the

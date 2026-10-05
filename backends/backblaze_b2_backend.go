@@ -98,13 +98,21 @@ func (b *B2Backend) Init(ctx context.Context, conf *BackendConfig, opts ...Optio
 		return err
 	}
 
-	return checkLegacyLayout(conf, b.legacy, prefix, func(keyPrefix string) (string, error) {
-		it := b.bucketCli.List(ctx, b2.ListPrefix(keyPrefix), b2.ListPageSize(1))
-		if it.Next() {
-			return it.Object().Name(), nil
-		}
-		return "", it.Err()
-	})
+	return checkLegacyLayout(conf, b.legacy, prefix, func(p string) (string, error) { return b.firstKey(ctx, p) })
+}
+
+// firstKey returns the first key in the bucket that starts with keyPrefix, or "".
+func (b *B2Backend) firstKey(ctx context.Context, keyPrefix string) (string, error) {
+	it := b.bucketCli.List(ctx, b2.ListPrefix(keyPrefix), b2.ListPageSize(1))
+	if it.Next() {
+		return it.Object().Name(), nil
+	}
+	return "", it.Err()
+}
+
+// FindLegacyVolume implements LegacyVolumeFinder.
+func (b *B2Backend) FindLegacyVolume(ctx context.Context, datasets, separators []string) (string, error) {
+	return findLegacyVolume(b.legacy, datasets, separators, func(p string) (string, error) { return b.firstKey(ctx, p) })
 }
 
 // Upload will upload the provided volume to this B2Backend's configured bucket+prefix

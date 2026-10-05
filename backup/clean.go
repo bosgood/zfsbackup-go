@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -143,11 +144,42 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 
 	// Only delete what we can name: objects that parse as a backup volume written by this tool,
 	// with any separator in use here. Manifests and everything else are left alone.
-	separators := []string{jobInfo.Separator, files.DefaultSeparator}
+	separators := []string{files.DefaultSeparator}
+	addSeparator := func(sep string) {
+		for _, have := range separators {
+			if have == sep {
+				return
+			}
+		}
+		separators = append(separators, sep)
+	}
+	addSeparator(jobInfo.Separator)
 	datasets := make(map[string]bool)
 	for _, manifest := range decodedManifests {
-		separators = append(separators, manifest.Separator)
+		addSeparator(manifest.Separator)
 		datasets[manifest.VolumeName] = true
+	}
+
+	// Volumes an older version wrote under a raw key prefix are outside this destination: say so,
+	// since nothing here will ever list or delete them.
+	if finder, ok := backend.(backends.LegacyVolumeFinder); ok {
+		names := make([]string, 0, len(datasets))
+		for dataset := range datasets {
+			names = append(names, dataset)
+		}
+		sort.Strings(names)
+		key, ferr := finder.FindLegacyVolume(ctx, names, separators)
+		if ferr != nil {
+			log.AppLogger.Errorf("Could not check %s for volumes in the old key layout due to error - %v", backends.RedactURI(target), ferr)
+			return ferr
+		}
+		if key != "" {
+			log.AppLogger.Warningf(
+				"Found %s, which looks like a backup volume written by an older version outside of %s. "+
+					"clean cannot delete it. If no manifest lists it (an interrupted send), delete it and the volumes next to it by hand.",
+				key, backends.RedactURI(target),
+			)
+		}
 	}
 	manifestPrefix := jobInfo.ManifestPrefix + jobInfo.Separator
 	if jobInfo.Separator == "" {

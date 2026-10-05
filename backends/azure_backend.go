@@ -123,16 +123,24 @@ func (a *AzureBackend) Init(ctx context.Context, conf *BackendConfig, opts ...Op
 		return err
 	}
 
-	return checkLegacyLayout(conf, a.legacy, prefix, func(keyPrefix string) (string, error) {
-		resp, lerr := a.containerSvc.ListBlobsFlatSegment(ctx, azblob.Marker{}, azblob.ListBlobsSegmentOptions{
-			Prefix:     keyPrefix,
-			MaxResults: 1,
-		})
-		if lerr != nil || len(resp.Segment.BlobItems) == 0 {
-			return "", lerr
-		}
-		return resp.Segment.BlobItems[0].Name, nil
+	return checkLegacyLayout(conf, a.legacy, prefix, func(p string) (string, error) { return a.firstKey(ctx, p) })
+}
+
+// firstKey returns the first key in the bucket that starts with keyPrefix, or "".
+func (a *AzureBackend) firstKey(ctx context.Context, keyPrefix string) (string, error) {
+	resp, lerr := a.containerSvc.ListBlobsFlatSegment(ctx, azblob.Marker{}, azblob.ListBlobsSegmentOptions{
+		Prefix:     keyPrefix,
+		MaxResults: 1,
 	})
+	if lerr != nil || len(resp.Segment.BlobItems) == 0 {
+		return "", lerr
+	}
+	return resp.Segment.BlobItems[0].Name, nil
+}
+
+// FindLegacyVolume implements LegacyVolumeFinder.
+func (a *AzureBackend) FindLegacyVolume(ctx context.Context, datasets, separators []string) (string, error) {
+	return findLegacyVolume(a.legacy, datasets, separators, func(p string) (string, error) { return a.firstKey(ctx, p) })
 }
 
 // Upload will upload the provided volume to this AzureBackend's configured container+prefix

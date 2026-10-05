@@ -149,17 +149,25 @@ func (a *AWSS3Backend) Init(ctx context.Context, conf *BackendConfig, opts ...Op
 		return err
 	}
 
-	return checkLegacyLayout(conf, a.legacy, prefix, func(keyPrefix string) (string, error) {
-		resp, lerr := a.client.ListObjectsV2WithContext(ctx, &s3.ListObjectsV2Input{
-			Bucket:  aws.String(a.bucketName),
-			MaxKeys: aws.Int64(1),
-			Prefix:  aws.String(keyPrefix),
-		})
-		if lerr != nil || len(resp.Contents) == 0 {
-			return "", lerr
-		}
-		return aws.StringValue(resp.Contents[0].Key), nil
+	return checkLegacyLayout(conf, a.legacy, prefix, func(p string) (string, error) { return a.firstKey(ctx, p) })
+}
+
+// firstKey returns the first key in the bucket that starts with keyPrefix, or "".
+func (a *AWSS3Backend) firstKey(ctx context.Context, keyPrefix string) (string, error) {
+	resp, lerr := a.client.ListObjectsV2WithContext(ctx, &s3.ListObjectsV2Input{
+		Bucket:  aws.String(a.bucketName),
+		MaxKeys: aws.Int64(1),
+		Prefix:  aws.String(keyPrefix),
 	})
+	if lerr != nil || len(resp.Contents) == 0 {
+		return "", lerr
+	}
+	return aws.StringValue(resp.Contents[0].Key), nil
+}
+
+// FindLegacyVolume implements LegacyVolumeFinder.
+func (a *AWSS3Backend) FindLegacyVolume(ctx context.Context, datasets, separators []string) (string, error) {
+	return findLegacyVolume(a.legacy, datasets, separators, func(p string) (string, error) { return a.firstKey(ctx, p) })
 }
 
 func withContentMD5Header(md5sum string) request.Option {

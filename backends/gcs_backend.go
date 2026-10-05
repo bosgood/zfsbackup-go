@@ -88,15 +88,23 @@ func (g *GoogleCloudStorageBackend) Init(ctx context.Context, conf *BackendConfi
 		return err
 	}
 
-	return checkLegacyLayout(conf, g.legacy, prefix, func(keyPrefix string) (string, error) {
-		attrs, lerr := g.client.Bucket(g.bucketName).Objects(ctx, &storage.Query{Prefix: keyPrefix}).Next()
-		if lerr == iterator.Done {
-			return "", nil
-		} else if lerr != nil {
-			return "", lerr
-		}
-		return attrs.Name, nil
-	})
+	return checkLegacyLayout(conf, g.legacy, prefix, func(p string) (string, error) { return g.firstKey(ctx, p) })
+}
+
+// firstKey returns the first key in the bucket that starts with keyPrefix, or "".
+func (g *GoogleCloudStorageBackend) firstKey(ctx context.Context, keyPrefix string) (string, error) {
+	attrs, lerr := g.client.Bucket(g.bucketName).Objects(ctx, &storage.Query{Prefix: keyPrefix}).Next()
+	if lerr == iterator.Done {
+		return "", nil
+	} else if lerr != nil {
+		return "", lerr
+	}
+	return attrs.Name, nil
+}
+
+// FindLegacyVolume implements LegacyVolumeFinder.
+func (g *GoogleCloudStorageBackend) FindLegacyVolume(ctx context.Context, datasets, separators []string) (string, error) {
+	return findLegacyVolume(g.legacy, datasets, separators, func(p string) (string, error) { return g.firstKey(ctx, p) })
 }
 
 // Upload will upload the provided VolumeInfo to Google's Cloud Storage

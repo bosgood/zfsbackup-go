@@ -251,6 +251,15 @@ func TestCleanS3Prefixes(t *testing.T) {
 			args:    []string{"s3://bucket//p"},
 			errText: "/pmanifests|tank/data|",
 		},
+		{
+			// An old full to s3://bucket/p, interrupted before its manifest: "p" + volume name.
+			name: "legacy volume without a manifest",
+			objects: merge(backupSet(t, "p/", "tank/data"), map[string][]byte{
+				"ptank/data|autosnap_2026-08-01_00:00:00_monthly.zstream.gz.vol1": []byte("volume"),
+			}),
+			args:    []string{"s3://bucket/p/"},
+			logText: "looks like a backup volume written by an older version",
+		},
 	}
 
 	for _, c := range testCases {
