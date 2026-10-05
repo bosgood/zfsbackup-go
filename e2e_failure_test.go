@@ -334,6 +334,38 @@ func TestE2EResumeReSendsMissingVolumes(t *testing.T) {
 	env.checkRestores(t, dest, "a", streamBytes)
 }
 
+// A send killed mid-upload to a file:// or ssh:// destination leaves a truncated volume under
+// its final name: the resume must re-send it, not vouch for it in the final manifest.
+func TestE2EResumeReSendsTruncatedVolume(t *testing.T) {
+	const streamBytes = 4 << 20
+	env := newE2EEnv(t)
+	args := []string{"--volsize", "1", "--compressor", ""}
+	env.interruptedSend(t, streamBytes, env.dest, args...)
+	cached := env.cachedManifests(t)
+	if len(cached) != 1 || len(cached[0].Volumes) < 3 {
+		t.Fatalf("want one cached manifest with at least 3 volumes, got %d manifests", len(cached))
+	}
+	vol2 := cached[0].Volumes[1]
+	if err := os.Truncate(filepath.Join(env.dest, vol2.ObjectName), int64(vol2.Size/2)); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := "file://" + env.dest
+	logs, err := guarded(t, func() (string, error) { return env.send(append(args, "--resume", "tank/data@a", dest)...) })
+	if err != nil {
+		t.Fatalf("resume: %v\n%s", err, logs)
+	}
+	for _, want := range []string{
+		fmt.Sprintf("Volume %s at %s is %d bytes, want %d", vol2.ObjectName, dest, vol2.Size/2, vol2.Size),
+		"Resuming from volume 2: 1 of",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("log lacks %q:\n%s", want, logs)
+		}
+	}
+	env.checkRestores(t, dest, "a", streamBytes)
+}
+
 // A destination added since the interrupted attempt has none of its volumes, so the resume
 // starts over, and the new destination gets the whole set.
 func TestE2EResumeWithNewDestinationStartsOver(t *testing.T) {

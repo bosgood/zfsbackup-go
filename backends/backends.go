@@ -44,6 +44,13 @@ type Backend interface {
 	Delete(ctx context.Context, filename string) error                    // Delete the file specified on the configured backend
 }
 
+// Sizer is implemented by backends that write a volume under its final name as it uploads
+// (file, ssh), so a killed upload can leave a truncated object behind. Object stores only
+// expose an object once its upload completes, so they need not implement it.
+type Sizer interface {
+	Size(ctx context.Context, filename string) (uint64, error) // Size of the stored object in bytes
+}
+
 // Option lets users inject functionality to specific backends
 type Option interface {
 	Apply(Backend)

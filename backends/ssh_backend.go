@@ -240,6 +240,15 @@ func (s *SSHBackend) Upload(ctx context.Context, vol *files.VolumeInfo) error {
 	return w.Close()
 }
 
+// Size returns the size of the given object in bytes.
+func (s *SSHBackend) Size(ctx context.Context, filename string) (uint64, error) {
+	fi, err := s.sftpClient.Stat(filepath.Join(s.remotePath, filename))
+	if err != nil {
+		return 0, err
+	}
+	return uint64(fi.Size()), nil
+}
+
 // List will return a list of all files matching the provided prefix.
 func (s *SSHBackend) List(ctx context.Context, prefix string) ([]string, error) {
 	l := make([]string, 0, 1000)

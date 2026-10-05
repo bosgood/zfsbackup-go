@@ -111,6 +111,15 @@ func (f *FileBackend) Delete(ctx context.Context, filename string) error {
 	return os.Remove(filepath.Join(f.localPath, filename))
 }
 
+// Size returns the size of the given object in bytes.
+func (f *FileBackend) Size(ctx context.Context, filename string) (uint64, error) {
+	fi, err := os.Stat(filepath.Join(f.localPath, filename))
+	if err != nil {
+		return 0, err
+	}
+	return uint64(fi.Size()), nil
+}
+
 // PreDownload does nothing on this backend.
 func (f *FileBackend) PreDownload(ctx context.Context, objects []string) error {
 	return nil

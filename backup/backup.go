@@ -838,10 +838,29 @@ func verifiedVolumes(
 		for _, name := range listed {
 			present[name] = true
 		}
+		sizer, _ := backend.(backends.Sizer)
 		for n := 0; n < keep; n++ {
-			if cached[n].VolumeNumber != int64(n+1) || !present[cached[n].ObjectName] {
+			vol := cached[n]
+			if vol.VolumeNumber != int64(n+1) || !present[vol.ObjectName] {
 				log.AppLogger.Noticef(
-					"Volume %s missing at %s; it and later volumes will be re-sent.", cached[n].ObjectName, j.Destinations[idx],
+					"Volume %s missing at %s; it and later volumes will be re-sent.", vol.ObjectName, j.Destinations[idx],
+				)
+				keep = n
+				break
+			}
+			if sizer == nil {
+				continue
+			}
+			// A send killed mid-upload leaves a truncated volume under its final name.
+			size, err := sizer.Size(ctx, vol.ObjectName)
+			if err != nil {
+				log.AppLogger.Errorf("Could not stat %s at %s due to error - %v", vol.ObjectName, j.Destinations[idx], err)
+				return nil, err
+			}
+			if size != vol.Size {
+				log.AppLogger.Noticef(
+					"Volume %s at %s is %d bytes, want %d; it and later volumes will be re-sent.",
+					vol.ObjectName, j.Destinations[idx], size, vol.Size,
 				)
 				keep = n
 				break
