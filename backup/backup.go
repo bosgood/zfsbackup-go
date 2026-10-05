@@ -252,7 +252,7 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	defer close(uploadBuffer)
 
 	// Prepare the destinations first: refusing to overwrite a backup set and verifying a resume
-	// both need them, and neither may touch the cache or take the lock when it fails.
+	// both need them, and neither may touch the cache when it fails.
 	var usedBackends []backends.Backend
 	defer func() {
 		log.AppLogger.Debugf("Cleaning up resources...")
@@ -272,16 +272,6 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 		if _, cerr := getCacheDir(destination); cerr != nil {
 			log.AppLogger.Errorf("Could not create cache for destination %s due to error - %v.", destination, cerr)
 			return cerr
-		}
-	}
-
-	if err := refuseExistingSet(ctx, jobInfo, usedBackends); err != nil {
-		return err
-	}
-
-	if jobInfo.Resume {
-		if err := tryResume(ctx, jobInfo, usedBackends); err != nil {
-			return err
 		}
 	}
 
@@ -307,6 +297,18 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 			log.AppLogger.Warningf("Could not release lock %s: %v", lockFilePath, err)
 		}
 	}()
+
+	// Only now, holding the lock: checked any earlier, an overlapping send of the same set
+	// could finish between the check and the lock, and this one would then overwrite it.
+	if err := refuseExistingSet(ctx, jobInfo, usedBackends); err != nil {
+		return err
+	}
+
+	if jobInfo.Resume {
+		if err := tryResume(ctx, jobInfo, usedBackends); err != nil {
+			return err
+		}
+	}
 
 	fileBufferSize := jobInfo.MaxFileBuffer
 	if fileBufferSize == 0 {

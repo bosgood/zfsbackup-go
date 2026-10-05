@@ -113,6 +113,29 @@ func TestE2ERefusesToOverwrite(t *testing.T) {
 	}
 }
 
+// TestE2EChecksExistingSetUnderLock: a send must not judge whether the set exists before it
+// holds the lock. Checked earlier, a send that finished in between would be overwritten.
+func TestE2EChecksExistingSetUnderLock(t *testing.T) {
+	env := newE2EEnv(t)
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	args := []string{"tank/data@a", "file://" + env.dest}
+	if logs, err := env.send(args...); err != nil {
+		t.Fatalf("first send: %v\n%s", err, logs)
+	}
+
+	// Another live process (our parent) holds the lock.
+	lock := lockFile("tank/data")
+	if err := os.WriteFile(lock, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(lock)
+
+	logs, err := guarded(t, func() (string, error) { return env.send(args...) })
+	if err == nil || !strings.Contains(logs, "Cannot lock") || strings.Contains(logs, "already exists") {
+		t.Errorf("send while another holds the lock: got %v, want only the lock error\n%s", err, logs)
+	}
+}
+
 // TestE2EVolumeBoundariesReproducible documents the root cause behind refusing to overwrite:
 // the same stream does not split into the same volumes twice.
 func TestE2EVolumeBoundariesReproducible(t *testing.T) {
