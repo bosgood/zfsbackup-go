@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -156,4 +157,145 @@ func rewriteManifest(t *testing.T, path string, edit func(map[string]interface{}
 	if err = ioutil.WriteFile(path, buf.Bytes(), 0600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// newDest makes another empty file:// destination directory.
+func newDest(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "dest2")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// --resume completes a set whose manifest is missing at a destination by copying it there. It
+// must not vouch for volumes there that are not the ones the manifest describes.
+func TestE2EResumeRefusesToCompleteOverForeignVolumes(t *testing.T) {
+	const streamBytes = 4 << 20
+	for _, tc := range []struct {
+		name string
+		// lagging leaves dest2 with volumes but no manifest, dest1 with the complete set.
+		lagging func(t *testing.T, env *e2eEnv, dest2 string)
+	}{
+		{"truncated volume", func(t *testing.T, env *e2eEnv, dest2 string) {
+			env.interruptedSend(t, streamBytes, dest2, "--volsize", "1", "--compressor", "")
+			env.sendOK(t, "--volsize", "1", "--compressor", "", "tank/data@a", "file://"+env.dest)
+			vol := volumeNamed(t, dest2, 2)
+			if err := os.Truncate(vol, 1000); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"same size other bytes", func(t *testing.T, env *e2eEnv, dest2 string) {
+			env.interruptedSend(t, streamBytes, dest2, "--volsize", "1", "--compressor", "")
+			env.sendOK(t, "--volsize", "1", "--compressor", "", "tank/data@a", "file://"+env.dest)
+			vol := volumeNamed(t, dest2, 2)
+			data, err := ioutil.ReadFile(vol)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data[len(data)/2] ^= 0xff
+			if err = ioutil.WriteFile(vol, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		// An earlier attempt with another --volsize left same-named volumes.
+		{"other volsize", func(t *testing.T, env *e2eEnv, dest2 string) {
+			env.interruptedSend(t, streamBytes, dest2, "--volsize", "1", "--compressor", "")
+			env.sendOK(t, "--volsize", "2", "--compressor", "", "tank/data@a", "file://"+env.dest)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newE2EEnv(t)
+			dest2 := newDest(t)
+			tc.lagging(t, env, dest2)
+			if names := manifestNames(destObjects(t, dest2)); len(names) != 0 {
+				t.Fatalf("setup left manifests %q at dest2", names)
+			}
+			logs, err := guarded(t, func() (string, error) {
+				return env.send("--volsize", "2", "--compressor", "", "--resume", "tank/data@a", "file://"+env.dest+",file://"+dest2)
+			})
+			if err == nil {
+				t.Errorf("resume completed the set over volumes it does not describe:\n%s", logs)
+			}
+			if names := manifestNames(destObjects(t, dest2)); len(names) != 0 {
+				t.Errorf("dest2 got manifests %q", names)
+			}
+		})
+	}
+}
+
+// Object names do not tell -R -p or the compressor "" from "zfs" apart: completing a set must
+// compare the options as a resume does.
+func TestE2EResumeCompleteRefusesOtherVariant(t *testing.T) {
+	env := newE2EEnv(t)
+	dest2 := newDest(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(3<<20))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	dests := "file://" + env.dest + ",file://" + dest2
+	env.sendOK(t, "--volsize", "1", "-R", "-p", "--compressor", "zfs", "tank/data@a", dests)
+	for _, name := range manifestNames(destObjects(t, dest2)) {
+		if err := os.Remove(filepath.Join(dest2, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logs, err := guarded(t, func() (string, error) {
+		return env.send("--volsize", "1", "--compressor", "", "--resume", "tank/data@a", dests)
+	})
+	if err == nil || !strings.Contains(err.Error(), "option mismatch") {
+		t.Errorf("completing a -R -p set without -R -p: got %v, want an option mismatch:\n%s", err, logs)
+	}
+	if names := manifestNames(destObjects(t, dest2)); len(names) != 0 {
+		t.Errorf("dest2 got manifests %q", names)
+	}
+}
+
+// After a completion, the lagging destination's cache holds the manifest it now has, not what an
+// earlier attempt left there under the same name.
+func TestE2ECompletedSetRefreshesLaggingCache(t *testing.T) {
+	env := newE2EEnv(t)
+	dest2 := newDest(t)
+	env.interruptedSend(t, 3<<20, dest2, "--volsize", "1", "--compressor", "")
+	env.sendOK(t, "--volsize", "1", "--compressor", "", "tank/data@a", "file://"+env.dest)
+	env.sendOK(t, "--volsize", "1", "--compressor", "", "--resume", "tank/data@a", "file://"+env.dest+",file://"+dest2)
+
+	names := manifestNames(destObjects(t, dest2))
+	if len(names) != 1 {
+		t.Fatalf("dest2 has manifests %q, want one", names)
+	}
+	published := destObjects(t, dest2)[names[0]]
+	paths, err := filepath.Glob(filepath.Join(env.work, "cache", "*", "*"))
+	if err != nil || len(paths) != 2 {
+		t.Fatalf("want a cached manifest per destination, got %q (%v)", paths, err)
+	}
+	for _, path := range paths {
+		data, err := ioutil.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(data, published) {
+			t.Errorf("cached %s is not the published manifest", path)
+		}
+	}
+	env.checkRestores(t, "file://"+dest2, "a", 3<<20)
+}
+
+// sendOK runs a send that must succeed.
+func (env *e2eEnv) sendOK(t *testing.T, args ...string) {
+	t.Helper()
+	if logs, err := guarded(t, func() (string, error) { return env.send(args...) }); err != nil {
+		t.Fatalf("send %q: %v\n%s", args, err, logs)
+	}
+}
+
+// volumeNamed returns the path of volume n under the file:// destination dir.
+func volumeNamed(t *testing.T, dir string, n int64) string {
+	t.Helper()
+	for name := range destObjects(t, dir) {
+		if _, _, _, num, ok := files.ParseBackupVolumeObjectName(name, "|"); ok && num == n {
+			return filepath.Join(dir, name)
+		}
+	}
+	t.Fatalf("no volume %d under %s", n, dir)
+	return ""
 }

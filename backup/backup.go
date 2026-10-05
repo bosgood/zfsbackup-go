@@ -707,8 +707,11 @@ func refuseExistingSet(ctx context.Context, jobInfo *files.JobInfo, destinations
 }
 
 // copyManifest uploads the manifest of jobInfo's backup set from destinations[from] to each of
-// destinations[missing], once every volume it lists is present there. A manifest is only uploaded
-// after its volumes have passed every destination, so present volumes are complete ones.
+// destinations[missing], once it has checked that the manifest describes what this send would send,
+// and that every volume it lists is at each of those destinations with the size and SHA-256 it
+// records: same-named volumes may be left over from another attempt (another --volsize, another
+// stream).
+// nolint:funlen // Difficult to break this apart
 func copyManifest(ctx context.Context, jobInfo *files.JobInfo, destinations []destination, from int, missing []int) error {
 	name := jobInfo.ManifestObjectName()
 	tmp, err := ioutil.TempFile(config.BackupTempdir, config.ProgramName)
@@ -725,27 +728,13 @@ func copyManifest(ctx context.Context, jobInfo *files.JobInfo, destinations []de
 		log.AppLogger.Errorf("Could not read manifest %s from %s due to error - %v", name, destinations[from], err)
 		return err
 	}
+	if err = sameStream(ctx, manifest, comparableJob(jobInfo, manifest)); err != nil {
+		return err
+	}
 
-	prefix := jobInfo.BackupVolumeObjectPrefix()
 	for _, idx := range missing {
-		listed, lerr := destinations[idx].backend.List(ctx, prefix)
-		if lerr != nil {
-			log.AppLogger.Errorf("Could not list the volumes at %s due to error - %v", destinations[idx], lerr)
-			return lerr
-		}
-		present := make(map[string]bool, len(listed))
-		for _, obj := range listed {
-			present[obj] = true
-		}
-		for _, vol := range manifest.Volumes {
-			if !present[vol.ObjectName] {
-				err = fmt.Errorf(
-					"cannot complete backup set %s at %s: its volume %s is missing there. Delete the set at %s to send it again",
-					name, destinations[idx], vol.ObjectName, destinations[from],
-				)
-				log.AppLogger.Errorf("%v.", err)
-				return err
-			}
+		if err = verifyVolumesAt(ctx, jobInfo, manifest, destinations[idx], destinations[from]); err != nil {
+			return err
 		}
 	}
 
@@ -758,15 +747,125 @@ func copyManifest(ctx context.Context, jobInfo *files.JobInfo, destinations []de
 			log.AppLogger.Warningf("Error deleting temporary manifest file  - %v", derr)
 		}
 	}()
+	// nolint:gosec // MD5 not used for cryptographic purposes here
+	safeManifestFile := fmt.Sprintf("%x", md5.Sum([]byte(name)))
 	for _, idx := range missing {
 		dest := destinations[idx]
 		if err = volUploadWrapper(ctx, dest.backend, vol, strings.Split(dest.uri, "://")[0])(); err != nil {
 			log.AppLogger.Errorf("Could not upload manifest %s to %s due to error - %v", name, dest, err)
 			return err
 		}
+		// Whatever an earlier attempt cached under this name is not what dest now has.
+		if err = cacheFile(cacheDirFor(dest.uri), safeManifestFile, tmp.Name()); err != nil {
+			log.AppLogger.Errorf("Could not cache manifest %s for %s due to error - %v", name, dest, err)
+			return err
+		}
 		log.AppLogger.Noticef("Completed backup set %s at %s with the manifest from %s.", name, dest, destinations[from])
 	}
 	return nil
+}
+
+// comparableJob is current, as sameStream should compare it with manifest: what manifest does not
+// record (written by an older version), and the guid of a snapshot that is gone locally (nothing
+// is sent from it), are not compared.
+func comparableJob(current, manifest *files.JobInfo) *files.JobInfo {
+	c := *current
+	if manifest.EncryptKeyFingerprint == "" {
+		c.EncryptKeyFingerprint = ""
+	}
+	if manifest.SignKeyFingerprint == "" {
+		c.SignKeyFingerprint = ""
+	}
+	if manifest.BaseSnapshot.GUID == "" || c.BaseSnapshot.GUID == "" {
+		c.BaseSnapshot.GUID = manifest.BaseSnapshot.GUID
+	}
+	if manifest.IncrementalSnapshot.GUID == "" || c.IncrementalSnapshot.GUID == "" {
+		c.IncrementalSnapshot.GUID = manifest.IncrementalSnapshot.GUID
+	}
+	return &c
+}
+
+// verifyVolumesAt fails unless every volume manifest lists is at d with the size and SHA-256 the
+// manifest records. from is where the complete set is, for the advice in the error.
+func verifyVolumesAt(ctx context.Context, jobInfo, manifest *files.JobInfo, d, from destination) error {
+	name := jobInfo.ManifestObjectName()
+	prefix := jobInfo.BackupVolumeObjectPrefix()
+	listed, err := d.backend.List(ctx, prefix)
+	if err != nil {
+		log.AppLogger.Errorf("Could not list the volumes at %s due to error - %v", d, err)
+		return err
+	}
+	present := make(map[string]bool, len(listed))
+	for _, obj := range listed {
+		present[obj] = true
+	}
+	for _, vol := range manifest.Volumes {
+		if !present[vol.ObjectName] {
+			err = fmt.Errorf(
+				"cannot complete backup set %s at %s: its volume %s is missing there. Delete the set at %s to send it again",
+				name, d, vol.ObjectName, from,
+			)
+			log.AppLogger.Errorf("%v.", err)
+			return err
+		}
+	}
+	sizer, _ := d.backend.(backends.Sizer)
+	for _, vol := range manifest.Volumes {
+		var size uint64
+		var sum string
+		if sizer != nil {
+			if size, err = sizer.Size(ctx, vol.ObjectName); err != nil {
+				log.AppLogger.Errorf("Could not stat %s at %s due to error - %v", vol.ObjectName, d, err)
+				return err
+			}
+		}
+		if size == vol.Size || sizer == nil {
+			if size, sum, err = hashObject(ctx, d.backend, vol.ObjectName); err != nil {
+				log.AppLogger.Errorf("Could not read %s at %s due to error - %v", vol.ObjectName, d, err)
+				return err
+			}
+		}
+		if size != vol.Size || sum != vol.SHA256Sum {
+			if sum == "" {
+				sum = "not read"
+			}
+			err = fmt.Errorf(
+				"cannot complete backup set %s at %s: its volume %s there is not the one the manifest at %s describes "+
+					"(%d bytes, SHA256 %s; want %d bytes, SHA256 %s), probably left over from another attempt. "+
+					"Delete the objects %s* at %s, then send this set to %s alone",
+				name, d, vol.ObjectName, from, size, sum, vol.Size, vol.SHA256Sum, prefix, d, d,
+			)
+			log.AppLogger.Errorf("%v.", err)
+			return err
+		}
+	}
+	log.AppLogger.Infof("Verified the %d volumes of %s at %s.", len(manifest.Volumes), name, d)
+	return nil
+}
+
+// hashObject downloads objectName from backend and returns its size and SHA-256.
+func hashObject(ctx context.Context, backend backends.Backend, objectName string) (uint64, string, error) {
+	r, err := backend.Download(ctx, objectName)
+	if err != nil {
+		return 0, "", err
+	}
+	defer r.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, r)
+	if err != nil {
+		return 0, "", err
+	}
+	return uint64(n), fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+// cacheFile copies the file at path to dir/name, atomically.
+func cacheFile(dir, name, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return files.WriteFileAtomic(dir, name, f)
 }
 
 func saveManifest(ctx context.Context, j *files.JobInfo, final bool) (*files.VolumeInfo, error) {
