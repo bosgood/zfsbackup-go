@@ -126,7 +126,7 @@ func init() {
 	receiveCmd.Flags().StringVar(
 		&jobInfo.Separator,
 		"separator",
-		"|",
+		files.DefaultSeparator,
 		"the separator to use between object component names (used only for the initial manifest we are looking for).",
 	)
 }
@@ -145,7 +145,7 @@ func ResetReceiveJobInfo() {
 	jobInfo.MaxFileBuffer = 5
 	jobInfo.MaxRetryTime = 12 * time.Hour
 	jobInfo.MaxBackoffTime = 30 * time.Minute
-	jobInfo.Separator = "|"
+	jobInfo.Separator = files.DefaultSeparator
 }
 
 // nolint:gocyclo // Will do later

@@ -149,7 +149,7 @@ func init() {
 	sendCmd.Flags().StringVar(
 		&jobInfo.Separator,
 		"separator",
-		"|",
+		files.DefaultSeparator,
 		"the separator to use between object component names.",
 	)
 	sendCmd.Flags().IntVar(
@@ -191,7 +191,7 @@ func ResetSendJobInfo() {
 	maxUploadSpeed = 0
 	jobInfo.MaxRetryTime = 12 * time.Hour
 	jobInfo.MaxBackoffTime = 30 * time.Minute
-	jobInfo.Separator = "|"
+	jobInfo.Separator = files.DefaultSeparator
 	jobInfo.UploadChunkSize = 10
 	jobInfo.Compressor = files.InternalCompressor
 }

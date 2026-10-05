@@ -21,6 +21,7 @@
 package files
 
 import (
+	"strconv"
 	"testing"
 
 	"golang.org/x/crypto/openpgp"
@@ -68,6 +69,28 @@ func TestParseBackupVolumeObjectName(t *testing.T) {
 	} {
 		if volume, base, incr, volNum, ok := ParseBackupVolumeObjectName(name, "|"); ok {
 			t.Errorf("%s: parsed as %q %q %q %d", name, volume, base, incr, volNum)
+		}
+	}
+}
+
+// The prefix must be exactly the name minus the volume number: resume and manifest repair
+// list a set's volumes by it.
+func TestBackupVolumeObjectPrefix(t *testing.T) {
+	j := &JobInfo{
+		VolumeName:          "tank/data",
+		BaseSnapshot:        SnapshotInfo{Name: "b"},
+		IncrementalSnapshot: SnapshotInfo{Name: "a"},
+		Separator:           DefaultSeparator,
+		Compressor:          InternalCompressor,
+	}
+	prefix := j.BackupVolumeObjectPrefix()
+	for _, n := range []int64{1, 10, 123} {
+		name := j.BackupVolumeObjectName(n)
+		if name != prefix+strconv.FormatInt(n, 10) {
+			t.Errorf("BackupVolumeObjectName(%d) = %q, want prefix %q + number", n, name, prefix)
+		}
+		if _, _, _, got, ok := ParseBackupVolumeObjectName(name, DefaultSeparator); !ok || got != n {
+			t.Errorf("ParseBackupVolumeObjectName(%q) = volume %d, %v", name, got, ok)
 		}
 	}
 }

@@ -571,7 +571,7 @@ func copyManifest(ctx context.Context, jobInfo *files.JobInfo, destinations []ba
 		return err
 	}
 
-	prefix := strings.TrimSuffix(jobInfo.BackupVolumeObjectName(0), "0")
+	prefix := jobInfo.BackupVolumeObjectPrefix()
 	for _, idx := range missing {
 		listed, lerr := destinations[idx].List(ctx, prefix)
 		if lerr != nil {
@@ -930,7 +930,7 @@ func verifiedVolumes(
 	sort.Sort(files.ByVolumeNumber(cached))
 
 	// "<volume>|<snap>[...].zstream[.ext].vol": every volume of this set, and nothing else.
-	prefix := strings.TrimSuffix(j.BackupVolumeObjectName(0), "0")
+	prefix := j.BackupVolumeObjectPrefix()
 	keep := len(cached)
 	for idx, backend := range destinations {
 		listed, err := backend.List(ctx, prefix)

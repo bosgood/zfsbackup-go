@@ -235,14 +235,23 @@ func (j *JobInfo) ManifestObjectName() string {
 	return fmt.Sprintf("%s.%s", strings.Join(nameParts, j.Separator), strings.Join(extensions, "."))
 }
 
-func (j *JobInfo) BackupVolumeObjectName(volumeNumber int64) string {
+// DefaultSeparator is the default for --separator.
+const DefaultSeparator = "|"
+
+// BackupVolumeObjectPrefix is the object name of every volume of this backup set up to,
+// but not including, the volume number. Listing by it returns the set's volumes and nothing else.
+func (j *JobInfo) BackupVolumeObjectPrefix() string {
 	extensions := []string{"zstream"}
 
 	nameParts, ext := j.volumeNameParts(false)
 	extensions = append(extensions, ext...)
-	extensions = append(extensions, fmt.Sprintf("vol%d", volumeNumber))
+	extensions = append(extensions, "vol")
 
 	return fmt.Sprintf("%s.%s", strings.Join(nameParts, j.Separator), strings.Join(extensions, "."))
+}
+
+func (j *JobInfo) BackupVolumeObjectName(volumeNumber int64) string {
+	return j.BackupVolumeObjectPrefix() + strconv.FormatInt(volumeNumber, 10)
 }
 
 // ParseBackupVolumeObjectName is the inverse of BackupVolumeObjectName: it recognizes

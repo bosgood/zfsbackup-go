@@ -36,8 +36,6 @@ import (
 	"github.com/someone1/zfsbackup-go/log"
 )
 
-const defaultSeparator = "|"
-
 // parseBackupVolume returns the dataset of a backup volume object name written with any of separators.
 func parseBackupVolume(name string, separators []string) (string, bool) {
 	for _, sep := range separators {
@@ -144,7 +142,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 
 	// Only delete what we can name: objects that parse as a backup volume written by this tool,
 	// with any separator in use here. Manifests and everything else are left alone.
-	separators := []string{jobInfo.Separator, defaultSeparator}
+	separators := []string{jobInfo.Separator, files.DefaultSeparator}
 	datasets := make(map[string]bool)
 	for _, manifest := range decodedManifests {
 		separators = append(separators, manifest.Separator)
@@ -152,7 +150,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	}
 	manifestPrefix := jobInfo.ManifestPrefix + jobInfo.Separator
 	if jobInfo.Separator == "" {
-		manifestPrefix = jobInfo.ManifestPrefix + defaultSeparator
+		manifestPrefix = jobInfo.ManifestPrefix + files.DefaultSeparator
 	}
 	candidates := make([]string, 0, len(allObjects))
 	skipped := 0
