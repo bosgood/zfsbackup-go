@@ -517,3 +517,34 @@ func TestE2EResumeShortStreamFails(t *testing.T) {
 		t.Errorf("the failed resume uploaded manifests %q", names)
 	}
 }
+
+// TestE2EFailedSendLeavesNoWaiter: a failed send must not leave a goroutine parked waiting for
+// volumes that will never finish. Harmless for one CLI run, but in-process runs add up.
+func TestE2EFailedSendLeavesNoWaiter(t *testing.T) {
+	env := newE2EEnv(t)
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	if err := ioutil.WriteFile(filepath.Join(env.dest, "tank"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := guarded(t, func() (string, error) {
+		return env.send("--maxRetryTime", "2s", "--maxBackoffTime", "1s", "tank/data@a", "file://"+env.dest)
+	})
+	if err == nil {
+		t.Fatalf("send succeeded although no volume could be uploaded:\n%s", logs)
+	}
+	parked := func() string {
+		for _, g := range strings.Split(backupGoroutines(), "\n\n") {
+			if strings.Contains(g, "backup.Backup.") && strings.Contains(g, "sync.(*WaitGroup).Wait") {
+				return g
+			}
+		}
+		return ""
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for parked() != "" && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if g := parked(); g != "" {
+		t.Errorf("a failed send left a goroutine waiting on the volume counter:\n%s", g)
+	}
+}

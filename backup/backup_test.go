@@ -558,3 +558,22 @@ func TestJoinURI(t *testing.T) {
 		t.Errorf("joinURI did not redact = %q, want %q", got, want)
 	}
 }
+
+func TestPendingVolumes(t *testing.T) {
+	p := newPendingVolumes(1)
+	p.add()
+	p.done()
+	select {
+	case <-p.zero:
+		t.Fatal("zero closed with one volume still pending")
+	default:
+	}
+	p.done()
+	select {
+	case <-p.zero:
+	default:
+		t.Fatal("zero not closed at count 0")
+	}
+	// A straggler after a failed pipeline must not panic.
+	p.done()
+}

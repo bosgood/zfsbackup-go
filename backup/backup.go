@@ -241,6 +241,36 @@ func reportDryRun(ctx context.Context, jobInfo *files.JobInfo) error {
 
 // Backup will initiate a backup with the provided configuration.
 // nolint:funlen,gocyclo // Difficult to break this up
+// pendingVolumes counts the volumes still in the pipeline. zero is closed when the count first
+// reaches 0. Unlike a sync.WaitGroup it can be waited on in a select, so nothing stays parked
+// on it when the pipeline fails and the count never gets there.
+type pendingVolumes struct {
+	mu   sync.Mutex
+	n    int
+	zero chan struct{}
+	once sync.Once
+}
+
+func newPendingVolumes(n int) *pendingVolumes {
+	return &pendingVolumes{n: n, zero: make(chan struct{})}
+}
+
+func (p *pendingVolumes) add() {
+	p.mu.Lock()
+	p.n++
+	p.mu.Unlock()
+}
+
+func (p *pendingVolumes) done() {
+	p.mu.Lock()
+	p.n--
+	n := p.n
+	p.mu.Unlock()
+	if n == 0 {
+		p.once.Do(func() { close(p.zero) })
+	}
+}
+
 // volumeLock is the lock a send holds while it works on volume. clean takes it too, so that it
 // never judges the volumes of a set that is still being uploaded.
 func volumeLock(volume string) (lock lockfile.Lockfile, path string, err error) {
@@ -357,8 +387,7 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	startCh := make(chan *files.VolumeInfo, fileBufferSize) // Sent to ZFS command and meant to be closed when done
 	stepCh := make(chan *files.VolumeInfo, fileBufferSize)  // Used as input to first backend, closed when final manifest is sent through
 
-	var maniwg sync.WaitGroup
-	maniwg.Add(1)
+	pending := newPendingVolumes(1)
 
 	fileBuffer := make(chan bool, fileBufferSize)
 	for i := 0; i < fileBufferSize; i++ {
@@ -371,14 +400,14 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	// Used to prevent closing the upload pipeline after the ZFS command is done
 	// so we can send the manifest file up after all volumes have made it to the backends.
 	go func() {
-		defer maniwg.Done()
+		defer pending.done()
 		for {
 			select {
 			case vol, ok := <-startCh:
 				if !ok {
 					return
 				}
-				maniwg.Add(1)
+				pending.add()
 				select {
 				// Might take a while to pass along the volume so be sure to listen to context cancellations
 				case stepCh <- vol:
@@ -442,7 +471,7 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 					if err = manifestVol.DeleteVolume(); err != nil {
 						log.AppLogger.Warningf("Error deleting temporary manifest file  - %v", err)
 					}
-					maniwg.Done()
+					pending.done()
 				} else {
 					// Manifest has been processed, we're done!
 					return nil
@@ -463,16 +492,16 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	// Final Manifest Creation
 	group.Go(func() error {
 		// Wait until the ZFS send command has completed and all volumes have been uploaded to all backends,
-		// unless the pipeline fails first: then no manifest may be written, and maniwg may never reach zero.
-		allUploaded := make(chan struct{})
-		go func() {
-			maniwg.Wait()
-			close(allUploaded)
-		}()
+		// unless the pipeline fails first: then no manifest may be written, and the count may never reach zero.
 		select {
-		case <-allUploaded:
+		case <-pending.zero:
 		case <-ctx.Done():
 			return ctx.Err()
+		}
+		// The forwarder also counts down when it stops on a cancelled ctx, so both cases can be
+		// ready at once; a failed pipeline must never get as far as a final manifest.
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		log.AppLogger.Infof("All volumes dispatched in pipeline, finalizing manifest file.")
 		manifestmutex.Lock()
