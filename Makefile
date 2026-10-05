@@ -14,6 +14,11 @@ fmt:
 		fi \
 	done
 
+# Lists files gofmt would change (vendor/ and the tmp/ scratch clones excluded); fails if any.
+fmt-check:
+	@out="`git ls-files '*.go' | grep -v '^vendor/' | xargs gofmt -l`"; \
+	if [ -n "$$out" ]; then echo "$$out"; echo "^ not gofmt-clean" && exit 1; fi
+
 lint:
 	@if [ "`golangci-lint run | tee /dev/stderr`" ]; then \
 		echo "^ golangci-lint errors!" && echo && exit 1; \

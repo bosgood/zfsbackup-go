@@ -975,7 +975,6 @@ func verifiedVolumes(
 	return cached[:keep], nil
 }
 
-
 func retryUploadChainer(
 	ctx context.Context,
 	in <-chan *files.VolumeInfo,
