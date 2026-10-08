@@ -14,11 +14,6 @@ fmt:
 		fi \
 	done
 
-# Lists files gofmt would change (vendor/ and the tmp/ scratch clones excluded); fails if any.
-fmt-check:
-	@out="`git ls-files '*.go' | grep -v '^vendor/' | xargs gofmt -l`"; \
-	if [ -n "$$out" ]; then echo "$$out"; echo "^ not gofmt-clean" && exit 1; fi
-
 lint:
 	@if [ "`golangci-lint run | tee /dev/stderr`" ]; then \
 		echo "^ golangci-lint errors!" && echo && exit 1; \
@@ -75,9 +70,10 @@ test-one:
 
 # Report files that `gofmt -s` would rewrite, using the pinned toolchain. The
 # `fmt` target above iterates over an undefined DIRS and so checks nothing.
+# Checks every tracked .go file outside vendor/ (so not the tmp/ scratch clones) with the pinned toolchain.
 fmt-check:
 	docker run --rm -v "$(CURDIR)":/src -w /src $(GO_IMAGE) \
-		sh -c 'out=$$(gofmt -s -l . | grep -v ^vendor/); [ -z "$$out" ] || { echo "$$out"; echo "^ gofmt -s would rewrite these files"; exit 1; }'
+		sh -c 'out=$$(git -c safe.directory=/src ls-files "*.go" | grep -v ^vendor/ | xargs gofmt -s -l); [ -z "$$out" ] || { echo "$$out"; echo "^ gofmt -s would rewrite these files"; exit 1; }'
 
 build:
 	${GOPATH}/bin/gox -ldflags="-w -s -X github.com/someone1/zfsbackup-go/config.GitCommit=${COMMIT_HASH}" -osarch=${TARGETS}
