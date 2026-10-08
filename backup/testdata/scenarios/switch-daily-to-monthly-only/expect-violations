@@ -1,0 +1,3 @@
+# restore-depth flags the October incremental once: restoring it takes the 22
+# daily incrementals inherited from the old flags plus one. That is the cost of
+# switching mid-chain, cleared by the next full; not a planner bug.

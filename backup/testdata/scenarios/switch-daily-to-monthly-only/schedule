@@ -1,0 +1,8 @@
+# Daily runs at 01:00 under the new flags. The first monthly after the switch
+# (October) is sent as an incremental from the last daily backup, and the chain
+# is monthly-only from then on; the full rolls on March 1st as usual.
+policy=hourly=36,daily=30,monthly=3
+from=2026-09-24T01:00:00Z
+until=2027-04-02T01:00:00Z
+every=24h
+checks=coverage:_monthly
