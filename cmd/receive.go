@@ -59,8 +59,8 @@ func init() {
 		&jobInfo.AutoRestore,
 		"auto",
 		false,
-		"Automatically restore to the snapshot provided, or to the latest snapshot of the volume provided, cannot be "+
-			"used with the --incremental flag.",
+		"Automatically restore to the snapshot provided, or to the latest snapshot of the volume provided, from the "+
+			"full backup of that snapshot when there is one; cannot be used with the --incremental flag.",
 	)
 	receiveCmd.Flags().BoolVarP(
 		&jobInfo.FullPath,

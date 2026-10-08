@@ -26,6 +26,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -181,4 +182,64 @@ func TestE2EReceiveFailsFastOnHashMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.receiveFails(t)
+}
+
+// TestE2EReceiveAutoPrefersFull: the runbook restarts a chain with `send --full` of a monthly
+// that was already sent as an incremental. `receive --auto` of that snapshot must restore from
+// its full: one zfs receive while the old chain is still there, and success once the old
+// chain's full has been retired (the incremental's parent is gone).
+func TestE2EReceiveAutoPrefersFull(t *testing.T) {
+	for _, retire := range []bool{false, true} {
+		name := "keep-old-full"
+		if retire {
+			name = "old-full-retired"
+		}
+		t.Run(name, func(t *testing.T) {
+			env := newE2EEnv(t)
+			t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+			env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+				{Name: "b", CreationTime: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)},
+				{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+			})
+			for _, args := range [][]string{
+				{"tank/data@a"},
+				{"-i", "a", "tank/data@b"},
+				{"tank/data@b"},
+			} {
+				args = append([]string{"--compressor", ""}, args...)
+				if logs, err := env.send(append(args, "file://"+env.dest)...); err != nil {
+					t.Fatalf("send %v: %v\n%s", args, err, logs)
+				}
+			}
+			if retire {
+				removed := 0
+				for name := range destObjects(t, env.dest) {
+					if name == "manifests|tank/data|a.manifest.gz" || strings.HasPrefix(name, "tank/data|a.zstream") {
+						if err := os.Remove(filepath.Join(env.dest, name)); err != nil {
+							t.Fatal(err)
+						}
+						removed++
+					}
+				}
+				if removed < 2 {
+					t.Fatalf("retired %d objects of the full of a, want its manifest and a volume", removed)
+				}
+				if err := os.RemoveAll(filepath.Join(env.work, "cache")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			receiveLog := filepath.Join(t.TempDir(), "receive.log")
+			t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+			logs, err := guarded(t, func() (string, error) {
+				return env.receive("--auto", "tank/data@b", "file://"+env.dest, "restored/data")
+			})
+			if err != nil {
+				t.Fatalf("receive --auto of b failed although a full of b is at the destination: %v\n%s", err, logs)
+			}
+			got, _ := ioutil.ReadFile(receiveLog)
+			if n := strings.Count(string(got), "\n"); n != 1 {
+				t.Errorf("want 1 zfs receive (the full of b), got %d\n%s", n, logs)
+			}
+		})
+	}
 }

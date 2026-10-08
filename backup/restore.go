@@ -92,18 +92,18 @@ func AutoRestore(pctx context.Context, jobInfo *files.JobInfo) error {
 	// Restore to the latest snapshot available for the volume provided if no snapshot was provided
 	if jobInfo.BaseSnapshot.Name == "" {
 		log.AppLogger.Infof("Trying to determine latest snapshot for volume %s.", jobInfo.VolumeName)
-		jobInfo.BaseSnapshot = (volumeSnaps[len(volumeSnaps)-1].BaseSnapshot)
+		jobInfo.BaseSnapshot = volumeSnaps[len(volumeSnaps)-1].BaseSnapshot
 		log.AppLogger.Infof("Restoring to snapshot %s.", jobInfo.BaseSnapshot.Name)
 	}
 
-	// Find the matching backup job for the snapshot we want to restore to
-	var jobToRestore *files.JobInfo
+	// Find the backup of the snapshot we want to restore to: its full when there is one
+	var matches []*files.JobInfo
 	for _, job := range volumeSnaps {
-		if strings.Compare(job.BaseSnapshot.Name, jobInfo.BaseSnapshot.Name) == 0 {
-			jobToRestore = job
-			break
+		if job.BaseSnapshot.Name == jobInfo.BaseSnapshot.Name {
+			matches = append(matches, job)
 		}
 	}
+	jobToRestore := fullOrAny(matches)
 	if jobToRestore == nil {
 		log.AppLogger.Errorf("Could not find the snapshot %v for volume %s on backend.", jobInfo.BaseSnapshot.Name, jobInfo.VolumeName)
 		return errors.New("could not find snapshot provided")
@@ -186,6 +186,21 @@ func AutoRestore(pctx context.Context, jobInfo *files.JobInfo) error {
 	log.AppLogger.Noticef("Done.")
 
 	return nil
+}
+
+// fullOrAny returns the full backup among backups when there is one, else the first of them,
+// else nil. A snapshot sent as an incremental and later again as a full (a restarted chain)
+// is restored from its full, which needs no parent and still works once the old chain is gone.
+func fullOrAny(backups []*files.JobInfo) *files.JobInfo {
+	for _, b := range backups {
+		if b.IncrementalSnapshot.Name == "" {
+			return b
+		}
+	}
+	if len(backups) == 0 {
+		return nil
+	}
+	return backups[0]
 }
 
 // Receive will download and restore the backup job described to the Volume target provided.

@@ -153,12 +153,20 @@ func readAndSortManifests(
 		decodedManifests = append(decodedManifests, decodedManifest)
 	}
 
+	// By volume, then base snapshot oldest first. Of the backups of one snapshot (sent as an
+	// incremental and later again as a full, which is how a chain is restarted) the full is
+	// the last, "newest", entry, so every reader sees the same order whatever order the
+	// destination lists objects in. This is sortBackupsNewestFirst's rule, reversed.
 	sort.SliceStable(decodedManifests, func(i, j int) bool {
 		cmp := strings.Compare(decodedManifests[i].VolumeName, decodedManifests[j].VolumeName)
-		if cmp == 0 {
-			return decodedManifests[i].BaseSnapshot.CreationTime.Before(decodedManifests[j].BaseSnapshot.CreationTime)
+		if cmp != 0 {
+			return cmp < 0
 		}
-		return cmp < 0
+		a, b := decodedManifests[i].BaseSnapshot.CreationTime, decodedManifests[j].BaseSnapshot.CreationTime
+		if !a.Equal(b) {
+			return a.Before(b)
+		}
+		return decodedManifests[i].IncrementalSnapshot.Name != "" && decodedManifests[j].IncrementalSnapshot.Name == ""
 	})
 
 	return decodedManifests, nil
