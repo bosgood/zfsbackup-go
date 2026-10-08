@@ -1240,6 +1240,10 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination
 	switch originalManifest, oerr := readManifest(ctx, origManiPath, j); {
 	case os.IsNotExist(oerr):
 		log.AppLogger.Noticef("No previous manifest file exists, nothing to resume; starting over.")
+	case errors.As(oerr, new(*files.KeyError)):
+		// Written by, or for, another key than this run's: a rotated key, not a damaged cache.
+		log.AppLogger.Errorf("Cannot resume backup: the interrupted attempt's manifest %v", oerr)
+		return false, fmt.Errorf("option mismatch: the interrupted attempt's manifest %v", oerr)
 	case oerr != nil:
 		// Cut short by a kill or a full disk: there is nothing to resume from.
 		log.AppLogger.Warningf("Could not read previous manifest file %s (%v); starting over.", origManiPath, oerr)

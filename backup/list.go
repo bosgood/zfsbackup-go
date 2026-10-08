@@ -232,6 +232,10 @@ func readManifest(ctx context.Context, manifestPath string, j *files.JobInfo) (*
 	if err != nil {
 		return nil, err
 	}
+	// The decoder stops at the end of the JSON value; the signature is checked at EOF.
+	if err = manifestVol.VerifyEnd(); err != nil {
+		return nil, err
+	}
 
 	return decodedManifest, nil
 }

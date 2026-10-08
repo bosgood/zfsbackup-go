@@ -102,6 +102,8 @@ type VolumeInfo struct {
 	// PGP objects
 	pgpw io.WriteCloser
 	pgpr *openpgp.MessageDetails
+	// signer is the key the volume must be signed by, when one was asked for.
+	signer *openpgp.Entity
 	// Detail Objects
 	counter   *datacounter.WriterCounter
 	usingPipe bool
@@ -123,6 +125,19 @@ func (v *VolumeInfo) Counter() uint64 {
 	return v.counter.Count()
 }
 
+// A KeyError reports a volume that is not encrypted or signed the way --encryptTo and --signFrom
+// ask for: it was written without a key, or by another one. It is not a truncated or corrupt
+// volume; callers that start over on those must not on this.
+type KeyError struct {
+	msg string
+}
+
+func (e *KeyError) Error() string { return e.msg }
+
+func keyErrorf(format string, args ...interface{}) error {
+	return &KeyError{msg: fmt.Sprintf(format, args...)}
+}
+
 // Read will passthru the command to the underlying io.Reader, which will be setup
 // to ratelimit where applicable.
 func (v *VolumeInfo) Read(p []byte) (int, error) {
@@ -131,16 +146,45 @@ func (v *VolumeInfo) Read(p []byte) (int, error) {
 	}
 	i, err := v.r.Read(p)
 	if err == io.EOF && v.pgpr != nil {
-		if v.pgpr.IsSigned {
-			if v.pgpr.SignatureError != nil {
-				return i, v.pgpr.SignatureError
-			}
-			if v.pgpr.SignedBy == nil {
-				return i, fmt.Errorf("did not have ths key signature to verify the message with")
-			}
+		if serr := v.signatureError(); serr != nil {
+			return i, serr
 		}
 	}
 	return i, err
+}
+
+// signatureError is the state of the volume's signature once it has been read to EOF: the
+// signature must verify, and it must be --signFrom's key that made it.
+func (v *VolumeInfo) signatureError() error {
+	if v.pgpr == nil || !v.pgpr.IsSigned {
+		return nil
+	}
+	if v.pgpr.SignatureError != nil {
+		return v.pgpr.SignatureError
+	}
+	if v.pgpr.SignedBy == nil {
+		return keyErrorf("signed by key %X, which is not in --signFrom's ring", v.pgpr.SignedByKeyId)
+	}
+	if v.signer != nil {
+		got, want := v.pgpr.SignedBy.Entity.PrimaryKey.Fingerprint, v.signer.PrimaryKey.Fingerprint
+		if got != want {
+			return keyErrorf("signed by %X, want %X", got, want)
+		}
+	}
+	return nil
+}
+
+// VerifyEnd reads the rest of the volume and checks its signature. Readers that stop before EOF
+// (a json.Decoder stops at the end of its value) must call it before trusting what they read:
+// openpgp verifies the signature only once the whole message has been consumed.
+func (v *VolumeInfo) VerifyEnd() error {
+	if v.pgpr == nil {
+		return nil
+	}
+	if _, err := io.Copy(io.Discard, v.r); err != nil {
+		return err
+	}
+	return v.signatureError()
 }
 
 // IsUsingPipe will return true when the volume is a glorified pipe
@@ -227,7 +271,20 @@ func (v *VolumeInfo) Extract(ctx context.Context, j *JobInfo, isManifest bool) e
 		if perr != nil {
 			return perr
 		}
+		// Anyone holding the public key can write an encrypted message; only the holder of
+		// --signFrom's key can sign one. What was asked for must be there.
+		name := v.ObjectName
+		if name == "" {
+			name = v.filename
+		}
+		if j.SignKey != nil && !pgpReader.IsSigned {
+			return keyErrorf("%s is not signed, and --signFrom requires a signature", name)
+		}
+		if j.EncryptKey != nil && !pgpReader.IsEncrypted {
+			return keyErrorf("%s is not encrypted, and --encryptTo requires encryption", name)
+		}
 		v.pgpr = pgpReader
+		v.signer = j.SignKey
 		v.r = pgpReader.UnverifiedBody
 	}
 
