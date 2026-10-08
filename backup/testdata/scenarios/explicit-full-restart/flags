@@ -1,0 +1,4 @@
+# Restarting the chain by hand: an explicit --full of the newest monthly, which
+# is backed up so far only as the target of an incremental. send takes it (the
+# object names differ from the incremental's); the next monthly chains from it.
+--full --fullSnapshotSuffix=_monthly

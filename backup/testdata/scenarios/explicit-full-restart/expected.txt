@@ -1,0 +1,2 @@
+next  FULL  autosnap_2026-10-01_00:00:00_monthly  explicit-full
+checks: OK

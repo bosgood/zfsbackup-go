@@ -153,6 +153,12 @@ func TestChecks(t *testing.T) {
 			detail: "FULL autosnap_day30_monthly re-sends autosnap_day30_monthly, already backed up by INCR autosnap_day30_monthly from autosnap_day0_monthly",
 		},
 		{
+			name:  "no-duplicate-send: an explicit full restarts the chain on purpose",
+			check: "no-duplicate-send",
+			sim: simulate(scenario(), full(1, 0), incr(31, 30, 0),
+				Step{At: day(32), Snapshots: pool(30), Plan: Plan{Action: PlanFull, Base: monthly(30), Reason: reasonExplicitFull}}),
+		},
+		{
 			name:  "no-orphan-full: the next incremental chains from the full",
 			check: "no-orphan-full",
 			sim:   simulate(scenario(), full(0, 0), noop(1, 0), incr(30, 30, 0)),
