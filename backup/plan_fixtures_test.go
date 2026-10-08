@@ -183,6 +183,7 @@ monthly=3
 from=2026-09-24T01:00:00Z, until=2027-10-01
 every=12h
 snapshot-delay=3m
+skip=2026-12-24..2027-01-03, skip=2027-02-01T00:00:00Z..2027-02-02
 volume=pool/app
 location=UTC
 `
@@ -201,6 +202,18 @@ location=UTC
 	if s.Schedule.Delay != 3*time.Minute {
 		t.Errorf("got snapshot delay %v, want 3m", s.Schedule.Delay)
 	}
+	wantSkips := []TimeRange{
+		{From: time.Date(2026, 12, 24, 0, 0, 0, 0, time.UTC), Until: time.Date(2027, 1, 3, 0, 0, 0, 0, time.UTC)},
+		{From: time.Date(2027, 2, 1, 0, 0, 0, 0, time.UTC), Until: time.Date(2027, 2, 2, 0, 0, 0, 0, time.UTC)},
+	}
+	if len(s.Skips) != len(wantSkips) {
+		t.Fatalf("got skips %v, want %v", s.Skips, wantSkips)
+	}
+	for i := range wantSkips {
+		if !s.Skips[i].From.Equal(wantSkips[i].From) || !s.Skips[i].Until.Equal(wantSkips[i].Until) {
+			t.Errorf("skip %d: got %v, want %v", i, s.Skips[i], wantSkips[i])
+		}
+	}
 
 	for _, bad := range []string{
 		"policy=hourly=36",                                     // simulating needs until
@@ -215,6 +228,9 @@ location=UTC
 		"checks=coverage:",                                     // coverage needs a suffix
 		"until=2027-01-01,policy=hourly=36,snapshot-delay=-1m", // delay cannot be negative
 		"until=2027-01-01,snapshot-delay=3m",                   // delay without a policy
+		"until=2027-01-01,skip=2026-12-24",                     // skip needs from..until
+		"until=2027-01-01,skip=2027-01-03..2026-12-24",         // reversed range
+		"skip=2026-12-24..2026-12-26",                          // simulating needs until
 	} {
 		if err := (&Scenario{}).ParseScheduleSpec(bad); err == nil {
 			t.Errorf("ParseScheduleSpec(%q) succeeded, want an error", bad)

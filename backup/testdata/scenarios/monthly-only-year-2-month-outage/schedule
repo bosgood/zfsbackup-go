@@ -1,0 +1,11 @@
+# The daily cron job of monthly-only-year, with the host down from November 3rd
+# to January 5th (skip ranges are inclusive). The first run back still finds
+# November, the last backup, on the pool (monthly=3 keeps it until February
+# 2nd) and sends January from it; December is skipped, not lost: its data is
+# inside January's incremental. The March full then comes on time.
+policy=hourly=36,daily=30,monthly=3
+from=2026-09-24T01:00:00Z
+until=2027-10-01T01:00:00Z
+every=24h
+skip=2026-11-03T01:00:00Z..2027-01-05T01:00:00Z
+checks=coverage:_monthly

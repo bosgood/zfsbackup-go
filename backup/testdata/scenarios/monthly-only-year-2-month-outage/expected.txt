@@ -1,0 +1,29 @@
+2026-09-24T01:00:00Z  FULL  autosnap_2026-09-01_00:00:00_monthly  no-previous-full
+2026-09-25T01:00:00Z..2026-09-30T01:00:00Z  NOOP x6  nothing-newer
+2026-10-01T01:00:00Z  INCR  autosnap_2026-10-01_00:00:00_monthly  from autosnap_2026-09-01_00:00:00_monthly  newer-candidate
+2026-10-02T01:00:00Z..2026-10-31T01:00:00Z  NOOP x30  nothing-newer
+2026-11-01T01:00:00Z  INCR  autosnap_2026-11-01_00:00:00_monthly  from autosnap_2026-10-01_00:00:00_monthly  newer-candidate
+2026-11-02T01:00:00Z  NOOP  nothing-newer
+2027-01-06T01:00:00Z  INCR  autosnap_2027-01-01_00:00:00_monthly  from autosnap_2026-11-01_00:00:00_monthly  newer-candidate
+2027-01-07T01:00:00Z..2027-01-31T01:00:00Z  NOOP x25  nothing-newer
+2027-02-01T01:00:00Z  INCR  autosnap_2027-02-01_00:00:00_monthly  from autosnap_2027-01-01_00:00:00_monthly  newer-candidate
+2027-02-02T01:00:00Z..2027-02-27T01:00:00Z  NOOP x26  nothing-newer
+2027-02-28T01:00:00Z  NOOP  nothing-newer  full-due
+2027-03-01T01:00:00Z  FULL  autosnap_2027-03-01_00:00:00_monthly  window-elapsed
+2027-03-02T01:00:00Z..2027-03-31T01:00:00Z  NOOP x30  nothing-newer
+2027-04-01T01:00:00Z  INCR  autosnap_2027-04-01_00:00:00_monthly  from autosnap_2027-03-01_00:00:00_monthly  newer-candidate
+2027-04-02T01:00:00Z..2027-04-30T01:00:00Z  NOOP x29  nothing-newer
+2027-05-01T01:00:00Z  INCR  autosnap_2027-05-01_00:00:00_monthly  from autosnap_2027-04-01_00:00:00_monthly  newer-candidate
+2027-05-02T01:00:00Z..2027-05-31T01:00:00Z  NOOP x30  nothing-newer
+2027-06-01T01:00:00Z  INCR  autosnap_2027-06-01_00:00:00_monthly  from autosnap_2027-05-01_00:00:00_monthly  newer-candidate
+2027-06-02T01:00:00Z..2027-06-30T01:00:00Z  NOOP x29  nothing-newer
+2027-07-01T01:00:00Z  INCR  autosnap_2027-07-01_00:00:00_monthly  from autosnap_2027-06-01_00:00:00_monthly  newer-candidate
+2027-07-02T01:00:00Z..2027-07-31T01:00:00Z  NOOP x30  nothing-newer
+2027-08-01T01:00:00Z  INCR  autosnap_2027-08-01_00:00:00_monthly  from autosnap_2027-07-01_00:00:00_monthly  newer-candidate
+2027-08-02T01:00:00Z..2027-08-27T01:00:00Z  NOOP x26  nothing-newer
+2027-08-28T01:00:00Z..2027-08-31T01:00:00Z  NOOP x4  nothing-newer  full-due
+2027-09-01T01:00:00Z  FULL  autosnap_2027-09-01_00:00:00_monthly  window-elapsed
+2027-09-02T01:00:00Z..2027-09-30T01:00:00Z  NOOP x29  nothing-newer
+2027-10-01T01:00:00Z  INCR  autosnap_2027-10-01_00:00:00_monthly  from autosnap_2027-09-01_00:00:00_monthly  newer-candidate
+checks: 1 violation(s)
+  coverage:_monthly  autosnap_2026-12-01_00:00:00_monthly is never backed up

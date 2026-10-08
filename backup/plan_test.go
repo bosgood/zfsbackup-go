@@ -443,6 +443,37 @@ func snapshotsIdentical(a, b files.SnapshotInfo) bool {
 	return a.Equal(&b) && a.Bookmark == b.Bookmark
 }
 
+// TestRunSkipsOutages: no run happens inside a skip= range, inclusive, while
+// the pool keeps changing.
+func TestRunSkipsOutages(t *testing.T) {
+	sc, err := LoadScenario("testdata/scenarios/monthly-only-5-months")
+	if err != nil {
+		t.Fatal(err)
+	}
+	from, to := time.Date(2026, 10, 2, 1, 0, 0, 0, time.UTC), time.Date(2026, 10, 20, 1, 0, 0, 0, time.UTC)
+	sc.Skips = []TimeRange{{From: from, Until: to}}
+	steps := sc.Run().Steps
+	for _, st := range steps {
+		if !st.At.Before(from) && !st.At.After(to) {
+			t.Errorf("a run happened at %v, inside the outage", st.At)
+		}
+	}
+	if len(steps) == 0 || !steps[0].At.Equal(sc.From) || steps[len(steps)-1].At.Before(to) {
+		t.Fatalf("runs outside the outage are missing: first %v, last %v", steps[0].At, steps[len(steps)-1].At)
+	}
+	// The first run back sees the snapshots taken during the outage.
+	var back Step
+	for _, st := range steps {
+		if st.At.After(to) {
+			back = st
+			break
+		}
+	}
+	if want := "autosnap_2026-10-21_00:00:00_daily"; len(back.Snapshots) == 0 || !strings.Contains(fmt.Sprint(snapshotNames(back.Snapshots)), want) {
+		t.Errorf("the run at %v does not see %s: %v", back.At, want, snapshotNames(back.Snapshots))
+	}
+}
+
 // TestTieOrderIndependence reruns scenarios with every order of the snapshots
 // sanoid takes at the same boundary (the 1st at midnight brings a monthly, a
 // daily and an hourly), in the same second and 1s apart. `zfs list -S

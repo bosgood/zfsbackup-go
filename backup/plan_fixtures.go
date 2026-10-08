@@ -58,8 +58,12 @@ type Scenario struct {
 	// single run against the snapshots as given ("next").
 	From, Until time.Time
 	Every       time.Duration
-	Checks      []string // opt-in checks, e.g. coverage:_monthly
+	Skips       []TimeRange // no run happens inside these ranges (the host was down)
+	Checks      []string    // opt-in checks, e.g. coverage:_monthly
 }
+
+// TimeRange is a closed interval of run times.
+type TimeRange struct{ From, Until time.Time }
 
 // LoadScenario reads a scenario directory:
 //
@@ -352,6 +356,7 @@ func (s *Scenario) location() *time.Location {
 //	from=2026-09-24T01:00:00Z            first run; default: the newest snapshot + 1h
 //	until=2027-10-01T01:00:00Z           last run
 //	every=24h                            time between runs; default 24h
+//	skip=2026-12-24..2027-01-03          no runs in this range, inclusive (an outage); repeatable
 //	checks=coverage:_monthly             opt-in checks, in addition to the defaults
 //	volume=tank/data                     the volume being backed up
 //	location=America/New_York            zone of sanoid names and rendered times; default UTC
@@ -399,6 +404,23 @@ func (s *Scenario) ParseScheduleSpec(spec string) error {
 					return fmt.Errorf("invalid every=%s: want a positive duration such as 24h", value)
 				}
 				s.Every = every
+			case "skip":
+				first, last, ok := strings.Cut(value, "..")
+				if !ok {
+					return fmt.Errorf("invalid skip=%s: want <from>..<until>", value)
+				}
+				var r TimeRange
+				var err error
+				if r.From, err = s.parseTime(first); err != nil || r.From.IsZero() {
+					return fmt.Errorf("invalid skip=%s: %v", value, err)
+				}
+				if r.Until, err = s.parseTime(last); err != nil || r.Until.IsZero() {
+					return fmt.Errorf("invalid skip=%s: %v", value, err)
+				}
+				if r.Until.Before(r.From) {
+					return fmt.Errorf("invalid skip=%s: the range ends before it starts", value)
+				}
+				s.Skips = append(s.Skips, r)
 			case "volume":
 				s.Volume = value
 			case "location":
@@ -438,7 +460,7 @@ func (s *Scenario) ParseScheduleSpec(spec string) error {
 	if s.Until, err = s.parseTime(until); err != nil {
 		return fmt.Errorf("invalid until=%s: %v", until, err)
 	}
-	if (s.Schedule != nil || !s.From.IsZero() || s.Every != 0) && s.Until.IsZero() {
+	if (s.Schedule != nil || !s.From.IsZero() || s.Every != 0 || len(s.Skips) > 0) && s.Until.IsZero() {
 		return errors.New("simulating runs over time needs until=")
 	}
 	if !s.From.IsZero() && s.Until.Before(s.From) {

@@ -290,9 +290,9 @@ type Simulation struct {
 // Run simulates the scenario. Without Until it plans a single run against the
 // snapshots as given. Otherwise it plans a run every Every from From (default:
 // an hour after the newest snapshot) to Until, letting the Schedule take and
-// prune snapshots in between. Every backup a run sends is added to each
-// destination, so the next run sees it the way getBackupsForTarget would read
-// it back.
+// prune snapshots in between; runs inside a Skips range do not happen, but the
+// pool keeps changing. Every backup a run sends is added to each destination,
+// so the next run sees it the way getBackupsForTarget would read it back.
 func (s *Scenario) Run() *Simulation {
 	sim := &Simulation{Scenario: s, Initial: cloneDestinations(s.DestBackups)}
 	snapshots := s.Snapshots
@@ -315,10 +315,23 @@ func (s *Scenario) Run() *Simulation {
 				taken = at
 			}
 		}
+		if s.skipped(at) {
+			continue // the host was down: sanoid still ran, the cron job did not
+		}
 		sim.Steps = append(sim.Steps, s.run(at, visibleAt(snapshots, at), dest))
 	}
 	sim.Manifests = dest
 	return sim
+}
+
+// skipped reports whether at falls inside a Skips range.
+func (s *Scenario) skipped(at time.Time) bool {
+	for _, r := range s.Skips {
+		if !at.Before(r.From) && !at.After(r.Until) {
+			return true
+		}
+	}
+	return false
 }
 
 // visibleAt drops the snapshots created after at from a newest-first list: a
