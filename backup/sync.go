@@ -24,7 +24,6 @@ import (
 	"context"
 	"crypto/md5" // nolint:gosec // MD5 not used for cryptographic purposes here
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,27 +35,12 @@ import (
 	"github.com/someone1/zfsbackup-go/zfs"
 )
 
-// redactURI removes an embedded password from a destination URI so it is safe to
-// log. Destinations may carry credentials (e.g. ssh://user:password@host/path) and
-// some output is emitted at Notice level, which is visible by default. The URI is
-// returned unchanged unless it actually contains a password.
-func redactURI(uri string) string {
-	u, err := url.Parse(uri)
-	if err != nil || u.User == nil {
-		return uri
-	}
-	if _, hasPassword := u.User.Password(); !hasPassword {
-		return uri
-	}
-	return u.Redacted()
-}
-
 // joinURI appends an object name to a destination URI for display purposes, and
-// redacts any credentials. filepath.Join must not be used here: it runs
-// filepath.Clean, which collapses the "//" in a scheme, turning "s3://bucket"
-// into "s3:/bucket".
+// redacts any credentials (backends.RedactURI). filepath.Join must not be used
+// here: it runs filepath.Clean, which collapses the "//" in a scheme, turning
+// "s3://bucket" into "s3:/bucket".
 func joinURI(target, obj string) string {
-	return strings.TrimSuffix(redactURI(target), "/") + "/" + obj
+	return strings.TrimSuffix(backends.RedactURI(target), "/") + "/" + obj
 }
 
 func prepareBackend(ctx context.Context, j *files.JobInfo, backendURI string, uploadBuffer chan bool) (backends.Backend, error) {

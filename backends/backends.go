@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 	"time"
 
@@ -274,18 +275,24 @@ func LegacySpellings(canonical, typed string) []string {
 	return spellings
 }
 
-// RedactURI drops the userinfo ("user[:password]@") from a URI, for logs and error messages.
+// RedactURI hides the password of a URI ("user:password@host") for logs and error messages.
+// It is the one helper for this: every log line that names a destination goes through it.
+// A URI url.Parse reads is redacted the way url.URL.Redacted does (the password becomes
+// xxxxx). One it cannot read, or one whose password holds a character that moves the '@'
+// out of the authority ('/', '?', '#', another '@'), has no reliable structure, so the
+// fallback is blunt: everything between the scheme and the last '@' goes. Over-redacting a
+// log line is fine; leaking a password is not.
 func RedactURI(uri string) string {
 	scheme, rest, ok := strings.Cut(uri, "://")
-	if !ok {
+	if !ok || !strings.Contains(rest, "@") {
 		return uri
 	}
-	authority, path, hasPath := strings.Cut(rest, "/")
-	if at := strings.LastIndex(authority, "@"); at >= 0 {
-		authority = authority[at+1:]
+	u, err := url.Parse(uri)
+	if err == nil && u.User == nil {
+		return uri // the '@' is in the path, as in s3://bucket/p@q/
 	}
-	if !hasPath {
-		return scheme + "://" + authority
+	if err == nil && strings.Count(rest, "@") == 1 {
+		return u.Redacted()
 	}
-	return scheme + "://" + authority + "/" + path
+	return scheme + "://" + rest[strings.LastIndex(rest, "@")+1:]
 }

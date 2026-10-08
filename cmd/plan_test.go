@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"io/ioutil"
 	"path/filepath"
 	"strings"
@@ -217,5 +218,33 @@ func TestPlanFlagErrors(t *testing.T) {
 		if _, err := runPlanCommand(t, args...); err == nil || err == errChecksFailed {
 			t.Errorf("plan %v: got error %v, want an input error", args, err)
 		}
+	}
+}
+
+// A destination URI whose password defeats url.Parse must not be logged raw
+// when plan fails to read it.
+func TestPlanRedactsDestination(t *testing.T) {
+	snapshots := filepath.Join(scenarios, "monthly-only-noop", "snapshots.txt")
+	ResetSendJobInfo()
+	var logs bytes.Buffer
+	log.AppLogger.SetBackend(logging.AddModuleLevel(logging.NewLogBackend(&logs, "", 0)))
+	oldStdout := config.Stdout
+	config.Stdout = io.Discard
+	defer func() { config.Stdout = oldStdout }()
+	RootCmd.SetArgs([]string{"plan", "--workingDirectory", t.TempDir(), "--full", "--snapshots", snapshots, "tank/data",
+		"ssh://u:pa/ss@h/x"})
+	defer func() {
+		RootCmd.SetArgs(nil)
+		ResetSendJobInfo()
+	}()
+	err := RootCmd.ExecuteContext(context.Background())
+	if err == nil {
+		t.Fatal("plan read backups from ssh://u:pa/ss@h/x")
+	}
+	if strings.Contains(logs.String(), "pa/ss") || strings.Contains(err.Error(), "pa/ss") {
+		t.Errorf("the password was logged:\n%s\nerror: %v", logs.String(), err)
+	}
+	if !strings.Contains(logs.String(), "h/x") {
+		t.Errorf("the destination is not named at all in:\n%s", logs.String())
 	}
 }

@@ -218,10 +218,10 @@ func updateJobInfo(args []string) error {
 	for _, destination := range jobInfo.Destinations {
 		_, err := backends.GetBackendForURI(destination)
 		if err == backends.ErrInvalidPrefix {
-			log.AppLogger.Errorf("Unsupported prefix provided in destination URI, was given %s", destination)
+			log.AppLogger.Errorf("Unsupported prefix provided in destination URI, was given %s", backends.RedactURI(destination))
 			return err
 		} else if err == backends.ErrInvalidURI {
-			log.AppLogger.Errorf("Unsupported destination URI, was given %s", destination)
+			log.AppLogger.Errorf("Unsupported destination URI, was given %s", backends.RedactURI(destination))
 			return err
 		}
 	}

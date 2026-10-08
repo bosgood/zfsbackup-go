@@ -311,11 +311,14 @@ func BackendTest(ctx context.Context, prefix, uri string, skipPrefix bool, b Bac
 
 func TestRedactURI(t *testing.T) {
 	testCases := map[string]string{
-		"ssh://user:secret@host:22/path": "ssh://host:22/path",
-		"ssh://user@host/path":           "ssh://host/path",
+		"ssh://user:secret@host:22/path": "ssh://user:xxxxx@host:22/path",
+		"ssh://u:p@h/x":                  "ssh://u:xxxxx@h/x",
+		"ssh://user@host/path":           "ssh://user@host/path",
 		"ssh://host/path":                "ssh://host/path",
 		"s3://bucket/p@q/":               "s3://bucket/p@q/",
+		"s3://bucket/p/":                 "s3://bucket/p/",
 		"s3://bucket":                    "s3://bucket",
+		"file:///x":                      "file:///x",
 		"file:///tmp/dest":               "file:///tmp/dest",
 		"delete://":                      "delete://",
 		"notauri":                        "notauri",
@@ -324,6 +327,37 @@ func TestRedactURI(t *testing.T) {
 		if got := RedactURI(in); got != want {
 			t.Errorf("RedactURI(%q) = %q, want %q", in, got, want)
 		}
+	}
+
+	// A password with a character url.Parse misreads ('/', '?', '#', '@') has no
+	// reliable structure: whatever comes out, the password must not.
+	for _, in := range []string{
+		"ssh://u:pa/ss@h/x",
+		"ssh://u:p?w@h/x",
+		"ssh://u:p#w@h/x",
+		"ssh://u:p@w@h/x",
+		"ssh://u:p%zz@h/x",
+	} {
+		got := RedactURI(in)
+		password := in[len("ssh://u:"):strings.LastIndex(in, "@")]
+		if strings.Contains(got, password) || strings.Contains(got, password[:2]) {
+			t.Errorf("RedactURI(%q) = %q leaks the password", in, got)
+		}
+		if !strings.HasPrefix(got, "ssh://") || !strings.HasSuffix(got, "h/x") {
+			t.Errorf("RedactURI(%q) = %q, want the scheme and the host and path kept", in, got)
+		}
+	}
+}
+
+// The error ssh's Init returns for an unparsable URI must not carry the password.
+func TestSSHInitErrorRedacts(t *testing.T) {
+	b := &SSHBackend{}
+	err := b.Init(context.Background(), &BackendConfig{TargetURI: "ssh://user:pa/ss@host/path"})
+	if err == nil {
+		t.Fatal("Init accepted a URI with an unescaped '/' in the password")
+	}
+	if strings.Contains(err.Error(), "pa/ss") {
+		t.Errorf("Init error leaks the password: %v", err)
 	}
 }
 

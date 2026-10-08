@@ -121,7 +121,7 @@ func validatePlanFlags(cmd *cobra.Command, args []string) error {
 		destinations, _ := parseDestinations(args[1])
 		for _, destination := range destinations {
 			if _, err := backends.GetBackendForURI(destination); err != nil {
-				log.AppLogger.Errorf("Unsupported destination URI %s - %v", destination, err)
+				log.AppLogger.Errorf("Unsupported destination URI %s - %v", backends.RedactURI(destination), err)
 				return err
 			}
 		}
@@ -166,7 +166,7 @@ func runPlan(cmd *cobra.Command, args []string) error {
 		for _, destination := range jobInfo.Destinations {
 			manifests, err := backup.BackupsAtTarget(cmd.Context(), sc.Volume, destination, &jobInfo)
 			if err != nil {
-				log.AppLogger.Errorf("Could not read the backups at %s - %v", destination, err)
+				log.AppLogger.Errorf("Could not read the backups at %s - %v", backends.RedactURI(destination), err)
 				return err
 			}
 			sc.DestBackups = append(sc.DestBackups, manifests)

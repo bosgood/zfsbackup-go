@@ -119,7 +119,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	if len(manifests) == 0 && len(localOnlyFiles) == 0 && len(allObjects) > 0 {
 		err = fmt.Errorf(
 			"destination %s holds %d objects but no manifests; refusing to clean. If this is intended, delete the objects manually",
-			target, len(allObjects),
+			backends.RedactURI(target), len(allObjects),
 		)
 		log.AppLogger.Errorf("%v.", err)
 		return err
