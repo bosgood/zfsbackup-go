@@ -73,17 +73,15 @@ func ProcessSmartOptions(ctx context.Context, jobInfo *files.JobInfo) error {
 		return err
 	}
 
-	// An explicit full backup never consults the destinations, so skip the manifest
-	// sync entirely rather than downloading and decoding manifests we would discard.
+	// An explicit full backup reads the destinations too: the plan is a no-op when that full
+	// already exists there, rather than a send that would overwrite it.
 	destBackups := make([][]*files.JobInfo, len(jobInfo.Destinations))
-	if !jobInfo.Full {
-		for idx := range jobInfo.Destinations {
-			b, derr := getBackupsForTarget(ctx, jobInfo.VolumeName, jobInfo.Destinations[idx], jobInfo)
-			if derr != nil {
-				return derr
-			}
-			destBackups[idx] = b
+	for idx := range jobInfo.Destinations {
+		b, derr := getBackupsForTarget(ctx, jobInfo.VolumeName, jobInfo.Destinations[idx], jobInfo)
+		if derr != nil {
+			return derr
 		}
+		destBackups[idx] = b
 	}
 
 	completable := jobInfo.Resume
