@@ -1,0 +1,8 @@
+# Two years of daily runs at 01:00 on a pool that keeps only monthlies. The
+# 4320h window still rolls the full onto March 1st and September 1st: the
+# shortest six-month span between 1sts (September to March) is 181 days.
+policy=monthly=6
+from=2026-09-24T01:00:00Z
+until=2028-10-02T01:00:00Z
+every=24h
+checks=coverage:_monthly
