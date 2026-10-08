@@ -454,6 +454,15 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	lferr = lock.TryLock()
 
 	if lferr != nil {
+		// A live holder is another send of this volume, usually one that outlived the cron
+		// interval; the lock is not stale, so do not suggest removing it.
+		if owner, oerr := lock.GetOwner(); oerr == nil && errors.Is(lferr, lockfile.ErrBusy) {
+			log.AppLogger.Errorf(
+				"Another send of %s is running (pid %d holds %s); exiting. Run again when it is done.",
+				jobInfo.VolumeName, owner.Pid, lockFilePath,
+			)
+			return lferr
+		}
 		log.AppLogger.Errorf(
 			"Cannot lock %q, reason: %v. If no other execution of %s is working on %s, you may forcefully remove the lock file located %s.",
 			lock, lferr, config.ProgramName, jobInfo.VolumeName, lockFilePath,

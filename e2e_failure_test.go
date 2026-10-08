@@ -31,6 +31,7 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -209,6 +210,45 @@ func (env *e2eEnv) checkRestores(t *testing.T, dest, snap string, streamBytes in
 	}
 	if want := fmt.Sprintf("%d %s\n", streamBytes, hex.EncodeToString(h.Sum(nil))); string(got) != want {
 		t.Errorf("zfs receive got %q, want the sent stream %q", got, want)
+	}
+}
+
+// TestE2ESendRefusesWhileAnotherSendRuns: a cron run that overlaps a send still
+// uploading (a full that takes longer than the cron interval) exits with an error that
+// names the running send, uploads nothing, and leaves the lock alone.
+func TestE2ESendRefusesWhileAnotherSendRuns(t *testing.T) {
+	env := newE2EEnv(t)
+	sc, err := backup.LoadScenario(monthlyOnlyScenario)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.writeSnapshots(t, "tank/data", sc.Snapshots)
+
+	// Another live process holds the lock: the lockfile library treats a lock held by a
+	// dead pid, or by this very process, as stale.
+	holder := exec.Command("sleep", "60")
+	if err = holder.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = holder.Process.Kill(); _, _ = holder.Process.Wait() })
+	lock := env.lockFile("tank/data")
+	if err = os.MkdirAll(filepath.Dir(lock), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = ioutil.WriteFile(lock, []byte(fmt.Sprintf("%d\n", holder.Process.Pid)), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	logs, err := env.send(append(scenarioFlags(t, monthlyOnlyScenario), "tank/data", "file://"+env.dest)...)
+	want := fmt.Sprintf("Another send of tank/data is running (pid %d holds %s)", holder.Process.Pid, lock)
+	if err == nil || !strings.Contains(logs, want) || strings.Contains(logs, "forcefully remove") {
+		t.Errorf("send returned %v; want an error and %q in the logs, without the removal hint:\n%s", err, want, logs)
+	}
+	if names := manifestNames(destObjects(t, env.dest)); len(names) != 0 {
+		t.Errorf("the overlapping run uploaded %q", names)
+	}
+	if content, rerr := ioutil.ReadFile(lock); rerr != nil || strings.TrimSpace(string(content)) != fmt.Sprint(holder.Process.Pid) {
+		t.Errorf("lock file changed: %q, %v", content, rerr)
 	}
 }
 
