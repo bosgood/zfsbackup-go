@@ -221,9 +221,10 @@ location=UTC
 	if s.Schedule.Delay != 3*time.Minute {
 		t.Errorf("got snapshot delay %v, want 3m", s.Schedule.Delay)
 	}
+	// A date-only end covers its whole day: Until is the next midnight.
 	wantSkips := []TimeRange{
-		{From: time.Date(2026, 12, 24, 0, 0, 0, 0, time.UTC), Until: time.Date(2027, 1, 3, 0, 0, 0, 0, time.UTC)},
-		{From: time.Date(2027, 2, 1, 0, 0, 0, 0, time.UTC), Until: time.Date(2027, 2, 2, 0, 0, 0, 0, time.UTC)},
+		{From: time.Date(2026, 12, 24, 0, 0, 0, 0, time.UTC), Until: time.Date(2027, 1, 4, 0, 0, 0, 0, time.UTC)},
+		{From: time.Date(2027, 2, 1, 0, 0, 0, 0, time.UTC), Until: time.Date(2027, 2, 3, 0, 0, 0, 0, time.UTC)},
 	}
 	if len(s.Skips) != len(wantSkips) {
 		t.Fatalf("got skips %v, want %v", s.Skips, wantSkips)
@@ -290,5 +291,82 @@ func TestScenarioAdoptCreationTimes(t *testing.T) {
 	}
 	if got := s.AdoptCreationTimes(); got != 0 {
 		t.Errorf("second AdoptCreationTimes = %d, want 0", got)
+	}
+}
+
+// skipScenario is a monthly-only scenario over a three-snapshot pool with
+// the given schedule spec, for tests of skip= ranges.
+func skipScenario(t *testing.T, spec string) *Scenario {
+	t.Helper()
+	sc := &Scenario{Volume: "tank/data"}
+	if err := sc.ParseScheduleSpec(spec); err != nil {
+		t.Fatalf("ParseScheduleSpec(%s): %v", spec, err)
+	}
+	j, err := ParseSmartFlags(strings.NewReader("--fullIfOlderThan=4320h --fullSnapshotSuffix=_monthly --incrementalSnapshotSuffix=_monthly"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc.JobInfo = j
+	pool := "autosnap_2026-09-01_00:00:00_monthly\nautosnap_2026-09-01_00:00:00_daily\nautosnap_2026-09-01_00:00:00_hourly\n"
+	if err := sc.ReadSnapshots(strings.NewReader(pool)); err != nil {
+		t.Fatal(err)
+	}
+	sc.DestBackups = [][]*files.JobInfo{{}}
+	return sc
+}
+
+// runDays lists the days (in UTC, as 2006-01-02) a simulation ran on.
+func runDays(sim *Simulation) map[string]bool {
+	days := make(map[string]bool)
+	for _, st := range sim.Steps {
+		days[st.At.UTC().Format("2006-01-02")] = true
+	}
+	return days
+}
+
+// skip= means the same whether it comes before or after location=.
+func TestScheduleSkipOrderIndependent(t *testing.T) {
+	locationFirst := &Scenario{}
+	if err := locationFirst.ParseScheduleSpec("location=America/New_York,skip=2026-11-03..2026-11-05,until=2027-01-01"); err != nil {
+		t.Fatal(err)
+	}
+	skipFirst := &Scenario{}
+	if err := skipFirst.ParseScheduleSpec("skip=2026-11-03..2026-11-05,location=America/New_York,until=2027-01-01"); err != nil {
+		t.Fatal(err)
+	}
+	a, b := locationFirst.Skips[0], skipFirst.Skips[0]
+	if !a.From.Equal(b.From) || !a.Until.Equal(b.Until) {
+		t.Errorf("the same skip= parsed as %v..%v after location= and %v..%v before it", a.From, a.Until, b.From, b.Until)
+	}
+	newYork, _ := time.LoadLocation("America/New_York")
+	if want := time.Date(2026, 11, 3, 0, 0, 0, 0, newYork); !b.From.Equal(want) {
+		t.Errorf("skip= before location= starts at %v, want midnight in New York %v", b.From, want)
+	}
+}
+
+// A date-only skip= end covers that whole day; an end with a time means that
+// instant, inclusive.
+func TestScheduleSkipDateOnlyCoversLastDay(t *testing.T) {
+	policy := "policy=hourly=36,daily=30,monthly=3,from=2026-09-24T01:00:00Z,until=2026-11-10T01:00:00Z,"
+	dateOnly := skipScenario(t, policy+"skip=2026-11-03..2026-11-05")
+	days := runDays(dateOnly.Run())
+	for _, day := range []string{"2026-11-03", "2026-11-04", "2026-11-05"} {
+		if days[day] {
+			t.Errorf("a run happened on %s, inside skip=2026-11-03..2026-11-05", day)
+		}
+	}
+	for _, day := range []string{"2026-11-02", "2026-11-06"} {
+		if !days[day] {
+			t.Errorf("no run on %s, outside skip=2026-11-03..2026-11-05", day)
+		}
+	}
+
+	timed := skipScenario(t, policy+"skip=2026-11-03T01:00:00Z..2026-11-05T01:00:00Z")
+	days = runDays(timed.Run())
+	if days["2026-11-05"] {
+		t.Errorf("the 01:00 run on 2026-11-05 happened though the skip= range ends at that instant")
+	}
+	if !days["2026-11-06"] {
+		t.Errorf("no run on 2026-11-06, after the skip= range")
 	}
 }

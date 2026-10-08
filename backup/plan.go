@@ -324,10 +324,10 @@ func (s *Scenario) Run() *Simulation {
 	return sim
 }
 
-// skipped reports whether at falls inside a Skips range.
+// skipped reports whether at falls inside a Skips range, [From, Until).
 func (s *Scenario) skipped(at time.Time) bool {
 	for _, r := range s.Skips {
-		if !at.Before(r.From) && !at.After(r.Until) {
+		if !at.Before(r.From) && at.Before(r.Until) {
 			return true
 		}
 	}

@@ -70,7 +70,7 @@ type Scenario struct {
 	Checks      []string    // opt-in checks, e.g. coverage:_monthly
 }
 
-// TimeRange is a closed interval of run times.
+// TimeRange is a half-open interval [From, Until) of run times.
 type TimeRange struct{ From, Until time.Time }
 
 // LoadScenario reads a scenario directory:
@@ -401,16 +401,20 @@ func (s *Scenario) location() *time.Location {
 //	from=2026-09-24T01:00:00Z            first run; default: the newest snapshot + 1h
 //	until=2027-10-01T01:00:00Z           last run
 //	every=24h                            time between runs; default 24h
-//	skip=2026-12-24..2027-01-03          no runs in this range, inclusive (an outage); repeatable
+//	skip=2026-12-24..2027-01-03          no runs from the 24th through the 3rd (an outage); repeatable.
+//	                                     A date means the whole day, a time means that instant.
 //	checks=coverage:_monthly             opt-in checks, in addition to the defaults
 //	volume=tank/data                     the volume being backed up
 //	location=America/New_York            zone of sanoid names and rendered times; default UTC
 //
 // Setting any of policy, from, until or every simulates runs over time, which
 // requires until. Times are RFC 3339, or 2006-01-02[T15:04:05] in location.
+// Keys may come in any order: times are parsed once the whole spec is read,
+// so location= applies to every one of them.
 func (s *Scenario) ParseScheduleSpec(spec string) error {
 	var policy []string
 	var from, until string
+	var skips []string
 	var delay time.Duration
 	listKey := ""
 	for _, line := range strings.Split(spec, "\n") {
@@ -450,22 +454,7 @@ func (s *Scenario) ParseScheduleSpec(spec string) error {
 				}
 				s.Every = every
 			case "skip":
-				first, last, ok := strings.Cut(value, "..")
-				if !ok {
-					return fmt.Errorf("invalid skip=%s: want <from>..<until>", value)
-				}
-				var r TimeRange
-				var err error
-				if r.From, err = s.parseTime(first); err != nil || r.From.IsZero() {
-					return fmt.Errorf("invalid skip=%s: %v", value, err)
-				}
-				if r.Until, err = s.parseTime(last); err != nil || r.Until.IsZero() {
-					return fmt.Errorf("invalid skip=%s: %v", value, err)
-				}
-				if r.Until.Before(r.From) {
-					return fmt.Errorf("invalid skip=%s: the range ends before it starts", value)
-				}
-				s.Skips = append(s.Skips, r)
+				skips = append(skips, value)
 			case "volume":
 				s.Volume = value
 			case "location":
@@ -505,6 +494,13 @@ func (s *Scenario) ParseScheduleSpec(spec string) error {
 	if s.Until, err = s.parseTime(until); err != nil {
 		return fmt.Errorf("invalid until=%s: %v", until, err)
 	}
+	for _, value := range skips {
+		r, err := s.parseSkip(value)
+		if err != nil {
+			return fmt.Errorf("invalid skip=%s: %v", value, err)
+		}
+		s.Skips = append(s.Skips, r)
+	}
 	if (s.Schedule != nil || !s.From.IsZero() || s.Every != 0 || len(s.Skips) > 0) && s.Until.IsZero() {
 		return errors.New("simulating runs over time needs until=")
 	}
@@ -517,17 +513,52 @@ func (s *Scenario) ParseScheduleSpec(spec string) error {
 	return nil
 }
 
+// parseSkip reads `<from>..<until>` into a TimeRange. A date-only end covers
+// its whole day; an end with a time is inclusive of that instant.
+func (s *Scenario) parseSkip(value string) (TimeRange, error) {
+	first, last, ok := strings.Cut(value, "..")
+	if !ok {
+		return TimeRange{}, errors.New("want <from>..<until>")
+	}
+	var r TimeRange
+	from, _, err := s.parseTimeDetail(first)
+	if err != nil || from.IsZero() {
+		return TimeRange{}, err
+	}
+	until, dateOnly, err := s.parseTimeDetail(last)
+	if err != nil || until.IsZero() {
+		return TimeRange{}, err
+	}
+	if until.Before(from) {
+		return TimeRange{}, errors.New("the range ends before it starts")
+	}
+	r.From = from
+	if dateOnly {
+		r.Until = until.AddDate(0, 0, 1)
+	} else {
+		r.Until = until.Add(time.Nanosecond)
+	}
+	return r, nil
+}
+
 func (s *Scenario) parseTime(value string) (time.Time, error) {
+	t, _, err := s.parseTimeDetail(value)
+	return t, err
+}
+
+// parseTimeDetail parses a time and reports whether it was a bare date.
+func (s *Scenario) parseTimeDetail(value string) (t time.Time, dateOnly bool, err error) {
 	if value == "" {
-		return time.Time{}, nil
+		return time.Time{}, false, nil
 	}
-	if t, err := time.Parse(time.RFC3339, value); err == nil {
-		return t.In(s.location()), nil
+	if t, err = time.Parse(time.RFC3339, value); err == nil {
+		return t.In(s.location()), false, nil
 	}
-	for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02"} {
-		if t, err := time.ParseInLocation(layout, value, s.location()); err == nil {
-			return t, nil
-		}
+	if t, err = time.ParseInLocation("2006-01-02T15:04:05", value, s.location()); err == nil {
+		return t, false, nil
 	}
-	return time.Time{}, errors.New("want RFC 3339, such as 2026-09-24T01:00:00Z")
+	if t, err = time.ParseInLocation("2006-01-02", value, s.location()); err == nil {
+		return t, true, nil
+	}
+	return time.Time{}, false, errors.New("want RFC 3339, such as 2026-09-24T01:00:00Z")
 }

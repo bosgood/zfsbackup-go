@@ -451,7 +451,8 @@ func TestRunSkipsOutages(t *testing.T) {
 		t.Fatal(err)
 	}
 	from, to := time.Date(2026, 10, 2, 1, 0, 0, 0, time.UTC), time.Date(2026, 10, 20, 1, 0, 0, 0, time.UTC)
-	sc.Skips = []TimeRange{{From: from, Until: to}}
+	// Until is exclusive; through the run at `to` is what parseSkip makes of a timed end.
+	sc.Skips = []TimeRange{{From: from, Until: to.Add(time.Nanosecond)}}
 	steps := sc.Run().Steps
 	for _, st := range steps {
 		if !st.At.Before(from) && !st.At.After(to) {

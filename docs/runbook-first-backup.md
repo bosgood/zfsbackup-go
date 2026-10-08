@@ -88,7 +88,8 @@ captured pool). A cron at the same minute as sanoid runs before the monthly
 exists and sends it a day later, a week later with a weekly job
 (`monthly-only-midnight-cron`); schedule the job an hour or more after the
 boundary. `skip=<from>..<until>` (repeatable) leaves an outage in the
-simulation (step 5 below).
+simulation (step 5 below): a bare date covers that whole day, a time means
+that instant, and the keys of `--schedule` may come in any order.
 
 Expect one `FULL ... no-previous-full` on the first run, then an `INCR` on each
 1st of the month (`from` the previous monthly), `NOOP ... nothing-newer` on
