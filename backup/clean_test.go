@@ -327,3 +327,83 @@ func TestCleanHonoursSendLockAcrossTMPDIR(t *testing.T) {
 		t.Fatalf("a planted lock file in TMPDIR kept the orphan, stat error - %v", serr)
 	}
 }
+
+// cachePartialManifest writes j's manifest to the local cache only, as a send
+// does after each volume, and returns its path.
+func cachePartialManifest(t *testing.T, jobInfo, j *files.JobInfo) string {
+	t.Helper()
+	cache, err := getCacheDir(jobInfo, jobInfo.Destinations[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	mv, err := files.CreateManifestVolume(context.Background(), j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.NewEncoder(mv).Encode(j); err != nil {
+		t.Fatal(err)
+	}
+	if err = mv.Close(); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(cache, cachedManifestName(mv.ObjectName))
+	if err = mv.CopyTo(state); err != nil {
+		t.Fatal(err)
+	}
+	if err = mv.DeleteVolume(); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+// A send of tank/data@b is running (lock held) and has cached its in-progress
+// manifest, the state --resume needs. clean --cleanLocal must leave it, and the
+// volumes it lists, until the lock is free.
+func TestCleanLocalSparesRunningSendState(t *testing.T) {
+	targetDir, jobInfo := setupCleanTest(t)
+	live := &files.JobInfo{VolumeName: "tank/data", BaseSnapshot: files.SnapshotInfo{Name: "a"},
+		ManifestPrefix: "manifests", Separator: "|", Compressor: files.InternalCompressor}
+	live.Volumes = []*files.VolumeInfo{{ObjectName: live.BackupVolumeObjectName(1), VolumeNumber: 1}}
+	writeTestManifest(t, targetDir, live)
+	writeTestObject(t, targetDir, live.BackupVolumeObjectName(1))
+
+	running := &files.JobInfo{VolumeName: "tank/data", BaseSnapshot: files.SnapshotInfo{Name: "b"},
+		ManifestPrefix: "manifests", Separator: "|", Compressor: files.InternalCompressor}
+	running.Volumes = []*files.VolumeInfo{{ObjectName: running.BackupVolumeObjectName(1), VolumeNumber: 1}}
+	inFlight := writeTestObject(t, targetDir, running.BackupVolumeObjectName(1))
+	state := cachePartialManifest(t, jobInfo, running)
+
+	// Another live process (our parent) holds the send lock.
+	_, lockPath, err := volumeLock("tank/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = ioutil.WriteFile(lockPath, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(lockPath)
+
+	if err = Clean(context.Background(), jobInfo, true, false); err != nil {
+		t.Fatalf("clean --cleanLocal: %v", err)
+	}
+	if _, serr := os.Stat(state); serr != nil {
+		t.Fatalf("clean --cleanLocal deleted the cached manifest of a running send (lock held): %v", serr)
+	}
+	if _, serr := os.Stat(inFlight); serr != nil {
+		t.Fatalf("clean --cleanLocal deleted a volume of a running send (lock held): %v", serr)
+	}
+
+	// Once the send is done, the partial is local-only state to reclaim.
+	if err = os.Remove(lockPath); err != nil {
+		t.Fatal(err)
+	}
+	if err = Clean(context.Background(), jobInfo, true, false); err != nil {
+		t.Fatalf("clean --cleanLocal after the send: %v", err)
+	}
+	if _, serr := os.Stat(state); !os.IsNotExist(serr) {
+		t.Errorf("clean --cleanLocal left the abandoned partial manifest, stat error - %v", serr)
+	}
+	if _, serr := os.Stat(inFlight); !os.IsNotExist(serr) {
+		t.Errorf("clean --cleanLocal left the abandoned partial's volume, stat error - %v", serr)
+	}
+}
