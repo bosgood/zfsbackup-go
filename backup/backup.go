@@ -257,10 +257,22 @@ func getBackupsForTarget(ctx context.Context, volume, target string, jobInfo *fi
 		}
 	}
 
-	sort.SliceStable(decodedManifests, func(i, j int) bool {
-		return decodedManifests[i].BaseSnapshot.CreationTime.After(decodedManifests[j].BaseSnapshot.CreationTime)
-	})
+	sortBackupsNewestFirst(decodedManifests)
 	return decodedManifests, nil
+}
+
+// sortBackupsNewestFirst orders backups by base snapshot, newest first. Of the backups of
+// one snapshot, the full comes first: it was sent after the incremental (an incremental
+// to a snapshot already backed up is never planned), so every reader sees the same
+// newest backup whatever order the destination lists objects in.
+func sortBackupsNewestFirst(manifests []*files.JobInfo) {
+	sort.SliceStable(manifests, func(i, j int) bool {
+		a, b := manifests[i].BaseSnapshot.CreationTime, manifests[j].BaseSnapshot.CreationTime
+		if !a.Equal(b) {
+			return a.After(b)
+		}
+		return manifests[i].IncrementalSnapshot.Name == "" && manifests[j].IncrementalSnapshot.Name != ""
+	})
 }
 
 // reportDryRun validates the selected snapshots exist and logs what a real

@@ -273,7 +273,7 @@ func (s *Scenario) ReadManifests(r io.Reader) error {
 		return err
 	}
 	for _, dest := range dests {
-		sortManifestsNewestFirst(dest)
+		sortBackupsNewestFirst(dest)
 	}
 	s.DestBackups = dests
 	return nil
@@ -335,13 +335,6 @@ func (s *Scenario) resolveSnapshot(fields []string) (files.SnapshotInfo, error) 
 		return snap, nil
 	}
 	return files.SnapshotInfo{}, fmt.Errorf("no creation time for %s: it is not in the snapshot list, so add its epoch", name)
-}
-
-// sortManifestsNewestFirst orders manifests the way getBackupsForTarget does.
-func sortManifestsNewestFirst(manifests []*files.JobInfo) {
-	sort.SliceStable(manifests, func(i, j int) bool {
-		return manifests[i].BaseSnapshot.CreationTime.After(manifests[j].BaseSnapshot.CreationTime)
-	})
 }
 
 func (s *Scenario) location() *time.Location {

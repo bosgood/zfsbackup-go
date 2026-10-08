@@ -158,6 +158,25 @@ tank/data@snap-a
 	}
 }
 
+// TestReadManifestsFullFirstOnTie: backups of the same snapshot list the full
+// first whatever order the file gives them, as getBackupsForTarget does.
+func TestReadManifestsFullFirstOnTie(t *testing.T) {
+	s := &Scenario{Volume: "tank/data"}
+	in := "autosnap_2026-09-01_00:00:00_monthly to autosnap_2026-10-01_00:00:00_monthly\n" +
+		"autosnap_2026-10-01_00:00:00_monthly\n" +
+		"autosnap_2026-09-01_00:00:00_monthly\n"
+	if err := s.ReadManifests(strings.NewReader(in)); err != nil {
+		t.Fatal(err)
+	}
+	got := s.DestBackups[0]
+	if len(got) != 3 || got[0].IncrementalSnapshot.Name != "" || got[1].IncrementalSnapshot.Name == "" || got[2].BaseSnapshot.Name != "autosnap_2026-09-01_00:00:00_monthly" {
+		for _, m := range got {
+			t.Logf("%s", describeBackup(m.BaseSnapshot, m.IncrementalSnapshot))
+		}
+		t.Errorf("want FULL Oct, INCR Sep->Oct, FULL Sep")
+	}
+}
+
 func TestParseSmartFlags(t *testing.T) {
 	j, err := ParseSmartFlags(strings.NewReader("--increment\n--snapshotPrefix autosnap_ # comment\n"))
 	if err != nil || !j.Incremental || j.SnapshotPrefix != "autosnap_" || j.FullIfOlderThan != -1*time.Minute {
