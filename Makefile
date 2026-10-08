@@ -60,6 +60,14 @@ devcontainer-claude: devcontainer-up
 devcontainer-shell: devcontainer-up
 	devcontainer exec --workspace-folder . bash
 
+# Run the working tree's firewall script twice in a throwaway container (the
+# second run starts from DROP policies, which is what a re-run in a live
+# container sees). Both runs must succeed. Needs the devcontainer image.
+devcontainer-firewall-check:
+	docker run --rm --user root --cap-add NET_ADMIN --cap-add NET_RAW \
+		-v "$(CURDIR)/.devcontainer/init-firewall.sh":/usr/local/bin/init-firewall.sh:ro \
+		zfsbackup-devcontainer bash -c '/usr/local/bin/init-firewall.sh && echo "--- second run ---" && /usr/local/bin/init-firewall.sh'
+
 # Run a single test against the supported toolchain without rebuilding the
 # image, e.g. `make test-one RUN=TestSelectSmartSnapshots PKG=./backup/`.
 GO_IMAGE=golang:$(GO_VERSION)-bookworm
