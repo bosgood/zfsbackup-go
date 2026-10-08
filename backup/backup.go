@@ -326,8 +326,6 @@ func reportDryRun(ctx context.Context, jobInfo *files.JobInfo) error {
 	return nil
 }
 
-// Backup will initiate a backup with the provided configuration.
-// nolint:funlen,gocyclo // Difficult to break this up
 // pendingVolumes counts the volumes still in the pipeline. zero is closed when the count first
 // reaches 0. Unlike a sync.WaitGroup it can be waited on in a select, so nothing stays parked
 // on it when the pipeline fails and the count never gets there.
@@ -389,6 +387,8 @@ func (d destination) String() string {
 	return backends.RedactURI(d.uri)
 }
 
+// Backup will initiate a backup with the provided configuration.
+// nolint:funlen,gocyclo // Difficult to break this up
 func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	ctx, cancel := context.WithCancel(pctx)
 	defer cancel()

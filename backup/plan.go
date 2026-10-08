@@ -610,7 +610,6 @@ func (sim *Simulation) formatTime(t time.Time) string {
 	return t.In(sim.Scenario.location()).Format(time.RFC3339)
 }
 
-// hasFullOf reports whether backups include a full backup of snapshot.
 // partialSet returns the newest backup set at some destinations when every other destination
 // has exactly the backups that precede it there, i.e. lacks just that set. Otherwise nil.
 func partialSet(destBackups [][]*files.JobInfo) *files.JobInfo {
@@ -660,6 +659,7 @@ func sameSets(a, b []*files.JobInfo) bool {
 	return true
 }
 
+// hasFullOf reports whether backups include a full backup of snapshot.
 func hasFullOf(backups []*files.JobInfo, snapshot *files.SnapshotInfo) bool {
 	for _, b := range backups {
 		if b.IncrementalSnapshot.Name == "" && b.BaseSnapshot.Equal(snapshot) {

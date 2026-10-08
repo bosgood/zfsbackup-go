@@ -487,7 +487,7 @@ func receiveStream(ctx context.Context, cmd *exec.Cmd, j *files.JobInfo, c <-cha
 		if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
 			err = cmd.Process.Kill()
 			if err != nil {
-				log.AppLogger.Errorf("Could not kill zfs send command due to error - %v", err)
+				log.AppLogger.Errorf("Could not kill zfs receive command due to error - %v", err)
 				return
 			}
 			err = cmd.Process.Release()
