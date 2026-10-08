@@ -1,0 +1,9 @@
+# The daily schedule of monthly-only-year. only:_monthly reports the 360-odd
+# hourly incrementals directly; coverage:_monthly reports the monthlies that
+# never became a base, which it would miss if the cron ran at the boundary and
+# saw the monthly before the hourly.
+policy=hourly=36,daily=30,monthly=3
+from=2026-09-24T01:00:00Z
+until=2027-10-01T01:00:00Z
+every=24h
+checks=coverage:_monthly,only:_monthly

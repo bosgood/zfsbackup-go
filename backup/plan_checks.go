@@ -52,12 +52,17 @@ var defaultChecks = []struct {
 	{"restore-depth", (*Simulation).checkRestoreDepth},
 }
 
-// coverageCheck prefixes the opt-in check coverage:<suffix>.
-const coverageCheck = "coverage:"
+// The opt-in checks coverage:<suffix> and only:<suffix>.
+const (
+	coverageCheck = "coverage:"
+	onlyCheck     = "only:"
+)
 
 func knownCheck(name string) bool {
-	if strings.HasPrefix(name, coverageCheck) {
-		return len(name) > len(coverageCheck)
+	for _, prefix := range []string{coverageCheck, onlyCheck} {
+		if strings.HasPrefix(name, prefix) {
+			return len(name) > len(prefix)
+		}
 	}
 	for _, c := range defaultChecks {
 		if c.name == name {
@@ -68,7 +73,7 @@ func knownCheck(name string) bool {
 }
 
 // Check runs the default checks and then the opt-in checks named in checks
-// (coverage:<suffix>). Naming a default check changes nothing.
+// (coverage:<suffix>, only:<suffix>). Naming a default check changes nothing.
 func (sim *Simulation) Check(checks []string) []Violation {
 	var found []Violation
 	for _, c := range defaultChecks {
@@ -77,6 +82,9 @@ func (sim *Simulation) Check(checks []string) []Violation {
 	for _, name := range checks {
 		if suffix := strings.TrimPrefix(name, coverageCheck); suffix != name {
 			found = append(found, sim.checkCoverage(name, suffix)...)
+		}
+		if suffix := strings.TrimPrefix(name, onlyCheck); suffix != name {
+			found = append(found, sim.checkOnly(name, suffix)...)
 		}
 	}
 	return found
@@ -342,6 +350,36 @@ func (sim *Simulation) checkCoverage(name, suffix string) []Violation {
 				})
 			}
 		}
+	}
+	return found
+}
+
+// checkOnly: every backup a run sends is of a snapshot ending in suffix, so a
+// job meant to send one period only (monthly-only) sends nothing else, which
+// a forgotten --incrementalSnapshotSuffix would. Consecutive offending runs
+// are one violation.
+func (sim *Simulation) checkOnly(name, suffix string) []Violation {
+	offends := func(st Step) bool {
+		return st.Err == nil && st.Plan.Action != PlanNoop && !strings.HasSuffix(st.Plan.Base.Name, suffix)
+	}
+	var found []Violation
+	for i := 0; i < len(sim.Steps); {
+		st := sim.Steps[i]
+		j := i + 1
+		if !offends(st) {
+			i = j
+			continue
+		}
+		for j < len(sim.Steps) && offends(sim.Steps[j]) {
+			j++
+		}
+		detail := describeBackup(st.Plan.Base, st.Plan.Source) + " is not of a snapshot ending in " + suffix
+		if j-i > 1 {
+			detail = fmt.Sprintf("%d backups of snapshots not ending in %s, %s through %s",
+				j-i, suffix, describeBackup(st.Plan.Base, st.Plan.Source), sim.formatTime(sim.Steps[j-1].At))
+		}
+		found = append(found, Violation{Check: name, At: st.At, Detail: detail})
+		i = j
 	}
 	return found
 }

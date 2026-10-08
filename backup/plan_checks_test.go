@@ -222,6 +222,22 @@ func TestChecks(t *testing.T) {
 			sim:    simulate(scenario(), full(1, 0), incr(31, 30, 0), full(32, 30)),
 			detail: "autosnap_day30_monthly is the base of 2 backups",
 		},
+		{
+			name:  "only: every backup is of a monthly",
+			check: "only:_monthly",
+			extra: []string{"only:_monthly"},
+			sim:   simulate(scenario(), chain(2)...),
+		},
+		{
+			name:  "only: consecutive backups of other snapshots are one violation",
+			check: "only:_monthly",
+			extra: []string{"only:_monthly"},
+			sim: simulate(scenario(), full(0, 0),
+				Step{At: day(1), Snapshots: pool(0), Plan: Plan{Action: PlanIncremental, Base: snap("autosnap_day1_hourly", day(1)), Source: monthly(0)}},
+				Step{At: day(2), Snapshots: pool(0), Plan: Plan{Action: PlanIncremental, Base: snap("autosnap_day2_hourly", day(2)), Source: snap("autosnap_day1_hourly", day(1))}},
+				incr(30, 30, 0)),
+			detail: "2 backups of snapshots not ending in _monthly, INCR autosnap_day1_hourly from autosnap_day0_monthly through 2026-09-03T00:00:00Z",
+		},
 	}
 
 	for _, tc := range testCases {

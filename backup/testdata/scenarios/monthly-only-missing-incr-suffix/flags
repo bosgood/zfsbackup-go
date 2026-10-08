@@ -1,0 +1,4 @@
+# The production flags with --incrementalSnapshotSuffix forgotten: fulls still
+# anchor on the monthly, but every run sends an incremental to the newest
+# snapshot of any period, i.e. an hourly a day.
+--fullIfOlderThan=4320h --fullSnapshotSuffix=_monthly
