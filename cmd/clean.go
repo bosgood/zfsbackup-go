@@ -21,9 +21,13 @@
 package cmd
 
 import (
+	"strings"
+
 	"github.com/spf13/cobra"
 
+	"github.com/someone1/zfsbackup-go/backends"
 	"github.com/someone1/zfsbackup-go/backup"
+	"github.com/someone1/zfsbackup-go/log"
 )
 
 var cleanLocal bool
@@ -55,6 +59,10 @@ func init() {
 func validateCleanFlags(cmd *cobra.Command, args []string) error {
 	if len(args) != 1 {
 		_ = cmd.Usage()
+		return errInvalidInput
+	}
+	if strings.Contains(args[0], ",") {
+		log.AppLogger.Errorf("clean takes one destination, got %s.", backends.RedactURI(args[0]))
 		return errInvalidInput
 	}
 
