@@ -25,7 +25,14 @@ every object whose name starts with `prefix` to `prefix/` and rerun.
 
 `4320h` is 180 days (Go durations have no `d` unit). Once it has elapsed since
 the last full, the next full is taken of the first monthly newer than the last
-backup, so fulls land every 181-184 days, always on the 1st.
+backup, so fulls land every 181-184 days, on the 1st of March and September
+year after year (`monthly-only-3-years` runs through the 2028 leap year). Keep
+the window at 180 days: one over 181 days lets some gaps stretch to seven
+months (183 days moves the fulls to April and October, then May), which the
+`full-cadence` check tolerates. The one exception to "always on the 1st" is
+sanoid's very first monthly, taken when sanoid was installed
+(`autosnap_2026-06-16_00:18:47_monthly` on the captured pool); it is a
+candidate like any other and is pruned like any other.
 
 Run every command with the working directory the cron job will use
 (`--workingDirectory`, default `~/.zfsbackup`). `plan` and `send` then share
@@ -44,7 +51,16 @@ Note the counts of the template the dataset uses. Sanoid's defaults are
 `hourly=48, daily=90, monthly=6`. On `ypool` on 2026-09-24 the pool showed
 49 hourlies, 30 dailies and 6 monthlies, which matches `hourly=48,daily=30,monthly=6`:
 sanoid keeps a snapshot until it is older than count x period, so count+1 are
-often visible.
+often visible. `monthly` must be at least 2: with `monthly=2` the chain holds
+as long as no run is missed, `monthly=3` survives two missed months, and
+`monthly=1` never chains (every monthly goes out as a `source-pruned` full;
+`monthly-only-weekly-2-monthlies`, `monthly-only-monthly-1-unusable`).
+
+Also grep the template for `hour`, `min`, `mday`, `wday` and `autoprune`. The
+simulation below assumes sanoid's defaults: snapshots at the top of the hour,
+of the day, on Monday and on the 1st, a few minutes after the boundary, and
+`autoprune = yes`. A template that moves them makes the simulated runs land at
+the wrong time of day.
 
 Sanoid names snapshots in the host's local time. If the host is not on UTC,
 pass `location=<zone>` (e.g. `location=America/New_York`) in `--schedule` below.
@@ -57,9 +73,17 @@ from the snapshot names, read in that zone.
 
 ```bash
 zfsbackup plan $FLAGS --snapshots snaps.txt \
-  --schedule "policy=hourly=48,daily=30,monthly=6,until=$(date -d '+400 days' +%F),every=24h,checks=coverage:_monthly,location=America/New_York" \
+  --schedule "policy=hourly=48,daily=30,monthly=6,snapshot-delay=3m,from=$(date -d 'tomorrow 01:00' +%FT%T),until=$(date -d '+400 days' +%F),every=24h,checks=coverage:_monthly,only:_monthly,location=America/New_York" \
   $DS
 ```
+
+`from=` is the wall-clock time the cron job will run at, and `snapshot-delay`
+is how long after the boundary sanoid lands its snapshots (00:02-00:03 on the
+captured pool). A cron at the same minute as sanoid runs before the monthly
+exists and sends it a day later, a week later with a weekly job
+(`monthly-only-midnight-cron`); schedule the job an hour or more after the
+boundary. `skip=<from>..<until>` (repeatable) leaves an outage in the
+simulation (step 5 below).
 
 Expect one `FULL ... no-previous-full` on the first run, then an `INCR` on each
 1st of the month (`from` the previous monthly), `NOOP ... nothing-newer` on
@@ -79,6 +103,7 @@ The checks:
 | `full-cadence` | fulls are not one window apart (± one month and one run), or a full is overdue |
 | `restore-depth` | restoring the newest backup takes more incrementals than fit in a window |
 | `coverage:_monthly` | a monthly is backed up zero times (from the first run on) or more than once |
+| `only:_monthly` | a backup is sent of a snapshot not ending in `_monthly`: a forgotten `--incrementalSnapshotSuffix` sends an hourly a day (`monthly-only-missing-incr-suffix`) |
 
 `source-pruned` in the output means sanoid pruned the last backup's snapshot
 before the next run could send from it. The retention is too short for the run
@@ -98,7 +123,12 @@ zfsbackup plan $FLAGS $DS $URI
 
 This lists the live snapshots and reads the manifests already at the
 destination (read-only). If the manifests are encrypted or signed, pass the
-same PGP flags as `send`. Expect:
+same PGP flags as `send`. Reading a manifest that an S3 lifecycle rule moved to
+the `GLACIER` storage class first restores it (billable, and `plan` or `send`
+waits hours for it); one in `DEEP_ARCHIVE` or `GLACIER_IR` cannot be read at
+all. The local cache hides this on the backup host, where manifests are read
+once, and it surfaces on another host or at restore time. Lifecycle rules must
+leave `manifests|*` objects alone, or the whole prefix. Expect:
 
 ```
 next  FULL  autosnap_<newest monthly>_monthly  no-previous-full
@@ -144,7 +174,11 @@ must match step 3.
 zfsbackup send $FLAGS $DS $URI
 ```
 
-A full backup can take hours. If it is interrupted, rerun it with `--resume`
+A full backup can take hours. Schedule the job an hour or more after sanoid's
+boundary (step 2). If a full outlives the interval, the next run finds the lock
+held and exits non-zero after logging `Another send of $DS is running (pid N
+holds ...)`; it uploads nothing, and that is the one non-zero status that is
+not a failure. If the full is interrupted, rerun it with `--resume`
 and the same flags. A failed upload or a failed `zfs send` makes `send` exit
 non-zero and release its lock; it never uploads a manifest for a partial set.
 `--resume` continues from the local cache, but first checks that every volume
@@ -180,8 +214,32 @@ The chain tolerates missed runs for about two months. Once the last backed-up
 monthly is pruned (the third 1st after it was taken, plus a day or two), the
 next run cannot send an incremental and instead sends a full of the newest
 monthly, then continues from that; nothing stalls, but the full costs one
-extra upload. `monthly-only-gap-2-months` and `monthly-only-gap-3-months`
-show both sides of that line.
+extra upload and the next fulls fall one window after it, not on the old
+March/September rhythm. `monthly-only-gap-2-months` and
+`monthly-only-gap-3-months` show both sides of that line,
+`monthly-only-year-2-month-outage` a two-month outage inside a year (December
+is skipped, not lost: its data is inside January's incremental, which
+`coverage:_monthly` reports), and `monthly-only-gap-3-months-then-year` the
+year after a recovery full.
+
+To start a new chain by hand, run `zfsbackup send --full --fullSnapshotSuffix
+_monthly $DS $URI`: it sends a full of the newest monthly even if that monthly
+is already backed up as an incremental (`plan` shows `FULL ... explicit-full`,
+`explicit-full-restart`), and the next monthly chains from it. From then on
+`coverage:_monthly` reports that monthly as the base of two backups in any
+simulation that starts from this destination. Changing the flags of a live
+chain works the same way: the first monthly after the switch chains from the
+last backup, whatever its period (`switch-daily-to-monthly-only`; the
+inherited chain trips `restore-depth` once, until the next full).
+
+At each six-month mark, project the next year from the destination as it is:
+
+```bash
+zfsbackup plan $FLAGS --schedule "policy=hourly=48,daily=30,monthly=6,snapshot-delay=3m,from=<next run>,until=$(date -d '+400 days' +%F),every=24h,checks=coverage:_monthly,only:_monthly,location=America/New_York" $DS $URI
+```
+
+It reads the live snapshots and the real manifests, so the first simulated run
+is the next cron run (a `NOOP` on most days), and it must end in `checks: OK`.
 
 The next day, `zfsbackup send -n $FLAGS $DS $URI` must report `Nothing new to
 back up.` and exit 0. On the 1st of the next month it must plan an incremental
@@ -198,8 +256,9 @@ is checked against the real pool's names from now on:
 mkdir backup/testdata/scenarios/prod-<dataset>
 cp snaps.txt backup/testdata/scenarios/prod-<dataset>/snapshots.txt
 printf '%s\n' $FLAGS > backup/testdata/scenarios/prod-<dataset>/flags
-printf '%s\n' "policy=hourly=48,daily=30,monthly=6" "until=<first run + 1 year>" \
-  "every=24h" "checks=coverage:_monthly" "location=America/New_York" \
+printf '%s\n' "policy=hourly=48,daily=30,monthly=6" "snapshot-delay=3m" \
+  "from=<first run>" "until=<first run + 1 year>" "every=24h" \
+  "checks=coverage:_monthly,only:_monthly" "location=America/New_York" \
   > backup/testdata/scenarios/prod-<dataset>/schedule
 make scenarios-update   # writes expected.txt; review it like step 2
 make scenarios

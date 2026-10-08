@@ -146,3 +146,35 @@ violations, and both are expected.
   appear only in next-run fixtures).
 - Interaction with `clean` or prune: no scenario deletes manifests or volumes
   at the destination.
+
+## 7. Added 2026-10-08 (plan audit)
+
+From `docs/specs/2026-10-08--plan-audit/audit.md`. The schedule spec gained
+`snapshot-delay=` (sanoid lands snapshots after the boundary) and
+`skip=<from>..<until>` (an outage), the checks gained `only:<suffix>`, and
+`plan` now plans `complete-partial` the way `send` does.
+
+| Scenario | Situation | Expected decision |
+|---|---|---|
+| `monthly-only-3-years` | Daily cron for three years across the 2028 leap year, every sanoid period scheduled (`yearly=2,...,hourly=36`). | Fulls on March 1st and September 1st every year; the tie-order test permutes all five periods. |
+| `monthly-only-no-hourlies` | A pool with monthlies only (`policy=monthly=6`), two years. | Same fulls; the window age is measured monthly-to-monthly. |
+| `monthly-only-weekly-2-monthlies` | Weekly cron, `monthly=2`. | One upload per monthly, fulls on 2027-03-07 and 2027-09-05, `checks: OK`: the retention floor that still chains. |
+| `monthly-only-monthly-1-unusable` | Weekly cron, `monthly=1`. `expect-violations`. | A `source-pruned` FULL every month; `full-cadence` flags each one. |
+| `switch-daily-to-monthly-only` | A daily chain (September full + 22 daily incrementals) switched to monthly-only flags. `expect-violations`. | `INCR Oct from the Sep-23 daily`, then monthly-only; `restore-depth` flags the inherited 23-deep chain once. First scenario with `manifests.txt` and a `schedule`. |
+| `monthly-only-gap-3-months-then-year` | The weekly cron resumes after the gap-3 outage and runs a year. `expect-violations`. | `FULL Jan (source-pruned)`, incrementals, fulls on 2027-07-04 and 2028-01-02: the cadence restarts from the recovery full. |
+| `monthly-only-midnight-cron` | Daily cron at 00:00 with `snapshot-delay=3m`. | The monthly goes out on the 2nd, not the 1st. |
+| `monthly-only-year-2-month-outage` | Daily cron, `skip=2026-11-03T01:00:00Z..2027-01-05T01:00:00Z`. `expect-violations`. | `INCR Jan from Nov` on the first run back; December is never a base (`coverage:_monthly`); the March full comes on time. |
+| `monthly-only-missing-incr-suffix` | `--incrementalSnapshotSuffix` forgotten; `checks=coverage:_monthly,only:_monthly`. `expect-violations`. | 373 hourly incrementals; `only:_monthly` reports three stretches, `coverage:_monthly` 11 monthlies never backed up. |
+| `explicit-full-restart` | `--full` of the newest monthly, backed up so far only as an incremental's target. | `FULL ... explicit-full`, `checks: OK` (no longer a `no-duplicate-send`); replayed through `send`. |
+
+New e2e tests: `TestE2EPlanCompletesPartialLikeSend` (plan == send for a set
+missing at one destination), `TestE2EPlanFromDestinationWithSchedule` (`plan
+$DS $URI --schedule`), `TestE2ESendRefusesWhileAnotherSendRuns` (a held lock
+names the running send and uploads nothing). Fixed on the way: the
+"full backup is due" error printed a zone-dependent time (now the snapshot
+name), and backups of the same snapshot had no defined order (a full now
+sorts before an incremental of it).
+
+Of the gaps listed above, "retention of `monthly=2` or lower" and "interaction
+with `clean`" remain as stated for `clean`; bookmarks in schedule simulations
+and a full roll-over while a destination is behind are still open.
