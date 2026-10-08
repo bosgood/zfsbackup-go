@@ -223,8 +223,8 @@ func planSmartSnapshots(
 	// wrong. Fail loudly rather than extending the incremental chain forever.
 	if ageExceeded && fullBase == nil {
 		return Plan{}, fmt.Errorf(
-			"full backup is due (last full %v is older than %v) but no snapshots found matching the full backup criteria",
-			lastFull.CreationTime, jobInfo.FullIfOlderThan,
+			"full backup is due (last full %s is older than %v) but no snapshots found matching the full backup criteria",
+			lastFull.Name, jobInfo.FullIfOlderThan,
 		)
 	}
 	behind := lastBackup[0]
