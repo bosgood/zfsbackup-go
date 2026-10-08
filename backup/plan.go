@@ -355,7 +355,7 @@ func (s *Scenario) run(at time.Time, snapshots []files.SnapshotInfo, dest [][]*f
 		FullSnapshotSuffix:        s.JobInfo.FullSnapshotSuffix,
 		IncrementalSnapshotSuffix: s.JobInfo.IncrementalSnapshotSuffix,
 	}
-	plan, err := planSmartSnapshots(&jobInfo, snapshots, dest, false)
+	plan, err := planSmartSnapshots(&jobInfo, snapshots, dest, s.Completable)
 	if err == nil && plan.Action != PlanNoop {
 		for i := range dest {
 			dest[i] = addManifest(dest[i], manifestFor(s.Volume, plan))

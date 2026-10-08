@@ -159,9 +159,8 @@ func runPlan(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	case len(args) == 2:
-		var destinations []string
-		destinations, jobInfo.DestinationsAsTyped = parseDestinations(args[1])
-		for _, destination := range destinations {
+		jobInfo.Destinations, jobInfo.DestinationsAsTyped = parseDestinations(args[1])
+		for _, destination := range jobInfo.Destinations {
 			manifests, err := backup.BackupsAtTarget(cmd.Context(), sc.Volume, destination, &jobInfo)
 			if err != nil {
 				log.AppLogger.Errorf("Could not read the backups at %s - %v", destination, err)
@@ -169,6 +168,14 @@ func runPlan(cmd *cobra.Command, args []string) error {
 			}
 			sc.DestBackups = append(sc.DestBackups, manifests)
 		}
+		// A set whose manifest is missing at some destinations is completed there, as
+		// send would, when its volumes are there.
+		completable, err := backup.PartialSetCompletable(cmd.Context(), &jobInfo, sc.DestBackups)
+		if err != nil {
+			log.AppLogger.Errorf("Could not check the destinations for a partial backup set - %v", err)
+			return err
+		}
+		sc.Completable = completable
 	default:
 		sc.DestBackups = [][]*files.JobInfo{{}}
 	}

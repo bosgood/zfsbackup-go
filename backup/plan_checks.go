@@ -157,7 +157,8 @@ func (sim *Simulation) checkSourcePresent() []Violation {
 
 // checkNoDuplicateSend: a snapshot already backed up at a destination (as a
 // full or as an incremental's target) is never sent there again: the data is
-// there, and the same backup would even write the same objects.
+// there, and the same backup would even write the same objects. Completing a
+// partial set sends nothing, so it is not judged.
 func (sim *Simulation) checkNoDuplicateSend() []Violation {
 	backedUp := make([]map[string]string, len(sim.Initial)) // per destination: base => how and when it was sent
 	for d, dest := range sim.Initial {
@@ -168,7 +169,7 @@ func (sim *Simulation) checkNoDuplicateSend() []Violation {
 	}
 	var found []Violation
 	for _, st := range sim.Steps {
-		if st.Err != nil || st.Plan.Action == PlanNoop {
+		if st.Err != nil || st.Plan.Action == PlanNoop || st.Plan.Reason == reasonCompletePartial {
 			continue
 		}
 		m := manifestFor("", st.Plan)

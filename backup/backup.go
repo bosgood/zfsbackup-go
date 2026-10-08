@@ -84,13 +84,26 @@ func ProcessSmartOptions(ctx context.Context, jobInfo *files.JobInfo) error {
 		destBackups[idx] = b
 	}
 
-	completable := jobInfo.Resume
-	if partial := partialSet(destBackups); partial != nil && !completable {
-		if completable, err = partialVolumesPresent(ctx, jobInfo, partial, destBackups); err != nil {
-			return err
-		}
+	completable, err := PartialSetCompletable(ctx, jobInfo, destBackups)
+	if err != nil {
+		return err
 	}
 	return selectSmartSnapshots(jobInfo, snapshots, destBackups, completable)
+}
+
+// PartialSetCompletable reports whether the smart plan may complete a backup set that is
+// missing at some destinations: with --resume, or when those destinations hold objects
+// named like each of its volumes (the trace of a failed manifest upload). send and plan
+// both ask, so they plan the same run.
+func PartialSetCompletable(ctx context.Context, jobInfo *files.JobInfo, destBackups [][]*files.JobInfo) (bool, error) {
+	if jobInfo.Resume {
+		return true, nil
+	}
+	partial := partialSet(destBackups)
+	if partial == nil {
+		return false, nil
+	}
+	return partialVolumesPresent(ctx, jobInfo, partial, destBackups)
 }
 
 // partialVolumesPresent reports whether every destination that lacks the backup set partial has

@@ -48,6 +48,9 @@ type Scenario struct {
 	JobInfo     files.JobInfo        // only the smart options are read
 	Snapshots   []files.SnapshotInfo // newest-first, as zfs list -S creation returns them
 	DestBackups [][]*files.JobInfo   // per destination, newest-first
+	// Completable says a set missing at some destinations may be completed
+	// there (see PartialSetCompletable); plan sets it from the destinations.
+	Completable bool
 	// Location is the zone of sanoid name timestamps and of rendered times.
 	// nil means UTC.
 	Location *time.Location

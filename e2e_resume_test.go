@@ -405,6 +405,33 @@ func smartCompletesPartial(t *testing.T, volumesThere bool) {
 	env.checkRestores(t, "file://"+dest2, "a", 3<<20)
 }
 
+// TestE2EPlanCompletesPartialLikeSend: plan shows the complete-partial run that a smart
+// send would do for a set whose manifest is missing at one destination.
+func TestE2EPlanCompletesPartialLikeSend(t *testing.T) {
+	env := newE2EEnv(t)
+	dest2 := newDest(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(3<<20))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	blocker := filepath.Join(dest2, "manifests|tank")
+	if err := ioutil.WriteFile(blocker, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	dests := "file://" + env.dest + ",file://" + dest2
+	common := []string{"--volsize", "1", "--maxRetryTime", "2s", "--maxBackoffTime", "1s"}
+	if logs, err := guarded(t, func() (string, error) { return env.send(append(common, "tank/data@a", dests)...) }); err == nil {
+		t.Fatalf("send succeeded although the manifest upload to dest2 failed:\n%s", logs)
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+
+	out, logs, err := env.plan("--fullIfOlderThan", "720h", "tank/data", dests)
+	want := "next  FULL  a  complete-partial\nchecks: OK\n"
+	if err != nil || out != want {
+		t.Errorf("plan returned %v and printed:\n%s\nwant:\n%s\nlogs:\n%s", err, out, want, logs)
+	}
+}
+
 // A stream that ends exactly where a volume is cut must not get an empty volume after it.
 func TestE2EStreamOnVolumeBoundaryHasNoEmptyVolume(t *testing.T) {
 	for _, tc := range []struct {
