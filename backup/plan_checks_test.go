@@ -283,3 +283,26 @@ func TestWriteTextViolations(t *testing.T) {
 		t.Errorf("got:\n%s\nwant:\n%s", buf.String(), want)
 	}
 }
+
+// A monthly taken and pruned while the host was down was never seen by any
+// run; coverage must still report that it was never backed up.
+func TestCoverageNamesMonthlyPrunedDuringOutage(t *testing.T) {
+	sc := skipScenario(t, "policy=hourly=36,daily=30,monthly=3,from=2026-09-24T01:00:00Z,until=2027-04-02T01:00:00Z,"+
+		"skip=2026-11-03T01:00:00Z..2027-03-05T01:00:00Z,checks=coverage:_monthly")
+	sim := sc.Run()
+	var never []string
+	for _, v := range sim.Check(sc.Checks) {
+		if v.Check == "coverage:_monthly" && strings.Contains(v.Detail, "is never backed up") {
+			never = append(never, v.Detail)
+		}
+	}
+	joined := strings.Join(never, "\n")
+	for _, month := range []string{"2026-12-01", "2027-01-01", "2027-02-01"} {
+		if !strings.Contains(joined, "autosnap_"+month+"_00:00:00_monthly") {
+			t.Errorf("coverage does not name the %s monthly, which no run ever sent; got:\n%s", month, joined)
+		}
+	}
+	if len(never) != 3 {
+		t.Errorf("got %d never-backed-up violations, want 3:\n%s", len(never), joined)
+	}
+}

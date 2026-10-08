@@ -308,18 +308,25 @@ func (sim *Simulation) checkRestoreDepth() []Violation {
 }
 
 // checkCoverage: every snapshot ending in suffix is backed up exactly once;
-// in a simulation over time that includes those created from the first run
-// on. Only snapshots some run saw count.
+// in a simulation over time that includes every one the schedule took from
+// the first run on, whether or not a run saw it (one taken and pruned during
+// an outage was never sent either).
 func (sim *Simulation) checkCoverage(name, suffix string) []Violation {
 	seen := make(map[string]bool)
 	var candidates []files.SnapshotInfo
-	for _, st := range sim.Steps {
+	consider := func(s files.SnapshotInfo) {
+		id := snapshotID(s)
+		if !s.Bookmark && strings.HasSuffix(s.Name, suffix) && !seen[id] {
+			seen[id] = true
+			candidates = append(candidates, s)
+		}
+	}
+	for _, s := range sim.Created {
+		consider(s)
+	}
+	for _, st := range sim.Steps { // a Simulation built by hand may have no Created
 		for _, s := range st.Snapshots {
-			id := snapshotID(s)
-			if !s.Bookmark && strings.HasSuffix(s.Name, suffix) && !seen[id] {
-				seen[id] = true
-				candidates = append(candidates, s)
-			}
+			consider(s)
 		}
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {

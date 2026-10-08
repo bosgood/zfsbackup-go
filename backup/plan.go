@@ -285,6 +285,19 @@ type Simulation struct {
 	// run and after the last one, newest-first per destination.
 	Initial   [][]*files.JobInfo
 	Manifests [][]*files.JobInfo
+	// Created is every snapshot the pool held or the schedule took, oldest
+	// first, including those taken and pruned while no run happened.
+	Created []files.SnapshotInfo
+}
+
+// record adds the snapshots not recorded yet to sim.Created.
+func (sim *Simulation) record(snapshots []files.SnapshotInfo, known map[string]bool) {
+	for i := len(snapshots) - 1; i >= 0; i-- { // newest-first in, oldest-first out
+		if id := snapshotID(snapshots[i]); !known[id] {
+			known[id] = true
+			sim.Created = append(sim.Created, snapshots[i])
+		}
+	}
 }
 
 // Run simulates the scenario. Without Until it plans a single run against the
@@ -296,6 +309,8 @@ type Simulation struct {
 func (s *Scenario) Run() *Simulation {
 	sim := &Simulation{Scenario: s, Initial: cloneDestinations(s.DestBackups)}
 	snapshots := s.Snapshots
+	known := make(map[string]bool)
+	sim.record(snapshots, known)
 	dest := cloneDestinations(s.DestBackups)
 	if s.Until.IsZero() {
 		sim.Steps = append(sim.Steps, s.run(time.Time{}, snapshots, dest))
@@ -311,6 +326,7 @@ func (s *Scenario) Run() *Simulation {
 	for at := s.firstRun(); !at.After(s.Until); at = s.nextRun(at) {
 		if s.Schedule != nil {
 			snapshots = s.Schedule.Advance(snapshots, taken, at)
+			sim.record(snapshots, known)
 			if at.After(taken) {
 				taken = at
 			}
