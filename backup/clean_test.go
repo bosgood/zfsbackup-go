@@ -22,6 +22,7 @@ package backup
 
 import (
 	"context"
+	"crypto/md5" // nolint:gosec // names the old lock file, not for security
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -302,52 +303,27 @@ func TestCleanHonoursSendLockAcrossTMPDIR(t *testing.T) {
 	defer os.Remove(lockPath)
 
 	t.Setenv("TMPDIR", t.TempDir()) // clean runs with another
+	// Where builds before dc37d16 kept the lock; any local user can plant it, naming a live pid
+	// (our parent here: pid 1 is invisible to a non-root signal 0, so it would look dead).
+	planted := filepath.Join(os.TempDir(), fmt.Sprintf("zfsbackup.%x.lck", md5.Sum([]byte("tank/data"))))
+	if err = ioutil.WriteFile(planted, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if cerr := Clean(context.Background(), jobInfo, false, false); cerr != nil {
 		t.Fatalf("Clean returned error - %v", cerr)
 	}
 	if _, serr := os.Stat(inFlight); serr != nil {
 		t.Fatalf("clean with another TMPDIR deleted a volume of a running send - %v", serr)
 	}
-}
 
-// TestCleanHonoursLegacySendLock: a send of the previous version, still running, holds its lock in
-// os.TempDir(). clean must leave that dataset alone too.
-func TestCleanHonoursLegacySendLock(t *testing.T) {
-	targetDir, jobInfo := setupCleanTest(t)
-	t.Setenv("TMPDIR", t.TempDir())
-
-	set := &files.JobInfo{
-		VolumeName:     "tank/data",
-		BaseSnapshot:   files.SnapshotInfo{Name: "a"},
-		ManifestPrefix: "manifests",
-		Separator:      "|",
-		Compressor:     files.InternalCompressor,
-	}
-	live := set.BackupVolumeObjectName(1)
-	set.Volumes = []*files.VolumeInfo{{ObjectName: live, VolumeNumber: 1}}
-	writeTestManifest(t, targetDir, set)
-	writeTestObject(t, targetDir, live)
-	inFlight := writeTestObject(t, targetDir, set.BackupVolumeObjectName(2))
-
-	legacy := legacyVolumeLockPath("tank/data")
-	if err := ioutil.WriteFile(legacy, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if cerr := Clean(context.Background(), jobInfo, false, false); cerr != nil {
-		t.Fatalf("Clean returned error - %v", cerr)
-	}
-	if _, serr := os.Stat(inFlight); serr != nil {
-		t.Fatalf("clean deleted a volume of a send holding the legacy lock - %v", serr)
-	}
-
-	// A legacy lock of a dead process is stale: the orphan goes.
-	if err := ioutil.WriteFile(legacy, []byte("999999999\n"), 0600); err != nil {
+	// The send is done; the file in /tmp means nothing, so the orphan goes.
+	if err = os.Remove(lockPath); err != nil {
 		t.Fatal(err)
 	}
 	if cerr := Clean(context.Background(), jobInfo, false, false); cerr != nil {
 		t.Fatalf("Clean returned error - %v", cerr)
 	}
 	if _, serr := os.Stat(inFlight); !os.IsNotExist(serr) {
-		t.Fatalf("a stale legacy lock kept the orphan, stat error - %v", serr)
+		t.Fatalf("a planted lock file in TMPDIR kept the orphan, stat error - %v", serr)
 	}
 }

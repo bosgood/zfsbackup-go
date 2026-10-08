@@ -184,7 +184,10 @@ A full backup can take hours. Schedule the job an hour or more after sanoid's
 boundary (step 2). If a full outlives the interval, the next run finds the lock
 held and exits non-zero after logging `Another send of $DS is running (pid N
 holds ...)`; it uploads nothing, and that is the one non-zero status that is
-not a failure. If the full is interrupted, rerun it with `--resume`
+not a failure. The lock is a file under `--workingDirectory/locks/`, so `send`
+and `clean` see each other only with the same working directory; nothing in
+`/tmp` is read, and a file planted there changes nothing. If the full is
+interrupted, rerun it with `--resume`
 and the same flags. A failed upload or a failed `zfs send` makes `send` exit
 non-zero and release its lock; it never uploads a manifest for a partial set.
 `--resume` continues from the local cache, but first checks that every volume

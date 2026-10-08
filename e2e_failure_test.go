@@ -633,3 +633,42 @@ func TestSendRecordsStreamBytes(t *testing.T) {
 		t.Errorf("manifest records ZFSStreamBytes=%d, want %d", got, streamBytes)
 	}
 }
+
+// TestE2ESendIgnoresTmpLockFile: builds before dc37d16 locked a dataset in os.TempDir(), where
+// any local user can plant a file naming a live pid, and a stale one survives a reboot. send reads
+// nothing in /tmp any more: both runs go through, with the file in place throughout. The pid is
+// our parent, the test runner: a live process of this user, which the old probe could see (a
+// signal 0 to pid 1 is EPERM for a non-root test, so pid 1 looked dead to it).
+func TestE2ESendIgnoresTmpLockFile(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("TMPDIR", t.TempDir())
+	// nolint:gosec // MD5 names the old lock file, not for security
+	planted := filepath.Join(os.TempDir(), fmt.Sprintf("zfsbackup.%x.lck", md5.Sum([]byte("tank/data"))))
+	holder := fmt.Sprintf("%d\n", os.Getppid())
+	if err := ioutil.WriteFile(planted, []byte(holder), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+		{Name: "b", CreationTime: time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)},
+		{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+	})
+
+	// An explicit full, then a smart incremental a->b: both take the send lock.
+	runs := [][]string{
+		{"tank/data@a", "file://" + env.dest},
+		{"--fullIfOlderThan", "720h", "tank/data", "file://" + env.dest},
+	}
+	for i, args := range runs {
+		logs, err := guarded(t, func() (string, error) { return env.send(args...) })
+		if err != nil {
+			t.Errorf("send %d with a planted %s: %v\n%s", i+1, planted, err, logs)
+		}
+	}
+	if names := manifestNames(destObjects(t, env.dest)); len(names) != 2 {
+		t.Errorf("want 2 manifests at the destination, got %q", names)
+	}
+	if content, err := ioutil.ReadFile(planted); err != nil || string(content) != holder {
+		t.Errorf("send touched the planted file: %q, %v", content, err)
+	}
+}

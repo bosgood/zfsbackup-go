@@ -236,17 +236,6 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 			busy[dataset] = true
 			continue
 		}
-		if p, held := legacyLockHolder(dataset); held {
-			if uerr := lock.Unlock(); uerr != nil {
-				log.AppLogger.Warningf("Could not release lock %s: %v", lockPath, uerr)
-			}
-			log.AppLogger.Noticef(
-				"A send of %s by an older version appears to be running (pid %d holds %s); leaving its volumes alone. Run clean again when it is done.",
-				dataset, p.Pid, legacyVolumeLockPath(dataset),
-			)
-			busy[dataset] = true
-			continue
-		}
 		defer func() {
 			if uerr := lock.Unlock(); uerr != nil {
 				log.AppLogger.Warningf("Could not release lock %s: %v", lockPath, uerr)
