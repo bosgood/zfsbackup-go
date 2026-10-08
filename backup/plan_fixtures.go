@@ -348,6 +348,7 @@ func (s *Scenario) location() *time.Location {
 // separated by commas or newlines ('#' comments allowed):
 //
 //	policy=hourly=36,daily=30,monthly=3  sanoid retention (see ParseSchedule); hourly=36 alone works too
+//	snapshot-delay=3m                    how long after a boundary sanoid takes its snapshots; default 0
 //	from=2026-09-24T01:00:00Z            first run; default: the newest snapshot + 1h
 //	until=2027-10-01T01:00:00Z           last run
 //	every=24h                            time between runs; default 24h
@@ -360,6 +361,7 @@ func (s *Scenario) location() *time.Location {
 func (s *Scenario) ParseScheduleSpec(spec string) error {
 	var policy []string
 	var from, until string
+	var delay time.Duration
 	listKey := ""
 	for _, line := range strings.Split(spec, "\n") {
 		for _, item := range strings.Split(zfs.StripComment(line), ",") {
@@ -379,6 +381,12 @@ func (s *Scenario) ParseScheduleSpec(spec string) error {
 			switch key {
 			case "policy":
 				policy = append(policy, value)
+			case "snapshot-delay":
+				d, err := time.ParseDuration(value)
+				if err != nil || d < 0 {
+					return fmt.Errorf("invalid snapshot-delay=%s: want a duration such as 3m", value)
+				}
+				delay = d
 			case "checks":
 				s.Checks = append(s.Checks, value)
 			case "from":
@@ -418,7 +426,10 @@ func (s *Scenario) ParseScheduleSpec(spec string) error {
 		if err != nil {
 			return err
 		}
+		schedule.Delay = delay
 		s.Schedule = schedule
+	} else if delay != 0 {
+		return errors.New("snapshot-delay needs a policy")
 	}
 	var err error
 	if s.From, err = s.parseTime(from); err != nil {

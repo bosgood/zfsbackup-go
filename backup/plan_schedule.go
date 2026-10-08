@@ -67,6 +67,11 @@ type Period struct {
 type Schedule struct {
 	Periods  []Period       // longest first
 	Location *time.Location // zone of the period boundaries and snapshot names; nil means UTC
+	// Delay is how long after a boundary sanoid takes the snapshot: its cron
+	// minute plus the time zfs takes, 2-4 minutes on the captured pool. The
+	// creation time and the name carry it, so a run at the boundary itself
+	// does not see the snapshot yet.
+	Delay time.Duration
 
 	// Snapshots taken at the same boundary (the 1st of a month at midnight
 	// brings a monthly, a daily and an hourly) are listed newest-first in
@@ -153,7 +158,7 @@ func (s *Schedule) Advance(snaps []files.SnapshotInfo, from, to time.Time) []fil
 	pool := append([]files.SnapshotInfo(nil), snaps...)
 	for _, b := range boundaries {
 		for i, name := range b.periods {
-			creation := b.at.Add(time.Duration(len(b.periods)-1-i) * s.tieGap)
+			creation := b.at.Add(s.Delay + time.Duration(len(b.periods)-1-i)*s.tieGap)
 			pool = append(pool, files.SnapshotInfo{
 				Name:         fmt.Sprintf("autosnap_%s_%s", creation.In(s.location()).Format(zfs.SanoidTimeLayout), name),
 				CreationTime: creation,

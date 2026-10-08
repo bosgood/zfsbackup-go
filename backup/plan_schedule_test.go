@@ -193,6 +193,21 @@ func TestScheduleAdvance(t *testing.T) {
 		}
 	})
 
+	t.Run("a delay moves every snapshot and its name past the boundary", func(t *testing.T) {
+		s := mustSchedule(t, "hourly=36,monthly=3")
+		s.Delay = 3 * time.Minute
+		oct1 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+		got := s.Advance(nil, oct1.Add(-time.Hour), oct1)
+		if len(got) != 2 {
+			t.Fatalf("got %v, want the monthly and the hourly", snapshotNames(got))
+		}
+		for _, snap := range got {
+			if !snap.CreationTime.Equal(oct1.Add(3*time.Minute)) || !strings.HasPrefix(snap.Name, "autosnap_2026-10-01_00:03:00_") {
+				t.Errorf("got %s at %v, want a 00:03:00 creation time and name", snap.Name, snap.CreationTime)
+			}
+		}
+	})
+
 	t.Run("the input is not modified", func(t *testing.T) {
 		s := mustSchedule(t, "hourly=1")
 		in := hourlies(t0, 3)

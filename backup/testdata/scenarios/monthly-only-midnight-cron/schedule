@@ -1,0 +1,10 @@
+# A daily cron at midnight, the same minute sanoid starts. Sanoid lands the
+# monthly a few minutes later (00:02-00:03 on the captured pool), so the run on
+# the 1st does not see it and the incremental goes out on the 2nd. Schedule the
+# cron an hour or more after sanoid's boundary to send on the 1st.
+policy=hourly=36,daily=30,monthly=3
+snapshot-delay=3m
+from=2026-09-24T00:00:00Z
+until=2026-12-03T00:00:00Z
+every=24h
+checks=coverage:_monthly

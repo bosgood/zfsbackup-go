@@ -91,8 +91,8 @@ func init() {
 		"schedule",
 		"",
 		"project runs over time, e.g. \"policy=hourly=36,daily=30,monthly=3,until=2027-10-01T00:00:00Z,every=24h\". Also "+
-			"from= (default: an hour after the newest snapshot), checks=coverage:_monthly, and location= for sanoid names in a "+
-			"time zone other than UTC.",
+			"from= (default: an hour after the newest snapshot), snapshot-delay= (how long after a boundary sanoid takes its "+
+			"snapshots, e.g. 3m), checks=coverage:_monthly, and location= for sanoid names in a time zone other than UTC.",
 	)
 }
 

@@ -182,6 +182,7 @@ policy=hourly=36,daily=30   # sanoid retention
 monthly=3
 from=2026-09-24T01:00:00Z, until=2027-10-01
 every=12h
+snapshot-delay=3m
 volume=pool/app
 location=UTC
 `
@@ -197,18 +198,23 @@ location=UTC
 	if s.Every != 12*time.Hour || s.Volume != "pool/app" {
 		t.Errorf("got every %v, volume %q", s.Every, s.Volume)
 	}
+	if s.Schedule.Delay != 3*time.Minute {
+		t.Errorf("got snapshot delay %v, want 3m", s.Schedule.Delay)
+	}
 
 	for _, bad := range []string{
-		"policy=hourly=36",                       // simulating needs until
-		"until=2027-01-01,from=2027-02-01",       // until before from
-		"until=2027-01-01,every=0s",              // every must be positive
-		"until=2027-01-01,frequency=2",           // unknown setting
-		"until=2027-01-01,policy=fortnightly=2",  // unknown period
-		"until=next-week",                        // bad time
-		"until=2027-01-01,location=Mars/Olympus", // unknown zone
-		"until=2027-01-01,oops",                  // not key=value
-		"checks=chain-link",                      // unknown check
-		"checks=coverage:",                       // coverage needs a suffix
+		"policy=hourly=36",                                     // simulating needs until
+		"until=2027-01-01,from=2027-02-01",                     // until before from
+		"until=2027-01-01,every=0s",                            // every must be positive
+		"until=2027-01-01,frequency=2",                         // unknown setting
+		"until=2027-01-01,policy=fortnightly=2",                // unknown period
+		"until=next-week",                                      // bad time
+		"until=2027-01-01,location=Mars/Olympus",               // unknown zone
+		"until=2027-01-01,oops",                                // not key=value
+		"checks=chain-link",                                    // unknown check
+		"checks=coverage:",                                     // coverage needs a suffix
+		"until=2027-01-01,policy=hourly=36,snapshot-delay=-1m", // delay cannot be negative
+		"until=2027-01-01,snapshot-delay=3m",                   // delay without a policy
 	} {
 		if err := (&Scenario{}).ParseScheduleSpec(bad); err == nil {
 			t.Errorf("ParseScheduleSpec(%q) succeeded, want an error", bad)
