@@ -29,6 +29,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -277,9 +278,12 @@ func (a *AWSS3Backend) Delete(ctx context.Context, key string) error {
 	return err
 }
 
-// PreDownload will restore objects from Glacier as required.
+// PreDownload restores objects in the GLACIER and DEEP_ARCHIVE storage classes, which a GET
+// cannot read until a restore has run (GLACIER_IR and the other classes read directly), and
+// waits for the restores to finish. AWS_S3_GLACIER_RESTORE_TIER picks the restore tier
+// (default Bulk); AWS_S3_RESTORE_POLL_INTERVAL sets how often a pending restore is polled
+// (a duration, default 1m; the interval grows up to ten times that).
 func (a *AWSS3Backend) PreDownload(ctx context.Context, keys []string) error {
-	// First Let's check if any objects are on the GLACIER storage class
 	toRestore := make([]string, 0, len(keys))
 	restoreTier := os.Getenv("AWS_S3_GLACIER_RESTORE_TIER")
 	if restoreTier == "" {
@@ -296,59 +300,106 @@ func (a *AWSS3Backend) PreDownload(ctx context.Context, keys []string) error {
 		if err != nil {
 			return err
 		}
-		if resp.StorageClass != nil && *resp.StorageClass == s3.ObjectStorageClassGlacier {
-			log.AppLogger.Debugf("s3 backend: key %s will be restored from the Glacier storage class.", key)
-			bytesToRestore += *resp.ContentLength
-			// Let's Start a restore
-			toRestore = append(toRestore, key)
-			_, rerr := a.client.RestoreObjectWithContext(ctx, &s3.RestoreObjectInput{
-				Bucket: aws.String(a.bucketName),
-				Key:    aws.String(key),
-				RestoreRequest: &s3.RestoreRequest{
-					Days: aws.Int64(3),
-					GlacierJobParameters: &s3.GlacierJobParameters{
-						Tier: aws.String(restoreTier),
-					},
+		if !needsRestore(resp.StorageClass) {
+			continue
+		}
+		if restoreDone(resp.Restore) {
+			log.AppLogger.Debugf("s3 backend: key %s is in the %s storage class and already restored.", key, *resp.StorageClass)
+			continue
+		}
+		bytesToRestore += aws.Int64Value(resp.ContentLength)
+		toRestore = append(toRestore, key)
+		if restoreInProgress(resp.Restore) {
+			log.AppLogger.Debugf("s3 backend: key %s is already being restored from the %s storage class.", key, *resp.StorageClass)
+			continue
+		}
+		log.AppLogger.Debugf("s3 backend: key %s will be restored from the %s storage class.", key, *resp.StorageClass)
+		_, rerr := a.client.RestoreObjectWithContext(ctx, &s3.RestoreObjectInput{
+			Bucket: aws.String(a.bucketName),
+			Key:    aws.String(key),
+			RestoreRequest: &s3.RestoreRequest{
+				Days: aws.Int64(3),
+				GlacierJobParameters: &s3.GlacierJobParameters{
+					Tier: aws.String(restoreTier),
 				},
-			})
-			if rerr != nil {
-				if aerr, ok := rerr.(awserr.Error); ok && aerr.Code() != "RestoreAlreadyInProgress" {
-					log.AppLogger.Debugf("s3 backend: error trying to restore key %s - %s: %s", key, aerr.Code(), aerr.Message())
-					return rerr
-				}
+			},
+		})
+		if rerr != nil {
+			if aerr, ok := rerr.(awserr.Error); ok && aerr.Code() != "RestoreAlreadyInProgress" {
+				log.AppLogger.Debugf("s3 backend: error trying to restore key %s - %s: %s", key, aerr.Code(), aerr.Message())
+				return rerr
 			}
 		}
 	}
-	if len(toRestore) > 0 {
-		log.AppLogger.Infof(
-			"s3 backend: waiting for %d objects to restore from Glacier totaling %d bytes (this could take several hours)",
-			len(toRestore), bytesToRestore,
-		)
-		// Now wait for the objects to be restored
-		backoffCount := 1
-		for idx := 0; idx < len(toRestore); idx++ {
-			key := toRestore[idx]
-			resp, err := a.client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
-				Bucket: aws.String(a.bucketName),
-				Key:    aws.String(key),
-			})
-			if err != nil {
-				return err
-			}
-			if *resp.Restore == "ongoing-request=\"true\"" {
-				time.Sleep(time.Duration(backoffCount) * time.Minute)
-				idx--
-				backoffCount++
-				if backoffCount > 10 {
-					backoffCount = 10
-				}
-			} else {
-				backoffCount = 1
-				log.AppLogger.Debugf("s3 backend: key %s restored.", key)
-			}
+	if len(toRestore) == 0 {
+		return nil
+	}
+	log.AppLogger.Infof(
+		"s3 backend: waiting for %d objects to restore from an archive storage class totaling %d bytes (this could take several hours)",
+		len(toRestore), bytesToRestore,
+	)
+	// Now wait for the objects to be restored
+	poll := restorePollInterval()
+	backoffCount := 1
+	for idx := 0; idx < len(toRestore); idx++ {
+		key := toRestore[idx]
+		resp, err := a.client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
+			Bucket: aws.String(a.bucketName),
+			Key:    aws.String(key),
+		})
+		if err != nil {
+			return err
+		}
+		if restoreDone(resp.Restore) {
+			backoffCount = 1
+			log.AppLogger.Debugf("s3 backend: key %s restored.", key)
+			continue
+		}
+		// Still ongoing, or no x-amz-restore header yet (the request was only just accepted).
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(backoffCount) * poll):
+		}
+		idx--
+		if backoffCount < 10 {
+			backoffCount++
 		}
 	}
 	return nil
+}
+
+// needsRestore reports whether an object of the given storage class must be restored before a
+// GET can read it.
+func needsRestore(storageClass *string) bool {
+	switch aws.StringValue(storageClass) {
+	case s3.ObjectStorageClassGlacier, s3.ObjectStorageClassDeepArchive:
+		return true
+	}
+	return false
+}
+
+// restoreInProgress reads the x-amz-restore header of a HEAD response: a restore has been
+// requested and is not done.
+func restoreInProgress(restore *string) bool {
+	return restore != nil && strings.Contains(*restore, `ongoing-request="true"`)
+}
+
+// restoreDone reads the x-amz-restore header of a HEAD response: a restored copy is present.
+// No header at all (nil) means no restore was requested, or the request is too new to show.
+func restoreDone(restore *string) bool {
+	return restore != nil && !restoreInProgress(restore)
+}
+
+// restorePollInterval is how long PreDownload waits between polls of a pending restore.
+func restorePollInterval() time.Duration {
+	if v := os.Getenv("AWS_S3_RESTORE_POLL_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+		log.AppLogger.Warningf("s3 backend: ignoring AWS_S3_RESTORE_POLL_INTERVAL=%q: want a duration such as 30s.", v)
+	}
+	return time.Minute
 }
 
 // Download will download the requseted object which can be read from the returned io.ReadCloser

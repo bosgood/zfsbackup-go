@@ -44,8 +44,11 @@ import (
 	"github.com/someone1/zfsbackup-go/log"
 )
 
-// fakeS3 is just enough of a path-style S3 endpoint for `clean`: ListObjectsV2,
-// HEAD/GET of an object, and DELETE (recorded, so tests can assert nothing was deleted).
+// fakeS3 is just enough of a path-style S3 endpoint for `clean`, `send` and `receive`:
+// ListObjectsV2, HEAD/GET/PUT of an object, DELETE (recorded, so tests can assert nothing
+// was deleted), and archive storage classes: an object in storageClass GLACIER or
+// DEEP_ARCHIVE answers GET with InvalidObjectState until a restore (POST ?restore) was
+// seen for it, after which HEAD reports the restore done.
 type fakeS3 struct {
 	bucket string
 
@@ -54,6 +57,20 @@ type fakeS3 struct {
 	listed   []string
 	deleted  []string
 	requests []string
+
+	storageClass map[string]string // key -> x-amz-storage-class, when not STANDARD
+	restores     []string          // keys a restore was requested for, in order
+	restored     map[string]bool
+	// headsWithoutRestoreHeader is how many HEADs of a restored object omit
+	// x-amz-restore before it appears (S3 is eventually consistent here).
+	headsWithoutRestoreHeader int
+	headsSeen                 map[string]int
+}
+
+// cold returns whether key is in an archive storage class that has not been restored.
+func (f *fakeS3) cold(key string) bool {
+	class := f.storageClass[key]
+	return (class == "GLACIER" || class == "DEEP_ARCHIVE") && !f.restored[key]
 }
 
 func newFakeS3(t *testing.T, objects map[string][]byte) *fakeS3 {
@@ -79,12 +96,46 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimPrefix(r.URL.Path, "/"+f.bucket+"/")
 	data, ok := f.objects[key]
 	switch {
+	case r.Method == http.MethodPut:
+		body, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		f.objects[key] = body
+		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodDelete:
 		f.deleted = append(f.deleted, key)
 		w.WriteHeader(http.StatusNoContent)
 	case !ok:
 		w.WriteHeader(http.StatusNotFound)
+	case r.Method == http.MethodPost && r.URL.Query().Has("restore"):
+		f.restores = append(f.restores, key)
+		if f.restored == nil {
+			f.restored = make(map[string]bool)
+		}
+		f.restored[key] = true
+		w.WriteHeader(http.StatusAccepted)
 	default:
+		if class := f.storageClass[key]; class != "" {
+			w.Header().Set("x-amz-storage-class", class)
+		}
+		if f.restored[key] {
+			if f.headsSeen == nil {
+				f.headsSeen = make(map[string]int)
+			}
+			f.headsSeen[key]++
+			if f.headsSeen[key] > f.headsWithoutRestoreHeader {
+				w.Header().Set("x-amz-restore", `ongoing-request="false", expiry-date="Fri, 21 Dec 2029 00:00:00 GMT"`)
+			}
+		}
+		if r.Method == http.MethodGet && f.cold(key) {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>InvalidObjectState</Code>` +
+				`<Message>The operation is not valid for the object's storage class</Message></Error>`))
+			return
+		}
 		w.Header().Set("Content-Length", fmt.Sprint(len(data)))
 		if r.Method == http.MethodGet {
 			_, _ = w.Write(data)

@@ -129,12 +129,15 @@ zfsbackup plan $FLAGS $DS $URI
 
 This lists the live snapshots and reads the manifests already at the
 destination (read-only). If the manifests are encrypted or signed, pass the
-same PGP flags as `send`. Reading a manifest that an S3 lifecycle rule moved to
-the `GLACIER` storage class first restores it (billable, and `plan` or `send`
-waits hours for it); one in `DEEP_ARCHIVE` or `GLACIER_IR` cannot be read at
-all. The local cache hides this on the backup host, where manifests are read
-once, and it surfaces on another host or at restore time. Lifecycle rules must
-leave `manifests|*` objects alone, or the whole prefix. Expect:
+same PGP flags as `send`. An object that an S3 lifecycle rule moved to the
+`GLACIER` or `DEEP_ARCHIVE` storage class is restored before it is read
+(billable, and `plan`, `send` or `receive` waits hours for it, polling every
+`AWS_S3_RESTORE_POLL_INTERVAL`, default a minute); `GLACIER_IR` reads directly.
+This applies to manifests and, at restore time or when a `send` completes a
+set at a destination that lacks its manifest, to volumes. The local cache
+hides it on the backup host, where manifests are read once, and it surfaces on
+another host or at restore time. Lifecycle rules must leave `manifests|*`
+objects alone, or the whole prefix. Expect:
 
 ```
 next  FULL  autosnap_<newest monthly>_monthly  no-previous-full

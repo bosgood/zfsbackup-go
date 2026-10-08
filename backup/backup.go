@@ -874,6 +874,16 @@ func verifyVolumesAt(ctx context.Context, jobInfo, manifest *files.JobInfo, d, f
 			return err
 		}
 	}
+	// Volumes a lifecycle rule moved to an archive storage class cannot be read until they are
+	// restored; the backend does that here (and nothing for the other backends), as receive does.
+	names := make([]string, 0, len(manifest.Volumes))
+	for _, vol := range manifest.Volumes {
+		names = append(names, vol.ObjectName)
+	}
+	if err = d.backend.PreDownload(ctx, names); err != nil {
+		log.AppLogger.Errorf("Could not prepare the volumes of %s at %s for reading due to error - %v", name, d, err)
+		return err
+	}
 	sizer, _ := d.backend.(backends.Sizer)
 	for _, vol := range manifest.Volumes {
 		var size uint64
@@ -886,7 +896,11 @@ func verifyVolumesAt(ctx context.Context, jobInfo, manifest *files.JobInfo, d, f
 		}
 		if size == vol.Size || sizer == nil {
 			if size, sum, err = hashObject(ctx, d.backend, vol.ObjectName); err != nil {
-				log.AppLogger.Errorf("Could not read %s at %s due to error - %v", vol.ObjectName, d, err)
+				log.AppLogger.Errorf(
+					"Could not read %s at %s due to error - %v. If these volumes are in an archive storage class, "+
+						"restore them first or complete the set by hand.",
+					vol.ObjectName, d, err,
+				)
 				return err
 			}
 		}

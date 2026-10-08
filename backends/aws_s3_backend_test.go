@@ -572,6 +572,7 @@ func TestS3PreDownload(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode")
 	}
+	t.Setenv("AWS_S3_RESTORE_POLL_INTERVAL", "10ms")
 
 	testCases := []struct {
 		conf    *BackendConfig
