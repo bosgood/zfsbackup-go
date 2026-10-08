@@ -451,3 +451,43 @@ subagent per task works for them.
 - `make fmt-check`, `make test-docker` green.
 - `docs/runbook-first-backup.md` reflects Tasks 2, 3, 5, 8, 12.
 - Memory note `adversarial-review-2026-10-08` updated with what landed.
+
+## Implementation notes (2026-10-08)
+
+Executed the same day, 16 commits `1119fb1..0b50855` on `clean-dry-run`. Tasks 1-4 ran as
+subagents in worktrees and were cherry-picked (one conflict, in `tryResume`, between Tasks 3
+and 4). Every ported test was run and seen failing on the unfixed code first, except the
+`plan --resume` test, which could not compile without the flag. `make scenarios` changed no
+golden (Tasks 9 and 10), `make fmt-check` and `make test-docker` are green. Deviations:
+
+- Task 1: the "latest snapshot" default still takes the newest base's name and resolves it
+  through the same `fullOrAny` lookup, rather than a second call; same result.
+- Task 2: the planted lock names `os.Getppid()`, not pid 1. As a normal user, signal 0 to
+  pid 1 is EPERM, which `nightlyone/lockfile` reads as "not running", so a pid-1 plant made
+  the unfixed code pass on the host (the reviewer tests only failed as root in Docker). The
+  second send is a real incremental (two snapshots); a smart no-op never reaches the lock.
+- Task 3: `partialManifestCachePath` reuses `cachedManifestName`; "No previous manifest
+  file exists, nothing to resume; starting over." moved from Info to Notice so that it shows
+  at the default level (and so the test could see it: Info is filtered once `processFlags`
+  has run).
+- Task 4: verifying signatures in `readManifest` turned `TestE2EResumeRefusesRotatedKey`
+  into a start-over (the cache signed by the old key became "unreadable"). The four
+  key/signature messages are a typed `files.KeyError`, and `tryResume` refuses on it
+  ("option mismatch: the interrupted attempt's manifest ...") while a corrupt cache still
+  starts over. `TestVerifyEndRejectsOtherSigner` has two subtests: signer in the ring
+  ("signed by A, want B") and signer not in the ring. The PGP code is `pgp/`, not `files/pgp.go`.
+- Task 6: `url.URL.Redacted` keeps the username (`ssh://u:xxxxx@h/x`), so the existing
+  `TestRedactURI` cases that expected the user dropped were updated. The blunt fallback also
+  applies when the URI parses but holds more than one `@`.
+- Task 8: the poll interval is `AWS_S3_RESTORE_POLL_INTERVAL` (default 1m; tests use 10ms),
+  since the wait loop slept a fixed minute. "Restored" means the `x-amz-restore` header is
+  present and not `ongoing-request="true"` (the existing mock returns an empty header for
+  done). The three tests are in `e2e_s3_test.go`; the fake S3 in `clean_s3_test.go` gained
+  storage classes, `?restore` and PUT.
+- Task 9: `TestRunSkipsOutages` built its range by hand; it now sets the exclusive `Until`.
+- Task 11: `devcontainer-firewall-check` mounts the working tree's script over the image's
+  copy and runs as root, so it needs no rebuild and no sudo. On this host the resolver seen in
+  the container is Docker Desktop's `0.250.250.200`.
+- Task 12: `TestE2EPlanResumePreviewsCompletion` removes a manifest and a volume at the
+  second destination: plain `plan` then does not offer `complete-partial`, `plan --resume`
+  does. `dev.nix` got the comment and a TODO; the hash is still unpinned (no nix here).
