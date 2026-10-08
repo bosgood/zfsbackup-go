@@ -63,7 +63,9 @@ of the day, on Monday and on the 1st, a few minutes after the boundary, and
 the wrong time of day.
 
 Sanoid names snapshots in the host's local time. If the host is not on UTC,
-pass `location=<zone>` (e.g. `location=America/New_York`) in `--schedule` below.
+pass `location=<zone>` in `--schedule` below; the copy-paste commands in this
+runbook write `location=<your zone>`, and the examples and committed scenarios
+assume `America/New_York`.
 Otherwise the simulated sanoid snapshots are taken, and the run times rendered,
 at UTC wall-clock times. For a capture without creation times, such as
 `zfs list` output converted to JSON (see `testdata/zfs`), the times also come
@@ -78,7 +80,7 @@ will do, use the capture command of step 1, which records `creation`.
 
 ```bash
 zfsbackup plan $FLAGS --snapshots snaps.txt \
-  --schedule "policy=hourly=48,daily=30,monthly=6,snapshot-delay=3m,from=$(date -d 'tomorrow 01:00' +%FT%T),until=$(date -d '+400 days' +%F),every=24h,checks=coverage:_monthly,only:_monthly,location=America/New_York" \
+  --schedule "policy=hourly=48,daily=30,monthly=6,snapshot-delay=3m,from=$(date -d 'tomorrow 01:00' +%FT%T),until=$(date -d '+400 days' +%F),every=24h,checks=coverage:_monthly,only:_monthly,location=<your zone>" \
   $DS
 ```
 
@@ -213,7 +215,11 @@ What `send` refuses to do:
   `--full` of a monthly that is already backed up as a full is a no-op
   (`Nothing new to back up.`, exit 0);
 - skip volumes on `--resume` that it cannot see at every destination;
-- resume against a `zfs send` stream shorter than the cached manifest records.
+- resume against a `zfs send` stream shorter than the cached manifest records;
+- restart a chain with `--full` while a backup set is at some destinations but
+  not others: that fails with `destinations are out of sync`. Complete the set
+  first with `--resume` (or a plain smart run, when its volumes are all there:
+  `complete-partial`), then send the full. `plan --resume` previews that.
 
 The exit status is 0 both when it uploads a backup and when there is nothing new
 (`Nothing new to back up.`, the normal case on most runs), so any other status
@@ -254,7 +260,7 @@ inherited chain trips `restore-depth` once, until the next full).
 At each six-month mark, project the next year from the destination as it is:
 
 ```bash
-zfsbackup plan $FLAGS --schedule "policy=hourly=48,daily=30,monthly=6,snapshot-delay=3m,from=<next run>,until=$(date -d '+400 days' +%F),every=24h,checks=coverage:_monthly,only:_monthly,location=America/New_York" $DS $URI
+zfsbackup plan $FLAGS --schedule "policy=hourly=48,daily=30,monthly=6,snapshot-delay=3m,from=<next run>,until=$(date -d '+400 days' +%F),every=24h,checks=coverage:_monthly,only:_monthly,location=<your zone>" $DS $URI
 ```
 
 It reads the live snapshots and the real manifests, so the first simulated run
@@ -277,7 +283,7 @@ cp snaps.txt backup/testdata/scenarios/prod-<dataset>/snapshots.txt
 printf '%s\n' $FLAGS > backup/testdata/scenarios/prod-<dataset>/flags
 printf '%s\n' "policy=hourly=48,daily=30,monthly=6" "snapshot-delay=3m" \
   "from=<first run>" "until=<first run + 1 year>" "every=24h" \
-  "checks=coverage:_monthly,only:_monthly" "location=America/New_York" \
+  "checks=coverage:_monthly,only:_monthly" "location=<your zone>" \
   > backup/testdata/scenarios/prod-<dataset>/schedule
 make scenarios-update   # writes expected.txt; review it like step 2
 make scenarios

@@ -48,7 +48,10 @@ FROM toolchain AS devcontainer
 ARG USERNAME=dev
 ARG USER_UID=1000
 ARG USER_GID=1000
-ARG CLAUDE_CODE_VERSION=latest
+# Pinned to the release the development host ran when this was last bumped
+# (`claude --version`); bump it here and rebuild, or override with
+# --build-arg CLAUDE_CODE_VERSION=latest for the newest release.
+ARG CLAUDE_CODE_VERSION=2.1.289
 ARG TZ=UTC
 ENV TZ=${TZ} \
     DEVCONTAINER=true
@@ -112,9 +115,9 @@ ARG GOPLS_VERSION=v0.21.1
 RUN go install "golang.org/x/tools/gopls@${GOPLS_VERSION}" && go clean -cache
 
 # Claude Code via the native installer (no Node.js needed). CLAUDE_CODE_VERSION
-# is `latest`, `stable`, or an explicit x.y.z. Rebuild to pick up a new
-# release; the built-in auto-updater also works because downloads.claude.ai is
-# on the firewall allowlist.
+# is an explicit x.y.z (the ARG above), `latest`, or `stable`. Rebuild to pick
+# up a new release; the built-in auto-updater also works because
+# downloads.claude.ai is on the firewall allowlist.
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_CODE_VERSION}" \
     && claude --version
 

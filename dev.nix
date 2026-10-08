@@ -1,8 +1,7 @@
 # dev.nix — build/install zfsbackup-go from a specific git revision.
 #
-#   nix-build dev.nix                       # build the pinned rev -> ./result/bin/zfsbackup
-#   nix-env -f dev.nix -i                   # install it into your profile
-#   nix-build dev.nix --argstr rev <sha>    # build some other revision
+#   nix-build dev.nix --argstr rev <sha> --argstr hash <sri>   # build a revision -> ./result/bin/zfsbackup
+#   nix-env -f dev.nix -i --argstr rev <sha> --argstr hash <sri>   # install it into your profile
 #   nix-shell dev.nix                       # dev shell with go + the build deps
 #
 # Bumping the revision:
@@ -16,10 +15,14 @@
 {
   pkgs ? import <nixpkgs> { },
 
-  # Git revision to build. Defaults to the fork's clean-dry-run tip.
+  # Git revision to build. There is no usable default: `rev` and `hash` must
+  # both be passed (--argstr rev <sha> --argstr hash <sri>), or pinned here.
+  # TODO: pin `rev` to a release and `hash` to its real value (step 2 below
+  # gets it; nix is not on the development host, so this is still open).
   rev ? "master",
 
-  # Source hash for that revision. Update whenever `rev` changes.
+  # Source hash for that revision. Update whenever `rev` changes; with the
+  # placeholder the build fails on purpose and prints the hash to use.
   hash ? pkgs.lib.fakeHash,
 
   owner ? "bosgood",
