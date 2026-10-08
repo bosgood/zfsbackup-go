@@ -1,0 +1,2 @@
+# This scenario shows a run that fails on purpose: a due full that no snapshot
+# can satisfy is a configuration error, reported as a violation (no-errors).

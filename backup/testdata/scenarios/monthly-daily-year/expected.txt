@@ -155,7 +155,7 @@
 2027-02-25T01:00:00Z  INCR  autosnap_2027-02-25_00:00:00_daily  from autosnap_2027-02-24_00:00:00_daily  newer-candidate
 2027-02-26T01:00:00Z  INCR  autosnap_2027-02-26_00:00:00_daily  from autosnap_2027-02-25_00:00:00_daily  newer-candidate
 2027-02-27T01:00:00Z  INCR  autosnap_2027-02-27_00:00:00_daily  from autosnap_2027-02-26_00:00:00_daily  newer-candidate
-2027-02-28T01:00:00Z  INCR  autosnap_2027-02-28_00:00:00_daily  from autosnap_2027-02-27_00:00:00_daily  newer-candidate
+2027-02-28T01:00:00Z  INCR  autosnap_2027-02-28_00:00:00_daily  from autosnap_2027-02-27_00:00:00_daily  newer-candidate  full-due
 2027-03-01T01:00:00Z  FULL  autosnap_2027-03-01_00:00:00_monthly  window-elapsed
 2027-03-02T01:00:00Z  INCR  autosnap_2027-03-02_00:00:00_daily  from autosnap_2027-03-01_00:00:00_monthly  newer-candidate
 2027-03-03T01:00:00Z  INCR  autosnap_2027-03-03_00:00:00_daily  from autosnap_2027-03-02_00:00:00_daily  newer-candidate
@@ -336,10 +336,10 @@
 2027-08-25T01:00:00Z  INCR  autosnap_2027-08-25_00:00:00_daily  from autosnap_2027-08-24_00:00:00_daily  newer-candidate
 2027-08-26T01:00:00Z  INCR  autosnap_2027-08-26_00:00:00_daily  from autosnap_2027-08-25_00:00:00_daily  newer-candidate
 2027-08-27T01:00:00Z  INCR  autosnap_2027-08-27_00:00:00_daily  from autosnap_2027-08-26_00:00:00_daily  newer-candidate
-2027-08-28T01:00:00Z  INCR  autosnap_2027-08-28_00:00:00_daily  from autosnap_2027-08-27_00:00:00_daily  newer-candidate
-2027-08-29T01:00:00Z  INCR  autosnap_2027-08-29_00:00:00_daily  from autosnap_2027-08-28_00:00:00_daily  newer-candidate
-2027-08-30T01:00:00Z  INCR  autosnap_2027-08-30_00:00:00_daily  from autosnap_2027-08-29_00:00:00_daily  newer-candidate
-2027-08-31T01:00:00Z  INCR  autosnap_2027-08-31_00:00:00_daily  from autosnap_2027-08-30_00:00:00_daily  newer-candidate
+2027-08-28T01:00:00Z  INCR  autosnap_2027-08-28_00:00:00_daily  from autosnap_2027-08-27_00:00:00_daily  newer-candidate  full-due
+2027-08-29T01:00:00Z  INCR  autosnap_2027-08-29_00:00:00_daily  from autosnap_2027-08-28_00:00:00_daily  newer-candidate  full-due
+2027-08-30T01:00:00Z  INCR  autosnap_2027-08-30_00:00:00_daily  from autosnap_2027-08-29_00:00:00_daily  newer-candidate  full-due
+2027-08-31T01:00:00Z  INCR  autosnap_2027-08-31_00:00:00_daily  from autosnap_2027-08-30_00:00:00_daily  newer-candidate  full-due
 2027-09-01T01:00:00Z  FULL  autosnap_2027-09-01_00:00:00_monthly  window-elapsed
 2027-09-02T01:00:00Z  INCR  autosnap_2027-09-02_00:00:00_daily  from autosnap_2027-09-01_00:00:00_monthly  newer-candidate
 2027-09-03T01:00:00Z  INCR  autosnap_2027-09-03_00:00:00_daily  from autosnap_2027-09-02_00:00:00_daily  newer-candidate

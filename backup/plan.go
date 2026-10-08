@@ -542,17 +542,26 @@ func (st Step) describe(n int) string {
 	case st.Plan.Action == PlanFull:
 		return fmt.Sprintf("FULL  %s  %s", st.Plan.Base.Name, st.Plan.Reason)
 	case st.Plan.Action == PlanIncremental:
-		return fmt.Sprintf("INCR  %s  from %s  %s", st.Plan.Base.Name, snapshotRef(st.Plan.Source), st.Plan.Reason)
+		return fmt.Sprintf("INCR  %s  from %s  %s%s", st.Plan.Base.Name, snapshotRef(st.Plan.Source), st.Plan.Reason, st.fullDue())
 	default:
-		return fmt.Sprintf("NOOP%s  %s", count, st.Plan.Reason)
+		return fmt.Sprintf("NOOP%s  %s%s", count, st.Plan.Reason, st.fullDue())
 	}
+}
+
+// fullDue marks a plan whose full is due but waits for a newer full candidate.
+func (st Step) fullDue() string {
+	if st.Plan.FullDue {
+		return "  full-due"
+	}
+	return ""
 }
 
 func sameOutcome(a, b Step) bool {
 	if a.Err != nil || b.Err != nil {
 		return a.Err != nil && b.Err != nil && a.Err.Error() == b.Err.Error()
 	}
-	return a.Plan.Action == PlanNoop && b.Plan.Action == PlanNoop && a.Plan.Reason == b.Plan.Reason
+	return a.Plan.Action == PlanNoop && b.Plan.Action == PlanNoop && a.Plan.Reason == b.Plan.Reason &&
+		a.Plan.FullDue == b.Plan.FullDue
 }
 
 // snapshotRef names a snapshot, marking bookmarks with '#'.

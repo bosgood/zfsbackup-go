@@ -1,0 +1,9 @@
+# The pool at 2027-03-02 01:00, abridged. The 4320h window since the September
+# full elapsed on 2027-02-28. No full can ever be taken with this suffix, so the
+# run fails instead of extending the incremental chain forever.
+autosnap_2027-03-02_01:00:00_hourly
+autosnap_2027-03-02_00:00:00_daily
+autosnap_2027-03-01_00:00:00_monthly
+autosnap_2027-03-01_00:00:00_daily
+autosnap_2027-02-27_00:00:00_daily
+autosnap_2027-02-01_00:00:00_monthly

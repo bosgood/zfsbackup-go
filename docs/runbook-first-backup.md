@@ -64,7 +64,9 @@ zfsbackup plan $FLAGS --snapshots snaps.txt \
 Expect one `FULL ... no-previous-full` on the first run, then an `INCR` on each
 1st of the month (`from` the previous monthly), `NOOP ... nothing-newer` on
 every other day, and a `FULL ... window-elapsed` on the first 1st after each
-180-day window. The output must end in `checks: OK`; `plan` exits 2 otherwise.
+180-day window. The window usually elapses a few days before that 1st: those
+runs end in `full-due`, which only says the full waits for the next monthly.
+The output must end in `checks: OK`; `plan` exits 2 otherwise.
 The checks:
 
 | Check | Fails when |
@@ -82,6 +84,11 @@ The checks:
 before the next run could send from it. The retention is too short for the run
 cadence, or the host was down too long. A `source-pruned` no-op waits for the
 next monthly: `send` logs a warning and exits 0.
+
+`ERROR  full backup is due ... but no snapshots found matching the full backup
+criteria` means a full is due and nothing on the pool matches
+`--fullSnapshotSuffix` (usually a typo). `send` fails the same way rather than
+extend the incremental chain forever.
 
 ## 3. Plan the first run against the real destination
 

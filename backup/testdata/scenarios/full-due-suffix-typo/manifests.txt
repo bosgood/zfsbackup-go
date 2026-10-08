@@ -1,0 +1,3 @@
+# The September full and the last daily incremental before the window elapsed.
+autosnap_2026-09-01_00:00:00_monthly
+autosnap_2026-09-01_00:00:00_monthly to autosnap_2027-02-27_00:00:00_daily

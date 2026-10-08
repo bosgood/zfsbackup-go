@@ -1,0 +1,6 @@
+# The pool as of the January monthly; the schedule takes and prunes the rest.
+autosnap_2027-01-01_00:00:00_monthly
+autosnap_2027-01-01_00:00:00_daily
+autosnap_2027-01-01_00:00:00_hourly
+autosnap_2026-12-01_00:00:00_monthly
+autosnap_2026-11-01_00:00:00_monthly

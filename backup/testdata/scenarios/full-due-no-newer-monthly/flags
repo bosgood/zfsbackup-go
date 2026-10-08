@@ -1,0 +1,4 @@
+# Monthly fulls, daily incrementals, with a 30-day full window.
+--fullIfOlderThan=720h
+--fullSnapshotSuffix=_monthly
+--incrementalSnapshotSuffix=_daily

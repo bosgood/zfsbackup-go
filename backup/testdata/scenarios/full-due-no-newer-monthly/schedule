@@ -1,0 +1,8 @@
+# Daily runs at 01:00 through January. January has 31 days, so the 720h window
+# since the January full elapses on the 31st, a day before the February monthly
+# is taken. That run stays incremental and is marked full-due; the next run
+# rolls onto the February monthly.
+policy=hourly=36,daily=30,monthly=3
+from=2027-01-01T01:00:00Z
+until=2027-02-02T01:00:00Z
+every=24h

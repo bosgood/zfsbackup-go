@@ -1,0 +1,5 @@
+# Monthly fulls, daily incrementals, but the full suffix is mistyped after the
+# first full was taken (e.g. a config edit), so nothing matches it any more.
+--fullIfOlderThan=4320h
+--fullSnapshotSuffix=_montly
+--incrementalSnapshotSuffix=_daily

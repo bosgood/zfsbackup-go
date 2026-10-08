@@ -1,0 +1,3 @@
+next  ERROR  full backup is due (last full 2026-09-01 00:00:00 +0000 UTC is older than 4320h0m0s) but no snapshots found matching the full backup criteria
+checks: 1 violation(s)
+  no-errors  full backup is due (last full 2026-09-01 00:00:00 +0000 UTC is older than 4320h0m0s) but no snapshots found matching the full backup criteria
