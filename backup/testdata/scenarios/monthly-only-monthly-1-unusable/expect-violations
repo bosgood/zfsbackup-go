@@ -1,0 +1,2 @@
+# This scenario shows a retention that is too short on purpose: every monthly
+# goes out as a full, which full-cadence flags on every run that sends one.

@@ -1,0 +1,9 @@
+# A weekly cron (Sunday 03:00) on a pool that keeps only two monthlies, the
+# smallest retention on which the chain holds with no missed runs: on the first
+# Sunday after each 1st the previous monthly is still there (sanoid destroys a
+# monthly once it is older than 2 x 31 days AND more than two remain).
+policy=hourly=48,daily=30,monthly=2
+from=2026-09-27T03:00:00Z
+until=2027-10-10T03:00:00Z
+every=168h
+checks=coverage:_monthly

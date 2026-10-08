@@ -1,0 +1,8 @@
+# monthly=1 cannot chain: by the first Sunday after each 1st the previous
+# monthly is older than 31 days with two present, so sanoid has destroyed it,
+# and every run that finds a new monthly sends a source-pruned full of it.
+policy=hourly=48,daily=30,monthly=1
+from=2026-09-27T03:00:00Z
+until=2027-10-10T03:00:00Z
+every=168h
+checks=coverage:_monthly
