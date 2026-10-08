@@ -449,11 +449,19 @@ func snapshotsIdentical(a, b files.SnapshotInfo) bool {
 // creation` guarantees neither, so every run must plan the same kind of
 // backup either way, and the checks must agree.
 func TestTieOrderIndependence(t *testing.T) {
-	for _, name := range []string{"monthly-only-5-months", "monthly-daily-5-months", "monthly-only-year", "monthly-daily-year"} {
+	for _, name := range []string{"monthly-only-5-months", "monthly-daily-5-months", "monthly-only-year", "monthly-daily-year", "monthly-only-3-years"} {
 		t.Run(name, func(t *testing.T) {
 			var want, wantVariant string
 			pools := make(map[string]bool) // distinct pools seen, to prove the variants differ
-			for _, order := range permutations([]string{"monthly", "daily", "hourly"}) {
+			base, err := LoadScenario(filepath.Join("testdata/scenarios", name))
+			if err != nil {
+				t.Fatalf("LoadScenario: %v", err)
+			}
+			var periods []string // every period the scenario schedules shares a boundary on January 1st
+			for _, p := range base.Schedule.Periods {
+				periods = append(periods, p.Name)
+			}
+			for _, order := range permutations(periods) {
 				for _, gap := range []time.Duration{0, time.Second} {
 					sc, err := LoadScenario(filepath.Join("testdata/scenarios", name))
 					if err != nil {

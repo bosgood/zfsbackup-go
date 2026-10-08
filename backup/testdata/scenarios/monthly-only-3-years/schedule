@@ -1,0 +1,8 @@
+# Three years of daily runs at 01:00, across the 2028 leap year, on a pool that
+# keeps every sanoid period (a yearly and a weekly join the monthly, daily and
+# hourly on some 1sts). Fulls must stay on March 1st and September 1st.
+policy=yearly=2,monthly=3,weekly=4,daily=30,hourly=36
+from=2026-09-24T01:00:00Z
+until=2029-10-02T01:00:00Z
+every=24h
+checks=coverage:_monthly          # every monthly backed up exactly once
