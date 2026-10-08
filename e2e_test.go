@@ -266,6 +266,32 @@ func TestE2ESequenceMatchesPlanner(t *testing.T) {
 	}
 }
 
+// TestE2EPlanFromDestinationWithSchedule: plan reads the backups at a real
+// destination and projects the schedule from them, so the first run is a no-op
+// and the next monthly chains from the full that send uploaded.
+func TestE2EPlanFromDestinationWithSchedule(t *testing.T) {
+	env := newE2EEnv(t)
+	sc, err := backup.LoadScenario(monthlyOnlyScenario)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.writeSnapshots(t, "tank/data", sc.Snapshots)
+	flags := scenarioFlags(t, monthlyOnlyScenario)
+	target := "file://" + env.dest
+	env.sendOK(t, append(flags, "tank/data", target)...)
+
+	out, logs, err := env.plan(append(flags,
+		"--schedule", "policy=hourly=36,daily=30,monthly=3,from=2026-09-24T01:00:00Z,until=2026-10-02T01:00:00Z,every=24h,checks=coverage:_monthly",
+		"tank/data", target)...)
+	want := "2026-09-24T01:00:00Z..2026-09-30T01:00:00Z  NOOP x7  nothing-newer\n" +
+		"2026-10-01T01:00:00Z  INCR  autosnap_2026-10-01_00:00:00_monthly  from autosnap_2026-09-01_00:00:00_monthly  newer-candidate\n" +
+		"2026-10-02T01:00:00Z  NOOP  nothing-newer\n" +
+		"checks: OK\n"
+	if err != nil || out != want {
+		t.Errorf("plan returned %v and printed:\n%s\nwant:\n%s\nlogs:\n%s", err, out, want, logs)
+	}
+}
+
 // TestE2ENextRunScenarios replays every next-run golden scenario through the
 // real send: the backups its manifests.txt lists are first created at file://
 // destinations with manual sends, then one smart send runs against the
