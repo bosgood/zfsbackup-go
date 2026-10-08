@@ -1,0 +1,10 @@
+# The weekly cron resumes on 2027-01-10 after missing three months (see
+# monthly-only-gap-3-months) and runs for a year. The first run sends a
+# source-pruned full of January; the chain continues from it and the next
+# fulls fall one window after that recovery full, not on the old March/September
+# rhythm.
+policy=hourly=48,daily=30,monthly=3
+from=2027-01-10T03:00:00Z
+until=2028-01-16T03:00:00Z
+every=168h
+checks=coverage:_monthly
