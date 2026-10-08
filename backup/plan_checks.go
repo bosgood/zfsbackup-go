@@ -525,7 +525,8 @@ func formatDays(d time.Duration) string {
 	if d < 0 {
 		sign, d = "-", -d
 	}
-	days, hours := d/(24*time.Hour), (d%(24*time.Hour)).Round(time.Hour)/time.Hour
+	d = d.Round(time.Hour) // first, so 29d23h30m is 30d, not 29d24h
+	days, hours := d/(24*time.Hour), d%(24*time.Hour)/time.Hour
 	if hours == 0 {
 		return fmt.Sprintf("%s%dd", sign, days)
 	}

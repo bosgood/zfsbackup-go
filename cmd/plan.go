@@ -71,6 +71,12 @@ func init() {
 	RootCmd.AddCommand(planCmd)
 
 	backup.AddSmartFlags(planCmd.Flags(), &jobInfo)
+	planCmd.Flags().BoolVar(
+		&jobInfo.Resume,
+		"resume",
+		false,
+		"plan as `send --resume` would: complete a backup set missing at some destinations even where its volumes are not all there.",
+	)
 	planCmd.Flags().StringVar(
 		&planSnapshots,
 		"snapshots",

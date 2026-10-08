@@ -306,3 +306,20 @@ func TestCoverageNamesMonthlyPrunedDuringOutage(t *testing.T) {
 		t.Errorf("got %d never-backed-up violations, want 3:\n%s", len(never), joined)
 	}
 }
+
+func TestFormatDays(t *testing.T) {
+	for _, tc := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{29*24*time.Hour + 23*time.Hour + 30*time.Minute, "30d"},
+		{29*24*time.Hour + 23*time.Hour + 29*time.Minute, "29d23h"},
+		{30 * 24 * time.Hour, "30d"},
+		{-(2*24*time.Hour + 5*time.Hour), "-2d5h"},
+		{0, "0d"},
+	} {
+		if got := formatDays(tc.d); got != tc.want {
+			t.Errorf("formatDays(%v) = %q, want %q", tc.d, got, tc.want)
+		}
+	}
+}

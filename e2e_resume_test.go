@@ -579,3 +579,37 @@ func TestE2EResumeIgnoresCacheOfAbandonedAttempt(t *testing.T) {
 		t.Errorf("resume exited 0 but a restore from dest1 fails: %v\n%s", err, logs)
 	}
 }
+
+// A set whose manifest and a volume are missing at one destination is not
+// completable by a plain run, but `send --resume` re-sends the missing volume
+// and completes it; `plan --resume` must preview that.
+func TestE2EPlanResumePreviewsCompletion(t *testing.T) {
+	env := newE2EEnv(t)
+	dest2 := newDest(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(3<<20))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	dests := "file://" + env.dest + ",file://" + dest2
+	env.sendOK(t, "--volsize", "1", "--compressor", "", "tank/data@a", dests)
+	removed := 0
+	for name := range destObjects(t, dest2) {
+		if strings.HasPrefix(name, "manifests|") || strings.HasSuffix(name, ".vol2") {
+			if err := os.Remove(filepath.Join(dest2, name)); err != nil {
+				t.Fatal(err)
+			}
+			removed++
+		}
+	}
+	if removed != 2 {
+		t.Fatalf("removed %d objects at dest2, want the manifest and vol2", removed)
+	}
+
+	plain, logs, err := env.plan("--fullIfOlderThan", "720h", "tank/data", dests)
+	if strings.Contains(plain, "complete-partial") {
+		t.Errorf("plain plan (%v) offers to complete a set whose volume is missing:\n%s\nlogs:\n%s", err, plain, logs)
+	}
+	resume, logs, err := env.plan("--fullIfOlderThan", "720h", "--resume", "tank/data", dests)
+	want := "next  FULL  a  complete-partial\nchecks: OK\n"
+	if err != nil || resume != want {
+		t.Errorf("plan --resume returned %v and printed:\n%s\nwant:\n%s\nlogs:\n%s", err, resume, want, logs)
+	}
+}
