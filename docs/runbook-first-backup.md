@@ -191,7 +191,14 @@ non-zero and release its lock; it never uploads a manifest for a partial set.
 it would skip still exists at every destination: it resumes from the first
 volume missing anywhere (`Volume ... missing at ...; it and later volumes will
 be re-sent`) and starts over when none can be verified, for example after
-adding a destination. Then schedule the same command daily or weekly.
+adding a destination. It continues only the most recent attempt: a run without
+`--resume` (the next cron run, say) abandons the earlier attempt before it
+sends anything (`Discarding the cached state of an earlier attempt at ...; this
+run starts over`), because it rewrites the set's volumes and the cache would
+describe the old ones. If that plain run fails too, `--resume` after it resumes
+that run, not the first; when it failed before its first volume finished,
+`--resume` starts over (`No previous manifest file exists, nothing to resume;
+starting over`). Then schedule the same command daily or weekly.
 
 What `send` refuses to do:
 

@@ -497,6 +497,8 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 		if done, err := tryResume(ctx, jobInfo, dests); err != nil || done {
 			return err
 		}
+	} else if err := discardPartialManifests(jobInfo, dests); err != nil {
+		return err
 	}
 
 	fileBufferSize := jobInfo.MaxFileBuffer
@@ -961,6 +963,40 @@ func cacheFile(dir, name, path string) error {
 	return files.WriteFileAtomic(dir, name, f)
 }
 
+// partialManifestCachePath is where the manifest of j's backup set is cached for the destination
+// uri: the file saveManifest writes after each volume and tryResume reads. It is the same file a
+// completed set's manifest is cached under (cachedManifestName), so a finished send leaves no
+// separate partial behind.
+func partialManifestCachePath(j *files.JobInfo, uri string) string {
+	return filepath.Join(cacheDirFor(uri), cachedManifestName(j.ManifestObjectName()))
+}
+
+// discardPartialManifests removes the cached manifest of j's backup set at every destination. A
+// run without --resume is a fresh attempt: it rewrites the set's volumes, so whatever an earlier
+// attempt cached about them (their sizes and SHA-256s) describes objects that are about to be
+// replaced. Left in place, a later --resume would trust it and publish a manifest whose checksums
+// do not match the volumes at the destination. A cache this run cannot clear fails the run, for
+// the same reason.
+func discardPartialManifests(j *files.JobInfo, dests []destination) error {
+	name := j.ManifestObjectName()
+	for _, d := range dests {
+		path := partialManifestCachePath(j, d.uri)
+		err := os.Remove(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			log.AppLogger.Errorf("Could not discard the cached manifest %s of an earlier attempt at %s - %v", path, name, err)
+			return err
+		}
+		log.AppLogger.Noticef(
+			"Discarding the cached state of an earlier attempt at %s; this run starts over. Use --resume to continue it instead.",
+			name,
+		)
+	}
+	return nil
+}
+
 func saveManifest(ctx context.Context, j *files.JobInfo, final bool) (*files.VolumeInfo, error) {
 	manifestmutex.Lock()
 	defer manifestmutex.Unlock()
@@ -972,8 +1008,6 @@ func saveManifest(ctx context.Context, j *files.JobInfo, final bool) (*files.Vol
 		log.AppLogger.Errorf("Error trying to create manifest volume - %v", err)
 		return nil, err
 	}
-	// nolint:gosec // MD5 not used for cryptographic purposes here
-	safeManifestFile := fmt.Sprintf("%x", md5.Sum([]byte(manifest.ObjectName)))
 	manifest.IsFinalManifest = final
 	jsonEnc := json.NewEncoder(manifest)
 	err = jsonEnc.Encode(j)
@@ -989,8 +1023,7 @@ func saveManifest(ctx context.Context, j *files.JobInfo, final bool) (*files.Vol
 		if destination == backends.DeleteBackendPrefix+"://" {
 			continue
 		}
-		dest := filepath.Join(cacheDirFor(destination), safeManifestFile)
-		if err = manifest.CopyTo(dest); err != nil {
+		if err = manifest.CopyTo(partialManifestCachePath(j, destination)); err != nil {
 			log.AppLogger.Warningf("Could not write manifest volume due to error - %v", err)
 			return nil, err
 		}
@@ -1232,14 +1265,11 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination
 		}
 	}()
 
-	// nolint:gosec // MD5 not used for cryptographic purposes here
-	safeManifestFile := fmt.Sprintf("%x", md5.Sum([]byte(manifest.ObjectName)))
-
-	origManiPath := filepath.Join(cacheDirFor(destinations[0].uri), safeManifestFile)
+	origManiPath := partialManifestCachePath(j, destinations[0].uri)
 
 	switch originalManifest, oerr := readManifest(ctx, origManiPath, j); {
 	case os.IsNotExist(oerr):
-		log.AppLogger.Info("No previous manifest file exists, nothing to resume")
+		log.AppLogger.Noticef("No previous manifest file exists, nothing to resume; starting over.")
 	case oerr != nil:
 		// Cut short by a kill or a full disk: there is nothing to resume from.
 		log.AppLogger.Warningf("Could not read previous manifest file %s (%v); starting over.", origManiPath, oerr)

@@ -502,3 +502,80 @@ func TestE2EResumeAfterManifestUploadFailureUploadsOnlyManifest(t *testing.T) {
 	}
 	env.checkRestores(t, dest, "a", streamBytes)
 }
+
+// Attempt A leaves a cached partial manifest (vol1..2). Attempt B, run as cron runs it (no
+// --resume), rewrites vol1.. at dest1 with fresh PGP ciphertext and fails at dest2 before any
+// volume finishes the whole pipeline, so the cache still describes A's objects. A --resume must
+// not trust that cache: its SHA-256s are of bytes dest1 no longer holds. A plain run abandons the
+// attempt before it, and the resume after it starts over.
+func TestE2EResumeIgnoresCacheOfAbandonedAttempt(t *testing.T) {
+	const streamBytes = 3 << 20
+	env := newE2EEnv(t)
+	dest2 := newDest(t)
+	rings := writeRings(t, newKey(t))
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(streamBytes))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	dests := "file://" + env.dest + ",file://" + dest2
+	args := append([]string{"--volsize", "1", "--compressor", "", "--maxRetryTime", "2s", "--maxBackoffTime", "1s"}, rings...)
+
+	// Attempt A: completes, then is made to look interrupted before vol3 and the manifest.
+	env.sendOK(t, append(args, "tank/data@a", dests)...)
+	for _, d := range []string{env.dest, dest2} {
+		for _, n := range manifestNames(destObjects(t, d)) {
+			if err := os.Remove(filepath.Join(d, n)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		dropVolumesFrom(t, d, 3)
+	}
+
+	// Attempt B: dest2 is down (a file where its "tank" directory must be).
+	hidden := filepath.Join(t.TempDir(), "tank")
+	if err := os.Rename(filepath.Join(dest2, "tank"), hidden); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dest2, "tank"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	before := destObjects(t, env.dest)
+	logs, err := guarded(t, func() (string, error) { return env.send(append(args, "tank/data@a", dests)...) })
+	if err == nil {
+		t.Fatalf("attempt B succeeded although dest2 is down:\n%s", logs)
+	}
+	if want := "Discarding the cached state of an earlier attempt"; !strings.Contains(logs, want) {
+		t.Errorf("attempt B's log lacks %q:\n%s", want, logs)
+	}
+	after := destObjects(t, env.dest)
+	changed := 0
+	for name, data := range before {
+		if !bytes.Equal(after[name], data) {
+			changed++
+		}
+	}
+	if changed == 0 {
+		t.Fatalf("attempt B rewrote none of dest1's objects; the scenario needs it to")
+	}
+	if err := os.Remove(filepath.Join(dest2, "tank")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(hidden, filepath.Join(dest2, "tank")); err != nil {
+		t.Fatal(err)
+	}
+
+	// --resume: B cleared the cache, so there is nothing to resume and the run starts over.
+	logs, err = guarded(t, func() (string, error) { return env.send(append(args, "--resume", "tank/data@a", dests)...) })
+	if err != nil {
+		t.Fatalf("resume: %v\n%s", err, logs)
+	}
+	if !strings.Contains(logs, "No previous manifest file exists") && !strings.Contains(logs, "Nothing verifiable to resume") {
+		t.Errorf("the resume did not start over:\n%s", logs)
+	}
+
+	// What the published manifest describes must be what dest1 holds.
+	t.Setenv("FAKEZFS_RECEIVE_LOG", filepath.Join(t.TempDir(), "receive.log"))
+	rargs := append(append([]string{}, rings...), "--maxRetryTime", "2s", "tank/data@a", "file://"+env.dest, "restored/data")
+	logs, err = guarded(t, func() (string, error) { return env.receive(rargs...) })
+	if err != nil {
+		t.Errorf("resume exited 0 but a restore from dest1 fails: %v\n%s", err, logs)
+	}
+}
