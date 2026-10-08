@@ -218,6 +218,15 @@ func planSmartSnapshots(
 	// backup, the one furthest behind decides, so the full brings them back
 	// in step whatever order they are given in.
 	ageExceeded := snapshots[0].CreationTime.Sub(lastFull.CreationTime) > jobInfo.FullIfOlderThan
+	// Nothing matches the full backup criteria at all, so no full can ever be taken and
+	// --fullIfOlderThan can never be honored: the prefix or full suffix is almost certainly
+	// wrong. Fail loudly rather than extending the incremental chain forever.
+	if ageExceeded && fullBase == nil {
+		return Plan{}, fmt.Errorf(
+			"full backup is due (last full %v is older than %v) but no snapshots found matching the full backup criteria",
+			lastFull.CreationTime, jobInfo.FullIfOlderThan,
+		)
+	}
 	behind := lastBackup[0]
 	for _, b := range lastBackup[1:] {
 		if b.CreationTime.Before(behind.CreationTime) {

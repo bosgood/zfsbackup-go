@@ -274,11 +274,11 @@ func TestSelectSmartSnapshots(t *testing.T) {
 			wantIncr:    "s1",
 		},
 		{
-			// Regression: the recovery full must not re-use a snapshot the
-			// destination already holds a full for. Object names carry no
-			// timestamp, so doing so overwrites that backup in place and the
-			// job never makes forward progress.
-			name:    "suffix: pruned source with no newer monthly anchors on the daily",
+			// The recovery full must not re-use a snapshot the destination
+			// already holds a full for (object names carry no timestamp, so that
+			// overwrites the backup in place), nor anchor on a snapshot outside
+			// the full suffix. It waits for the next full candidate instead.
+			name:    "suffix: pruned source with no newer monthly waits for one",
 			jobInfo: files.JobInfo{FullIfOlderThan: window, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_daily"},
 			snapshots: []files.SnapshotInfo{
 				snap("day10_daily", day(10)),
@@ -290,7 +290,7 @@ func TestSelectSmartSnapshots(t *testing.T) {
 				incrManifest(snap("day5_daily", day(5)), snap("day1_monthly", day(1))),
 				fullManifest(snap("day1_monthly", day(1))),
 			}},
-			wantBase: "day10_daily",
+			wantErr: ErrNoOp,
 		},
 		{
 			// The window has elapsed but there is no newer full-candidate, so keep
@@ -306,7 +306,7 @@ func TestSelectSmartSnapshots(t *testing.T) {
 			destBackups: [][]*files.JobInfo{{fullManifest(snap("day1_monthly", day(1)))}},
 			wantBase:    "day40_daily",
 			wantIncr:    "day1_monthly",
-			wantLogCont: "no full backup candidate newer than day1_monthly",
+			wantLogCont: "the next full waits for a full backup candidate newer than the last backup",
 		},
 		{
 			name:      "multi-destination: in sync does an incremental",
