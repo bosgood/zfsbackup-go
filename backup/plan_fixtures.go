@@ -48,6 +48,11 @@ type Scenario struct {
 	JobInfo     files.JobInfo        // only the smart options are read
 	Snapshots   []files.SnapshotInfo // newest-first, as zfs list -S creation returns them
 	DestBackups [][]*files.JobInfo   // per destination, newest-first
+	// CaptureDataset is the dataset a --snapshots listing names, when its
+	// rows carry one; NameDated names the snapshots in it that were dated from
+	// their sanoid names for want of a creation column (see zfs.ParseListing).
+	CaptureDataset string
+	NameDated      []string
 	// Completable says a set missing at some destinations may be completed
 	// there (see PartialSetCompletable); plan sets it from the destinations.
 	Completable bool
@@ -233,15 +238,59 @@ func ParseSmartFlags(r io.Reader) (files.JobInfo, error) {
 // listing captured with `zfs list -S creation` keeps its exact order,
 // including the order of snapshots that share a creation second.
 func (s *Scenario) ReadSnapshots(r io.Reader) error {
-	snapshots, err := zfs.ParseSnapshotList(r, s.location())
+	l, err := zfs.ParseListing(r, s.location())
 	if err != nil {
 		return err
 	}
-	sort.SliceStable(snapshots, func(i, j int) bool {
-		return snapshots[i].CreationTime.After(snapshots[j].CreationTime)
-	})
-	s.Snapshots = snapshots
+	s.Snapshots = l.Snapshots
+	s.CaptureDataset = l.Dataset
+	s.NameDated = l.NameDated
+	s.sortSnapshotsNewestFirst()
 	return nil
+}
+
+func (s *Scenario) sortSnapshotsNewestFirst() {
+	sort.SliceStable(s.Snapshots, func(i, j int) bool {
+		return s.Snapshots[i].CreationTime.After(s.Snapshots[j].CreationTime)
+	})
+}
+
+// AdoptCreationTimes dates the name-dated snapshots (NameDated) from the
+// backups at the destinations: a snapshot that some manifest names, as its
+// base or its source, takes the creation time recorded there. send compares
+// snapshots by name and creation time, so without this a snapshot dated from
+// its name looks pruned next to its own backup, which was taken seconds later.
+// It returns how many snapshots changed. Call it after DestBackups are set.
+func (s *Scenario) AdoptCreationTimes() int {
+	if len(s.NameDated) == 0 {
+		return 0
+	}
+	recorded := make(map[string]time.Time)
+	for _, dest := range s.DestBackups {
+		for _, m := range dest {
+			for _, snap := range []files.SnapshotInfo{m.BaseSnapshot, m.IncrementalSnapshot} {
+				if snap.Name != "" {
+					recorded[snap.Name] = snap.CreationTime
+				}
+			}
+		}
+	}
+	nameDated := make(map[string]bool, len(s.NameDated))
+	for _, name := range s.NameDated {
+		nameDated[name] = true
+	}
+	adopted := 0
+	for i := range s.Snapshots {
+		snap := &s.Snapshots[i]
+		if t, ok := recorded[snap.Name]; ok && nameDated[snap.Name] && !t.Equal(snap.CreationTime) {
+			snap.CreationTime = t.In(s.location())
+			adopted++
+		}
+	}
+	if adopted > 0 {
+		s.sortSnapshotsNewestFirst()
+	}
+	return adopted
 }
 
 // ReadManifests sets what the destinations already hold. Each line is one

@@ -141,14 +141,46 @@ func parseListOutput(r io.Reader) ([]files.SnapshotInfo, error) {
 // creation is an epoch, as a number or a string, and other keys (used, refer,
 // ...) are ignored.
 func ParseSnapshotList(r io.Reader, loc *time.Location) ([]files.SnapshotInfo, error) {
+	l, err := ParseListing(r, loc)
+	if err != nil {
+		return nil, err
+	}
+	return l.Snapshots, nil
+}
+
+// Listing is a parsed snapshot listing (see ParseSnapshotList).
+type Listing struct {
+	// Dataset is the dataset the rows name (tank/data for tank/data@snap),
+	// or "" when every row is a bare name.
+	Dataset string
+	// Snapshots are the rows, in input order.
+	Snapshots []files.SnapshotInfo
+	// NameDated names the snapshots whose creation time came from their
+	// sanoid name because the row had no creation column. The real creation
+	// time is later than the name says, usually by seconds.
+	NameDated []string
+}
+
+// ParseListing is ParseSnapshotList that also reports which dataset the rows
+// name and which snapshots were dated from their names.
+func ParseListing(r io.Reader, loc *time.Location) (*Listing, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}
+	var l *listing
 	if trimmed := bytes.TrimSpace(data); len(trimmed) > 0 && (trimmed[0] == '[' || trimmed[0] == '{') {
-		return parseJSONSnapshotList(trimmed, loc)
+		l, err = parseJSONSnapshotList(trimmed, loc)
+	} else {
+		l, err = parseTextSnapshotList(data, loc)
 	}
+	if err != nil {
+		return nil, err
+	}
+	return &Listing{Dataset: l.dataset, Snapshots: l.snapshots, NameDated: l.nameDated}, nil
+}
 
+func parseTextSnapshotList(data []byte, loc *time.Location) (*listing, error) {
 	var l listing
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for lineNo := 1; scanner.Scan(); lineNo++ {
@@ -160,7 +192,7 @@ func ParseSnapshotList(r io.Reader, loc *time.Location) ([]files.SnapshotInfo, e
 			return nil, fmt.Errorf("line %d: %v", lineNo, err)
 		}
 	}
-	return l.snapshots, scanner.Err()
+	return &l, scanner.Err()
 }
 
 // jsonRow is a row of a JSON snapshot listing. Keys match case-insensitively.
@@ -170,7 +202,7 @@ type jsonRow struct {
 	Type     string          `json:"type"`
 }
 
-func parseJSONSnapshotList(data []byte, loc *time.Location) ([]files.SnapshotInfo, error) {
+func parseJSONSnapshotList(data []byte, loc *time.Location) (*listing, error) {
 	var rows []jsonRow
 	if err := json.Unmarshal(data, &rows); err != nil {
 		return nil, fmt.Errorf(`JSON listing: %v; want an array of rows such as {"name": "tank/data@snap"}`, err)
@@ -190,7 +222,7 @@ func parseJSONSnapshotList(data []byte, loc *time.Location) ([]files.SnapshotInf
 			return nil, fmt.Errorf("row %d: %v", i+1, err)
 		}
 	}
-	return l.snapshots, nil
+	return &l, nil
 }
 
 // listing collects the rows of a snapshot listing, which must all be of one
@@ -198,6 +230,7 @@ func parseJSONSnapshotList(data []byte, loc *time.Location) ([]files.SnapshotInf
 type listing struct {
 	dataset   string // of the first row that names one
 	snapshots []files.SnapshotInfo
+	nameDated []string // snapshots dated from their names, for want of a creation column
 }
 
 // addRow adds a text row: name[, creation[, type]].
@@ -252,6 +285,7 @@ func (l *listing) add(name, creation, kind string, loc *time.Location) error {
 			return fmt.Errorf("no creation time for %s: add a creation epoch or use a sanoid name", name)
 		}
 		snapInfo.CreationTime = t
+		l.nameDated = append(l.nameDated, snapInfo.Name)
 	} else {
 		epoch, err := strconv.ParseInt(creation, 10, 64)
 		if err != nil {

@@ -331,3 +331,54 @@ func TestParseSnapshotList(t *testing.T) {
 		})
 	}
 }
+
+func TestParseListing(t *testing.T) {
+	sep1 := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	testCases := []struct {
+		name          string
+		input         string
+		wantDataset   string
+		wantNameDated []string
+	}{
+		{
+			name:          "text rows with and without a creation column",
+			input:         "tank/data@autosnap_2026-09-01_00:00:00_monthly\t1788220800\tsnapshot\ntank/data@autosnap_2026-10-01_00:00:00_monthly\n",
+			wantDataset:   "tank/data",
+			wantNameDated: []string{"autosnap_2026-10-01_00:00:00_monthly"},
+		},
+		{
+			name:        "bare names with epochs name no dataset",
+			input:       "autosnap_2026-09-01_00:00:00_monthly\t1788220800\n",
+			wantDataset: "",
+		},
+		{
+			name: "JSON rows with and without a creation",
+			input: `[{"name": "tank/other@autosnap_2026-10-01_00:00:00_monthly"},
+				{"name": "tank/other@autosnap_2026-09-01_00:00:00_monthly", "creation": 1788220800}]`,
+			wantDataset:   "tank/other",
+			wantNameDated: []string{"autosnap_2026-10-01_00:00:00_monthly"},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := zfs.ParseListing(strings.NewReader(tc.input), time.UTC)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.Dataset != tc.wantDataset {
+				t.Errorf("got dataset %q, want %q", got.Dataset, tc.wantDataset)
+			}
+			if !reflect.DeepEqual(got.NameDated, tc.wantNameDated) {
+				t.Errorf("got name-dated %v, want %v", got.NameDated, tc.wantNameDated)
+			}
+			if len(got.Snapshots) != strings.Count(strings.TrimSpace(tc.input), "\n")+1 {
+				t.Errorf("got %d snapshots, want one per row", len(got.Snapshots))
+			}
+			for _, s := range got.Snapshots {
+				if strings.Contains(s.Name, "2026-09-01") && !s.CreationTime.Equal(sep1) {
+					t.Errorf("snapshot %s dated %v, want its epoch %v", s.Name, s.CreationTime, sep1)
+				}
+			}
+		})
+	}
+}

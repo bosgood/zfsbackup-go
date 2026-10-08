@@ -67,7 +67,12 @@ pass `location=<zone>` (e.g. `location=America/New_York`) in `--schedule` below.
 Otherwise the simulated sanoid snapshots are taken, and the run times rendered,
 at UTC wall-clock times. For a capture without creation times, such as
 `zfs list` output converted to JSON (see `testdata/zfs`), the times also come
-from the snapshot names, read in that zone.
+from the snapshot names, read in that zone. Sanoid takes its snapshots seconds
+after the time in the name, and the manifests at the destination record that
+real time, so against a destination `plan` adopts the manifests' times for
+snapshots it finds there and says so at Warning. To plan exactly what `send`
+will do, use the capture command of step 1, which records `creation`.
+`plan` refuses a `--snapshots` listing of another dataset.
 
 ## 2. Review a year of runs
 

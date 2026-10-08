@@ -151,6 +151,9 @@ func runPlan(cmd *cobra.Command, args []string) error {
 		sc.Snapshots = snapshots
 	} else if err := readPlanInput(planSnapshots, sc.ReadSnapshots); err != nil {
 		return err
+	} else if sc.CaptureDataset != "" && sc.CaptureDataset != sc.Volume {
+		log.AppLogger.Errorf("--snapshots lists %s, not %s.", sc.CaptureDataset, sc.Volume)
+		return errInvalidInput
 	}
 
 	switch {
@@ -167,6 +170,14 @@ func runPlan(cmd *cobra.Command, args []string) error {
 				return err
 			}
 			sc.DestBackups = append(sc.DestBackups, manifests)
+		}
+		// A capture without creation times dates snapshots from their names,
+		// seconds before the time the manifests hold; send would then see the
+		// backed-up snapshot as pruned. Take the manifests' word for it.
+		if adopted := sc.AdoptCreationTimes(); len(sc.NameDated) > 0 {
+			log.AppLogger.Warningf("The capture has no creation times: %d taken from the manifests at the destination, "+
+				"the rest from the snapshot names. Capture `zfs list -H -p -o name,creation -t snapshot,bookmark -S creation %s` "+
+				"to plan exactly what send will do.", adopted, sc.Volume)
 		}
 		// A set whose manifest is missing at some destinations is completed there, as
 		// send would, when its volumes are there.

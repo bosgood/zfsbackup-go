@@ -256,3 +256,39 @@ location=UTC
 		}
 	}
 }
+
+func TestScenarioAdoptCreationTimes(t *testing.T) {
+	s := &Scenario{Volume: "tank/data"}
+	// One snapshot dated from its name, one with an epoch 7s past the hour.
+	listing := "tank/data@autosnap_2026-10-01_00:00:00_monthly\n" +
+		"tank/data@autosnap_2026-09-01_00:00:00_monthly\t1788220807\tsnapshot\n"
+	if err := s.ReadSnapshots(strings.NewReader(listing)); err != nil {
+		t.Fatalf("ReadSnapshots: %v", err)
+	}
+	if s.CaptureDataset != "tank/data" || !reflect.DeepEqual(s.NameDated, []string{"autosnap_2026-10-01_00:00:00_monthly"}) {
+		t.Fatalf("got dataset %q, name-dated %v", s.CaptureDataset, s.NameDated)
+	}
+	lag := 7 * time.Second
+	sep1 := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	oct1 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	// The manifests record both snapshots 7s later than their names (the
+	// September one is already right; a bogus later time for it must not win).
+	s.DestBackups = [][]*files.JobInfo{{
+		{VolumeName: "tank/data", BaseSnapshot: files.SnapshotInfo{Name: "autosnap_2026-10-01_00:00:00_monthly", CreationTime: oct1.Add(lag)},
+			IncrementalSnapshot: files.SnapshotInfo{Name: "autosnap_2026-09-01_00:00:00_monthly", CreationTime: sep1.Add(2 * lag)}},
+		{VolumeName: "tank/data", BaseSnapshot: files.SnapshotInfo{Name: "autosnap_2026-09-01_00:00:00_monthly", CreationTime: sep1.Add(2 * lag)}},
+	}}
+
+	if got := s.AdoptCreationTimes(); got != 1 {
+		t.Errorf("AdoptCreationTimes = %d, want 1", got)
+	}
+	if got := s.Snapshots[0]; got.Name != "autosnap_2026-10-01_00:00:00_monthly" || !got.CreationTime.Equal(oct1.Add(lag)) {
+		t.Errorf("name-dated snapshot = %+v, want the manifest's time %v", got, oct1.Add(lag))
+	}
+	if got := s.Snapshots[1]; got.Name != "autosnap_2026-09-01_00:00:00_monthly" || !got.CreationTime.Equal(sep1.Add(lag)) {
+		t.Errorf("epoch-dated snapshot = %+v, want it unchanged at %v", got, sep1.Add(lag))
+	}
+	if got := s.AdoptCreationTimes(); got != 0 {
+		t.Errorf("second AdoptCreationTimes = %d, want 0", got)
+	}
+}
