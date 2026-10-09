@@ -53,6 +53,7 @@ var (
 	secretKeyRingPath string
 	publicKeyRingPath string
 	workingDirectory  string
+	trustSigners      []string
 	errInvalidInput   = errors.New("invalid input")
 )
 
@@ -151,6 +152,13 @@ func init() {
 		"",
 		"the email of the user to sign on behalf of from the provided private keyring.",
 	)
+	RootCmd.PersistentFlags().StringArrayVar(
+		&trustSigners,
+		"trustSigner",
+		nil,
+		"also accept manifests and volumes signed by this key (an email or fingerprint in the public keyring), e.g. "+
+			"the key --signFrom named before a rotation. Repeatable; needs --signFrom.",
+	)
 	RootCmd.PersistentFlags().StringVar(
 		&zfs.ZFSPath,
 		"zfsPath",
@@ -176,6 +184,7 @@ func resetRootFlags() {
 	jobInfo.ManifestPrefix = "manifests"
 	jobInfo.EncryptTo = ""
 	jobInfo.SignFrom = ""
+	trustSigners = nil
 	zfs.ZFSPath = "zfs"
 	config.JSONOutput = false
 }
@@ -309,7 +318,7 @@ func loadSendKeys() error {
 		}
 	}
 
-	return nil
+	return loadTrustedSigners()
 }
 
 func loadReceiveKeys() error {
@@ -338,6 +347,32 @@ func loadReceiveKeys() error {
 		}
 	}
 
+	return loadTrustedSigners()
+}
+
+// loadTrustedSigners resolves each --trustSigner to the keys in the public ring it names. The
+// resume cache still matches --signFrom's key alone.
+func loadTrustedSigners() error {
+	jobInfo.TrustedSignKeys = nil
+	if len(trustSigners) == 0 {
+		return nil
+	}
+	if jobInfo.SignFrom == "" {
+		log.AppLogger.Errorf("--trustSigner adds to the keys --signFrom accepts; pass --signFrom as well")
+		return errInvalidInput
+	}
+	if publicKeyRingPath == "" {
+		log.AppLogger.Errorf("You must specify a public keyring path if you provide a trustSigner option")
+		return errInvalidInput
+	}
+	for _, signer := range trustSigners {
+		keys := pgp.GetPublicKeys(signer)
+		if len(keys) == 0 {
+			log.AppLogger.Errorf("Could not find public key for --trustSigner %s", signer)
+			return errInvalidInput
+		}
+		jobInfo.TrustedSignKeys = append(jobInfo.TrustedSignKeys, keys...)
+	}
 	return nil
 }
 

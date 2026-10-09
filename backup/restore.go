@@ -267,6 +267,7 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 
 	manifest.ManifestPrefix = jobInfo.ManifestPrefix
 	manifest.SignKey = jobInfo.SignKey
+	manifest.TrustedSignKeys = jobInfo.TrustedSignKeys
 	manifest.EncryptKey = jobInfo.EncryptKey
 	manifest.TrustedCompressor = jobInfo.TrustedCompressor
 	if err = files.CheckDecompressor(manifest.Compressor, manifest.TrustedCompressor); err != nil {

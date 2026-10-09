@@ -23,6 +23,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,5 +90,61 @@ func TestE2ESignFromRejectsForgedManifest(t *testing.T) {
 	}
 	if strings.Contains(logs, "Nothing new to back up") {
 		t.Errorf("send printed 'Nothing new to back up' with a forged manifest at the destination:\n%s", logs)
+	}
+}
+
+// Rotating the signing key: a new key for the same address signs from now on, and the old public
+// key stays in the ring. Every manifest at the destination is signed by the old key, so a smart
+// send that trusts only --signFrom's key fails on all of them, every run, and so does a restore of
+// a chain that spans the rotation. --trustSigner <old> accepts them.
+func TestE2ESignKeyRotationWithTrustSigner(t *testing.T) {
+	env := newE2EEnv(t)
+	k1, k2 := newKey(t), newKey(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+	a := files.SnapshotInfo{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
+	b := files.SnapshotInfo{Name: "b", CreationTime: time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)}
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{a})
+	dest := "file://" + env.dest
+	env.sendOK(t, append(writeRings(t, k1), "--fullIfOlderThan", "720h", "tank/data", dest)...)
+
+	// Rotate: k2 is now backup@example.com's key (first in both rings); k1 stays in both.
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{b, a})
+	rotated := writeRings(t, k2, k1)
+	smart := append(append([]string{}, rotated...), "--fullIfOlderThan", "720h", "tank/data", dest)
+	logs, err := guarded(t, func() (string, error) { return env.send(smart...) })
+	if err == nil {
+		t.Fatalf("a smart send accepted manifests signed by the old key without --trustSigner:\n%s", logs)
+	}
+	if !strings.Contains(err.Error()+logs, "pass --trustSigner") {
+		t.Errorf("the send failed, but its error does not point at --trustSigner: %v\n%s", err, logs)
+	}
+
+	stranger := fmt.Sprintf("%X", newKey(t).PrimaryKey.Fingerprint)
+	logs, err = guarded(t, func() (string, error) {
+		return env.send(append([]string{"--trustSigner", stranger}, smart...)...)
+	})
+	if err == nil || !strings.Contains(logs, stranger) {
+		t.Errorf("--trustSigner with a key not in the public ring: want an error naming it, got %v\n%s", err, logs)
+	}
+
+	old := fmt.Sprintf("%X", k1.PrimaryKey.Fingerprint)
+	env.sendOK(t, append([]string{"--trustSigner", old}, smart...)...)
+
+	receive := append(append([]string{}, rotated...), "--auto", "tank/data@b", dest, "restored/data")
+	if logs, err = guarded(t, func() (string, error) { return env.receive(receive...) }); err == nil {
+		t.Errorf("receive of a chain spanning the rotation succeeded without --trustSigner:\n%s", logs)
+	} else if !strings.Contains(err.Error()+logs, "pass --trustSigner") {
+		t.Errorf("the receive failed, but its error does not point at --trustSigner: %v\n%s", err, logs)
+	}
+	receiveLog := filepath.Join(t.TempDir(), "receive.log")
+	t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+	if logs, err = guarded(t, func() (string, error) {
+		return env.receive(append([]string{"--trustSigner", old}, receive...)...)
+	}); err != nil {
+		t.Fatalf("receive --trustSigner <old> of a chain spanning the rotation: %v\n%s", err, logs)
+	}
+	got, _ := ioutil.ReadFile(receiveLog)
+	if n := strings.Count(string(got), "\n"); n != 2 {
+		t.Errorf("want 2 zfs receives (the full of a, then a to b), got %d\n%s", n, logs)
 	}
 }

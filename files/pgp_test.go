@@ -214,10 +214,35 @@ func TestVerifyEndRejectsOtherSigner(t *testing.T) {
 		if err == nil {
 			t.Fatal("a manifest signed by an unknown key was accepted")
 		}
-		if step != "VerifyEnd" || !strings.Contains(err.Error(), "not in --signFrom's ring") {
-			t.Errorf("want VerifyEnd to fail with 'not in --signFrom's ring'; %s failed with %v", step, err)
+		if step != "VerifyEnd" || !strings.Contains(err.Error(), "in neither ring") {
+			t.Errorf("want VerifyEnd to fail with 'in neither ring'; %s failed with %v", step, err)
 		}
 	})
+
+	t.Run("signer trusted", func(t *testing.T) {
+		loadRings(t, []*openpgp.Entity{a, b}, []*openpgp.Entity{b})
+		j := manifestJob(nil, b)
+		j.TrustedSignKeys = []*openpgp.Entity{a}
+		if step, err := readManifest(t, signedByA, j); err != nil {
+			t.Errorf("a manifest signed by a trusted signer was rejected at %s: %v", step, err)
+		}
+	})
+}
+
+// Without --signFrom, a manifest signed by a key in neither ring is still rejected, and the error
+// says so without naming --signFrom, which the user did not pass.
+func TestVerifyEndUnknownSignerWithoutSignFrom(t *testing.T) {
+	enc, signer := newTestKey(t, "backup@example.com"), newTestKey(t, "signer@example.com")
+	path := writeManifest(t, manifestJob(enc, signer))
+	loadRings(t, []*openpgp.Entity{enc}, []*openpgp.Entity{enc})
+	step, err := readManifest(t, path, manifestJob(enc, nil))
+	if err == nil {
+		t.Fatal("a manifest signed by a key in neither ring was accepted")
+	}
+	want := fmt.Sprintf("signed by key %X, whose public key is in neither ring", signer.PrimaryKey.KeyId)
+	if step != "VerifyEnd" || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "--signFrom") {
+		t.Errorf("want VerifyEnd to fail with %q and not name --signFrom; %s failed with %v", want, step, err)
+	}
 }
 
 // A message no already-decrypted key opens (one sealed with a passphrase, or encrypted to a

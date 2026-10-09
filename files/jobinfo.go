@@ -114,6 +114,9 @@ type JobInfo struct {
 	SignKey             *openpgp.Entity   `json:"-"`
 	ParentSnap          *JobInfo          `json:"-"`
 	UploadChunkSize     int               `json:"-"`
+	// TrustedSignKeys are --trustSigner's keys: a signature by one of them is accepted as well
+	// as SignKey's, so that what an older signing key signed still verifies after a rotation.
+	TrustedSignKeys []*openpgp.Entity `json:"-"`
 }
 
 // SnapshotInfo represents a snapshot with relevant information.

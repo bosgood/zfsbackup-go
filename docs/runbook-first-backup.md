@@ -354,3 +354,40 @@ dataset:
 ```bash
 ln -s ../../../../testdata/zfs/<capture>.json backup/testdata/scenarios/prod-<dataset>/snapshots.json
 ```
+
+## 7. Rotating the signing key
+
+With `--signFrom`, every manifest and volume must be signed by `--signFrom`'s
+key. After a switch to a new signing key, everything the old key signed is
+rejected: each smart send fails on the destination's manifests, and a restore
+of a chain that spans the rotation fails at its first old backup. The errors
+end with `pass --trustSigner <fingerprint>`.
+
+1. Give the new signing key its own address (say `backup-2027@example.com`).
+   `--signFrom` takes the first key in the ring with its address, so two
+   signing keys under one address leave it to the ring's order which one signs.
+   Keep `--encryptTo` as it is: this rotates the signing key only.
+
+2. Export the rings with both keys in each: the secret ring for `send`, the
+   public ring for everything else.
+
+   ```bash
+   gpg --armor --export-secret-keys backup@example.com backup-2027@example.com > secring.asc
+   gpg --armor --export backup@example.com backup-2027@example.com > pubring.asc
+   ```
+
+3. In `$FLAGS` and on every `receive`, `list`, `clean` and `plan`, change
+   `--signFrom` to the new address and add `--trustSigner <old fingerprint>`.
+   `--trustSigner` is repeatable and needs `--signFrom`; each must name a key in
+   the public ring (an address there trusts every public key with that
+   address). Keep it until nothing the old key signed is left at the
+   destination.
+
+A send interrupted before the rotation does not resume after it: `--resume`
+still requires the interrupted attempt's signing key and fails with `option
+mismatch: signFrom differs`. Rotate between runs, or rerun that send without
+`--resume`.
+
+Turning on `--signFrom` for a destination whose manifests are unsigned is not a
+rotation: those manifests stay rejected. Start a new chain at a new destination
+prefix (or `--manifestPrefix`) instead.

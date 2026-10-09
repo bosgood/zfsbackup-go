@@ -109,8 +109,8 @@ type VolumeInfo struct {
 	// PGP objects
 	pgpw io.WriteCloser
 	pgpr *openpgp.MessageDetails
-	// signer is the key the volume must be signed by, when one was asked for.
-	signer *openpgp.Entity
+	// signers are the keys one of which must have signed the volume, when one was asked for.
+	signers []*openpgp.Entity
 	// Detail Objects
 	counter   *datacounter.WriterCounter
 	usingPipe bool
@@ -166,7 +166,7 @@ func (v *VolumeInfo) Read(p []byte) (int, error) {
 }
 
 // signatureError is the state of the volume's signature once it has been read to EOF: the
-// signature must verify, and it must be --signFrom's key that made it.
+// signature must verify, and it must be --signFrom's key or a --trustSigner's that made it.
 func (v *VolumeInfo) signatureError() error {
 	if v.pgpr == nil || !v.pgpr.IsSigned {
 		return nil
@@ -175,15 +175,26 @@ func (v *VolumeInfo) signatureError() error {
 		return v.pgpr.SignatureError
 	}
 	if v.pgpr.SignedBy == nil {
-		return keyErrorf("signed by key %X, which is not in --signFrom's ring", v.pgpr.SignedByKeyId)
-	}
-	if v.signer != nil {
-		got, want := v.pgpr.SignedBy.Entity.PrimaryKey.Fingerprint, v.signer.PrimaryKey.Fingerprint
-		if got != want {
-			return keyErrorf("signed by %X, want %X", got, want)
+		if len(v.signers) > 0 {
+			return keyErrorf("signed by key %X, whose public key is in neither ring; add it to the public ring and pass --trustSigner to accept it", v.pgpr.SignedByKeyId)
 		}
+		return keyErrorf("signed by key %X, whose public key is in neither ring; add it to the public ring to accept it", v.pgpr.SignedByKeyId)
 	}
-	return nil
+	if len(v.signers) == 0 {
+		return nil
+	}
+	got := v.pgpr.SignedBy.Entity.PrimaryKey.Fingerprint
+	want := make([]string, 0, len(v.signers))
+	for _, signer := range v.signers {
+		if signer.PrimaryKey.Fingerprint == got {
+			return nil
+		}
+		want = append(want, fmt.Sprintf("%X", signer.PrimaryKey.Fingerprint))
+	}
+	if len(want) == 1 {
+		return keyErrorf("signed by %X, want %s; if that is a key you rotated away from, pass --trustSigner %X", got, want[0], got)
+	}
+	return keyErrorf("signed by %X, want one of %s; if that is a key you rotated away from, pass --trustSigner %X", got, strings.Join(want, ", "), got)
 }
 
 // eofReader records whether its reader reached io.EOF.
@@ -349,7 +360,9 @@ func (v *VolumeInfo) Extract(ctx context.Context, j *JobInfo, isManifest bool) e
 			return keyErrorf("%s is not encrypted, and --encryptTo requires encryption", name)
 		}
 		v.pgpr = pgpReader
-		v.signer = j.SignKey
+		if j.SignKey != nil {
+			v.signers = append([]*openpgp.Entity{j.SignKey}, j.TrustedSignKeys...)
+		}
 		v.r = pgpReader.UnverifiedBody
 	}
 

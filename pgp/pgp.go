@@ -48,6 +48,28 @@ func GetPrivateKeyByEmail(email string) *openpgp.Entity {
 	return getKeyByEmail(secRing, email)
 }
 
+// GetPublicKeys returns every key in the public ring that has an identity for email, or whose
+// primary key's fingerprint is fingerprint: 40 hex digits, in any case, spaces and a 0x prefix
+// allowed.
+func GetPublicKeys(emailOrFingerprint string) []*openpgp.Entity {
+	fingerprint := strings.ToUpper(strings.ReplaceAll(emailOrFingerprint, " ", ""))
+	fingerprint = strings.TrimPrefix(fingerprint, "0X")
+	var keys []*openpgp.Entity
+	for _, entity := range pubRing {
+		if fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint) == fingerprint {
+			keys = append(keys, entity)
+			continue
+		}
+		for _, ident := range entity.Identities {
+			if ident.UserId.Email == emailOrFingerprint {
+				keys = append(keys, entity)
+				break
+			}
+		}
+	}
+	return keys
+}
+
 // GetCombinedKeyRing will return both the public and secret key rings combined
 func GetCombinedKeyRing() openpgp.KeyRing {
 	return append(pubRing, secRing...)
