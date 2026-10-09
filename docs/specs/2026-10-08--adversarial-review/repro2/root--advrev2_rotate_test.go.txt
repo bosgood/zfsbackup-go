@@ -1,0 +1,36 @@
+package main
+
+import (
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/files"
+)
+
+// After 2e75bd2, a manifest must be signed by exactly --signFrom's key. Rotating the signing key
+// (new key for the same address, old public key kept in the ring) wedges every smart send: the
+// destination's existing manifests are all signed by the old key and every one of them fails.
+func TestAdvRev2SignKeyRotationWedgesSmartSend(t *testing.T) {
+	env := newE2EEnv(t)
+	k1, k2 := newKey(t), newKey(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+		{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+	})
+	dest := "file://" + env.dest
+	env.sendOK(t, append(writeRings(t, k1), "--fullIfOlderThan", "720h", "tank/data", dest)...)
+
+	// Rotate: k2 is now backup@example.com's key; k1 stays in both rings.
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+		{Name: "b", CreationTime: time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)},
+		{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+	})
+	logs, err := guarded(t, func() (string, error) {
+		return env.send(append(writeRings(t, k2, k1), "--fullIfOlderThan", "720h", "tank/data", dest)...)
+	})
+	fmt.Printf("smart send after rotation: err=%v\n%s\n", err, logs)
+	if err != nil {
+		t.Errorf("smart send after a signing-key rotation fails: %v", err)
+	}
+}

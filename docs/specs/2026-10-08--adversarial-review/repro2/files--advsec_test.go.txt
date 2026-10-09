@@ -1,0 +1,56 @@
+package files
+
+import (
+	"bytes"
+	"compress/gzip"
+	"context"
+	"encoding/json"
+	"io/ioutil"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"golang.org/x/crypto/openpgp"
+)
+
+// A forger with only the public key: a manifest signed by their own key, encrypted to the real
+// one, whose gzip body inflates to a 128 MiB JSON string. It is decoded in full before VerifyEnd
+// rejects the signature.
+func TestAdvSecForgedManifestDecodedBeforeVerify(t *testing.T) {
+	k1, k2 := newTestKey(t, "backup@example.com"), newTestKey(t, "evil@example.com")
+	loadRings(t, []*openpgp.Entity{k1}, []*openpgp.Entity{k1})
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	zw.Write([]byte(`{"volume":"`))
+	chunk := []byte(strings.Repeat("A", 1<<20))
+	for i := 0; i < 128; i++ {
+		zw.Write(chunk)
+	}
+	zw.Write([]byte(`"}`))
+	zw.Close()
+	var msg bytes.Buffer
+	w, err := openpgp.Encrypt(&msg, []*openpgp.Entity{k1}, k2, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Write(gz.Bytes())
+	w.Close()
+	path := filepath.Join(t.TempDir(), "m")
+	ioutil.WriteFile(path, msg.Bytes(), 0600)
+
+	j := &JobInfo{SignKey: k1, EncryptKey: k1}
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	v, err := ExtractLocal(context.Background(), j, path, true)
+	if err != nil {
+		t.Fatalf("extract rejected it up front: %v", err)
+	}
+	m := new(JobInfo)
+	derr := json.NewDecoder(v).Decode(m)
+	runtime.ReadMemStats(&after)
+	verr := v.VerifyEnd()
+	t.Logf("on-disk forged manifest: %d bytes; decode err=%v; decoded VolumeName len=%d; allocated during decode: %d MiB; VerifyEnd: %v",
+		msg.Len(), derr, len(m.VolumeName), (after.TotalAlloc-before.TotalAlloc)>>20, verr)
+}

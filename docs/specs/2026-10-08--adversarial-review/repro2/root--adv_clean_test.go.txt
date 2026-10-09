@@ -1,0 +1,119 @@
+package main
+
+import (
+	"crypto/md5" // nolint:gosec
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// Root destination backs up tank/data; s3://bucket/tank/ backs up pool "data".
+// The root's own volume key "tank/data|..." is under the nested root "tank/".
+func TestAdvForceNestedDeletesOwnManifest(t *testing.T) {
+	objects := merge(
+		backupSet(t, "", "tank/data"),
+		backupSetAt(t, "tank/", "data", "autosnap_2026-10-01_00:00:00_monthly"),
+	)
+	for _, force := range []bool{false, true} {
+		fake := newFakeS3(t, objects)
+		args := []string{"--dry-run=false", fmt.Sprintf("--force=%v", force), "s3://bucket"}
+		logs, err := cleanS3(t, args...)
+		t.Logf("clean %v: err=%v deleted=%q", args, err, fake.deleted)
+		if strings.Contains(logs, "missing volume") {
+			t.Errorf("clean %v reports root's intact set as broken\n%s", args, logs)
+		}
+		if len(fake.deleted) != 0 {
+			t.Errorf("clean %v deleted %q", args, fake.deleted)
+		}
+	}
+}
+
+// interceptS3 wraps fake: before serving clean's full listing (prefix "", not Init's max-keys=0
+// probe), run hook once.
+type interceptS3 struct {
+	*fakeS3
+	hook func()
+	done bool
+}
+
+func (i *interceptS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if !i.done && r.Method == http.MethodGet && (r.URL.Path == "/bucket" || r.URL.Path == "/bucket/") &&
+		q.Get("prefix") == "" && q.Get("max-keys") != "0" {
+		i.done = true
+		i.hook()
+	}
+	i.fakeS3.ServeHTTP(w, r)
+}
+
+func writeLock(t *testing.T, work, dataset string) string {
+	t.Helper()
+	dir := filepath.Join(work, "locks")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// nolint:gosec
+	p := filepath.Join(dir, fmt.Sprintf("%x.lck", md5.Sum([]byte(dataset))))
+	if err := ioutil.WriteFile(p, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// A send of tank/data holds the lock while clean syncs the cache, and finishes (uploads its
+// manifest, caches it, releases the lock) while clean lists the bucket. clean then takes the
+// lock and judges the finished set's volumes by the stale manifest list.
+func TestAdvCleanRacesFinishingSend(t *testing.T) {
+	old := backupSet(t, "", "tank/data")
+	newSet := backupSetAt(t, "", "tank/data", "autosnap_2026-10-01_00:00:00_monthly")
+	var newManifest, newVol string
+	for k := range newSet {
+		if strings.HasPrefix(k, "manifests|") {
+			newManifest = k
+		} else {
+			newVol = k
+		}
+	}
+	for _, cleanLocal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cleanLocal=%v", cleanLocal), func(t *testing.T) {
+			work := t.TempDir()
+			objects := merge(old)
+			// nolint:gosec
+			cacheDir := filepath.Join(work, "cache", fmt.Sprintf("%x", md5.Sum([]byte("s3://bucket"))))
+			if err := os.MkdirAll(cacheDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			// nolint:gosec
+			cached := filepath.Join(cacheDir, fmt.Sprintf("%x", md5.Sum([]byte(newManifest))))
+			if cleanLocal {
+				// The send has finished volume 1: its partial manifest is cached, the volume is up.
+				objects[newVol] = newSet[newVol]
+				if err := ioutil.WriteFile(cached, newSet[newManifest], 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			lock := writeLock(t, work, "tank/data")
+			fake := newFakeS3(t, objects)
+			ic := &interceptS3{fakeS3: fake}
+			ic.hook = func() {
+				// The send finishes: last volume and manifest uploaded, manifest cached, lock released.
+				fake.objects[newVol] = newSet[newVol]
+				fake.objects[newManifest] = newSet[newManifest]
+				_ = ioutil.WriteFile(cached, newSet[newManifest], 0600)
+				_ = os.Remove(lock)
+			}
+			srv := startServer(t, ic)
+			t.Setenv("AWS_S3_CUSTOM_ENDPOINT", srv)
+			args := []string{"--dry-run=false", fmt.Sprintf("--cleanLocal=%v", cleanLocal), "s3://bucket"}
+			logs, err := cleanS3In(t, work, args...)
+			t.Logf("clean %v: err=%v deleted=%q", args, err, fake.deleted)
+			if len(fake.deleted) != 0 {
+				t.Errorf("clean deleted %q, volumes of a set whose manifest %s is at the destination\n%s", fake.deleted, newManifest, logs)
+			}
+		})
+	}
+}

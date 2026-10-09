@@ -1,0 +1,25 @@
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
+// A non-smart send with --encryptTo needs only the public ring, so its --resume cannot decrypt
+// the cached partial manifest. That is not a KeyError: tryResume takes it for a damaged cache and
+// silently starts over (a Warning), every time.
+func TestAdvRev2ResumeWithoutSecretRingNeverResumes(t *testing.T) {
+	env := newE2EEnv(t)
+	rings := writeRings(t, newKey(t)) // pub, path, sec, path, --encryptTo, x, --signFrom, x
+	pubOnly := []string{rings[0], rings[1], "--encryptTo", "backup@example.com"}
+	args := append([]string{"--volsize", "1", "--compressor", ""}, pubOnly...)
+	env.interruptedSend(t, 4<<20, env.dest, args...)
+	dropVolumesFrom(t, env.dest, 3)
+	logs, err := guarded(t, func() (string, error) {
+		return env.send(append(args, "--resume", "tank/data@a", "file://"+env.dest)...)
+	})
+	t.Logf("err=%v\n%s", err, logs)
+	if !strings.Contains(logs, "Resuming from volume") {
+		t.Errorf("--resume with --encryptTo and no secret ring did not resume")
+	}
+}

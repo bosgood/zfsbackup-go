@@ -1,0 +1,58 @@
+package main
+
+import (
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/files"
+)
+
+// receive --maxFileBuffer 0 streams each volume into zfs receive and compares its SHA-256 with the
+// (signed) manifest only afterwards. A genuine, correctly signed volume of ANOTHER set put in place
+// of this set's volume passes the signature check and is received in full before the mismatch is seen.
+func TestAdvRev2PipeReceiveFeedsSwappedVolume(t *testing.T) {
+	env := newE2EEnv(t)
+	rings := writeRings(t, newKey(t))
+	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+		{Name: "b", CreationTime: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)},
+		{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+	})
+	for _, s := range []string{"tank/data@a", "tank/data@b"} {
+		env.sendOK(t, append(append([]string{"--compressor", ""}, rings...), s, "file://"+env.dest)...)
+	}
+	va, vb := volumeNamed(t, env.dest, 1), ""
+	for name := range destObjects(t, env.dest) {
+		if strings.HasPrefix(name, "tank/data|b.zstream") {
+			vb = filepath.Join(env.dest, name)
+		}
+	}
+	if strings.Contains(va, "|b.") {
+		for name := range destObjects(t, env.dest) {
+			if strings.HasPrefix(name, "tank/data|a.zstream") {
+				va = filepath.Join(env.dest, name)
+			}
+		}
+	}
+	data, err := ioutil.ReadFile(va)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(vb, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	receiveLog := filepath.Join(t.TempDir(), "receive.log")
+	t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive(append(append([]string{}, rings...), "--maxFileBuffer", "0", "--maxRetryTime", "2s", "tank/data@b", "file://"+env.dest, "restored/data")...)
+	})
+	got, _ := ioutil.ReadFile(receiveLog)
+	t.Logf("receive err=%v\nzfs receive consumed: %q\n%s", err, got, logs)
+	if len(got) > 0 {
+		t.Errorf("zfs receive consumed the whole swapped volume and exited 0 before the mismatch was detected")
+	}
+}

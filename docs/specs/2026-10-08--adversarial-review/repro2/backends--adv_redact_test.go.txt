@@ -1,0 +1,21 @@
+package backends
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestAdvRedactBypass(t *testing.T) {
+	for in, password := range map[string]string{
+		"ssh://u:/secret@h/x":    "/secret",
+		"ssh://u:?secret@h/x":    "?secret",
+		"ssh://u:#secret@h/x":    "#secret",
+		"ssh://u:1234/secret@h/x": "1234/secret",
+		"ssh://u:99?pw@h/x":      "99?pw",
+	} {
+		got := RedactURI(in)
+		if strings.Contains(got, strings.TrimLeft(password, "/?#0123456789")) {
+			t.Errorf("RedactURI(%q) = %q leaks password %q", in, got, password)
+		}
+	}
+}

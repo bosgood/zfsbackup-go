@@ -1,0 +1,96 @@
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/files"
+)
+
+// Sibling of e10bfe6: a --resume run that STARTS OVER ("Nothing verifiable to resume") rewrites
+// volumes exactly like a plain run, but does not discard the cached manifest. If it fails before
+// its first saveManifest, the cache still describes the older attempt's objects, and the next
+// --resume trusts their SHA-256s.
+func TestAdvRev2ResumeStartOverKeepsStaleCache(t *testing.T) { resumeStaleCache(t, 1, "Nothing verifiable to resume") }
+
+// The same hole on the successful-resume path: a resume that keeps vol1 and re-sends vol2.. leaves
+// the cached entries for vol2.. in place until its next saveManifest.
+func TestAdvRev2ResumeFromKKeepsStaleCache(t *testing.T) { resumeStaleCache(t, 2, "Resuming from volume 2") }
+
+func resumeStaleCache(t *testing.T, broken int64, want string) {
+	const streamBytes = 3 << 20
+	env := newE2EEnv(t)
+	dest2 := newDest(t)
+	rings := writeRings(t, newKey(t))
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(streamBytes))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	dests := "file://" + env.dest + ",file://" + dest2
+	args := append([]string{"--volsize", "1", "--compressor", "", "--maxRetryTime", "2s", "--maxBackoffTime", "1s"}, rings...)
+
+	// Attempt A: completes, then is made to look interrupted before vol3 and the manifest.
+	env.sendOK(t, append(args, "tank/data@a", dests)...)
+	for _, d := range []string{env.dest, dest2} {
+		for _, n := range manifestNames(destObjects(t, d)) {
+			if err := os.Remove(filepath.Join(d, n)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		dropVolumesFrom(t, d, 3)
+	}
+
+	// dest2's vol1 is unreadable as an object (a directory in its place): the resume finds
+	// nothing verifiable and starts over, and its upload of vol1 to dest2 fails.
+	vol1 := volumeNamed(t, dest2, broken)
+	aside := filepath.Join(t.TempDir(), "vol1")
+	if err := os.Rename(vol1, aside); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(vol1, 0700); err != nil {
+		t.Fatal(err)
+	}
+	before := destObjects(t, env.dest)
+	logs, err := guarded(t, func() (string, error) { return env.send(append(args, "--resume", "tank/data@a", dests)...) })
+	if err == nil {
+		t.Fatalf("attempt B succeeded:\n%s", logs)
+	}
+	if !strings.Contains(logs, want) {
+		t.Fatalf("attempt B did not start over:\n%s", logs)
+	}
+	after := destObjects(t, env.dest)
+	changed := 0
+	for name, data := range before {
+		if !bytes.Equal(after[name], data) {
+			changed++
+		}
+	}
+	t.Logf("attempt B rewrote %d of dest1's objects", changed)
+	if changed == 0 {
+		t.Fatalf("attempt B rewrote none of dest1's objects; the scenario needs it to")
+	}
+	// dest2 recovers.
+	if err := os.Remove(vol1); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(aside, vol1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Attempt C: --resume.
+	logs, err = guarded(t, func() (string, error) { return env.send(append(args, "--resume", "tank/data@a", dests)...) })
+	if err != nil {
+		t.Fatalf("resume: %v\n%s", err, logs)
+	}
+	t.Logf("attempt C log:\n%s", logs)
+
+	t.Setenv("FAKEZFS_RECEIVE_LOG", filepath.Join(t.TempDir(), "receive.log"))
+	rargs := append(append([]string{}, rings...), "--maxRetryTime", "2s", "tank/data@a", "file://"+env.dest, "restored/data")
+	logs, err = guarded(t, func() (string, error) { return env.receive(rargs...) })
+	if err != nil {
+		t.Errorf("resume exited 0 but a restore from dest1 fails: %v\n%s", err, logs)
+	}
+}

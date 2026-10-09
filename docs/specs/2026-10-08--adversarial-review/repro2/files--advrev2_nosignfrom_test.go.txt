@@ -1,0 +1,20 @@
+package files
+
+import (
+	"testing"
+
+	"golang.org/x/crypto/openpgp"
+)
+
+// Without --signFrom, a manifest signed by a key the rings lack is rejected, and the error blames
+// --signFrom's ring, a flag the user did not pass.
+func TestAdvRev2UnknownSignerWithoutSignFrom(t *testing.T) {
+	enc, signer := newTestKey(t, "backup@example.com"), newTestKey(t, "signer@example.com")
+	path := writeManifest(t, manifestJob(enc, signer))
+	loadRings(t, []*openpgp.Entity{enc}, []*openpgp.Entity{enc})
+	step, err := readManifest(t, path, manifestJob(enc, nil))
+	t.Logf("step=%s err=%v", step, err)
+	if err != nil {
+		t.Errorf("a restore without --signFrom fails at %s: %v", step, err)
+	}
+}

@@ -1,0 +1,14 @@
+package backends
+
+import "testing"
+
+func TestAdvSecRedactURI(t *testing.T) {
+	for _, u := range []string{
+		"ssh://bob:2024/Secret@host/backups",
+		"ssh://bob:12345#frag@host/backups",
+		"ssh://bob:s3cret@host/backups",
+		"ssh://bob:p%40ss@host/x",
+	} {
+		t.Logf("%-40q -> %q", u, RedactURI(u))
+	}
+}

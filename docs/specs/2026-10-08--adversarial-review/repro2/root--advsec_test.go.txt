@@ -1,0 +1,250 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"golang.org/x/crypto/openpgp"
+
+	"github.com/someone1/zfsbackup-go/files"
+	"github.com/someone1/zfsbackup-go/internal/fakezfs"
+)
+
+func streamHash(t *testing.T, snap string, n int64) string {
+	h := sha256.New()
+	if _, err := io.Copy(h, fakezfs.Stream("", snap, n)); err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf("%d %s\n", n, hex.EncodeToString(h.Sum(nil)))
+}
+
+// A hostile destination copies the (validly signed) manifest of tank/data@a over the manifest
+// object name of tank/data@b. receive tank/data@b then restores a's stream and exits 0.
+func TestAdvSecManifestSubstitution(t *testing.T) {
+	env := newE2EEnv(t)
+	key := newKey(t)
+	rings := writeRings(t, key)
+	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+		{Name: "b", CreationTime: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)},
+		{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+	})
+	for _, s := range []string{"tank/data@a", "tank/data@b"} {
+		env.sendOK(t, append(append([]string{"--compressor", ""}, rings...), s, "file://"+env.dest)...)
+	}
+	names := manifestNames(destObjects(t, env.dest))
+	t.Logf("manifests: %q", names)
+	var ma, mb string
+	for _, n := range names {
+		if strings.Contains(n, "|a.") {
+			ma = n
+		}
+		if strings.Contains(n, "|b.") {
+			mb = n
+		}
+	}
+	data, err := ioutil.ReadFile(filepath.Join(env.dest, ma))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = ioutil.WriteFile(filepath.Join(env.dest, mb), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.RemoveAll(filepath.Join(env.work, "cache")); err != nil {
+		t.Fatal(err)
+	}
+	receiveLog := filepath.Join(t.TempDir(), "receive.log")
+	t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive(append(append([]string{}, rings...), "tank/data@b", "file://"+env.dest, "restored/data")...)
+	})
+	got, _ := ioutil.ReadFile(receiveLog)
+	t.Logf("receive err=%v\nzfs receive got: %q\nstream of a: %q\nstream of b: %q", err, got,
+		streamHash(t, "tank/data@a", 4096), streamHash(t, "tank/data@b", 4096))
+	if err == nil && string(got) == streamHash(t, "tank/data@a", 4096) {
+		t.Errorf("DEFECT: receive of @b restored @a's stream and exited 0\n%s", logs)
+	}
+}
+
+// With --maxFileBuffer 0, a volume forged by someone without the signing key (encrypted to the
+// public key, signed by their own key) is fed to zfs receive before the signature is checked.
+func TestAdvSecPipeUnverifiedBytesReachZFS(t *testing.T) {
+	env := newE2EEnv(t)
+	k1, k2 := newKey(t), newKey(t)
+	rings := writeRings(t, k1)
+	vols := env.sentSet(t, rings...)
+
+	evil := bytes.Repeat([]byte("EVIL-ZFS-STREAM-"), 4096)
+	var forged bytes.Buffer
+	w, err := openpgp.Encrypt(&forged, []*openpgp.Entity{k1}, k2, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = w.Write(evil); err != nil {
+		t.Fatal(err)
+	}
+	if err = w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = ioutil.WriteFile(filepath.Join(env.dest, vols[0]), forged.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	tee := filepath.Join(t.TempDir(), "tee")
+	script := filepath.Join(t.TempDir(), "zfs.sh")
+	body := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = receive ]; then cat > %q; exit 0; fi\nexec %q \"$@\"\n", tee, env.self)
+	if err = ioutil.WriteFile(script, []byte(body), 0755); err != nil {
+		t.Fatal(err)
+	}
+	env.self = script
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive(append(append([]string{"--maxFileBuffer", "0"}, rings...), "tank/data@a", "file://"+env.dest, "restored/data")...)
+	})
+	got, _ := ioutil.ReadFile(tee)
+	t.Logf("receive err=%v; zfs receive stdin got %d bytes, %d of them forged", err, len(got), bytes.Count(got, []byte("EVIL-ZFS-STREAM-"))*16)
+	if bytes.Contains(got, []byte("EVIL-ZFS-STREAM-")) {
+		t.Errorf("DEFECT: zfs receive was fed %d bytes of a volume whose signature does not verify\n%s",
+			bytes.Count(got, []byte("EVIL-ZFS-STREAM-"))*16, lastLines(logs, 6))
+	}
+}
+
+func lastLines(s string, n int) string {
+	l := strings.Split(strings.TrimSpace(s), "\n")
+	if len(l) > n {
+		l = l[len(l)-n:]
+	}
+	return strings.Join(l, "\n")
+}
+
+// Without PGP flags, a manifest planted at a file:// destination names a volume outside the
+// destination; clean --force deletes it on the host.
+func TestAdvSecCleanForceDeletesOutsideFileDestination(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+		{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+	})
+	env.sendOK(t, "--compressor", "", "tank/data@a", "file://"+env.dest)
+
+	victim := filepath.Join(filepath.Dir(env.dest), "victim.txt")
+	if err := ioutil.WriteFile(victim, []byte("host file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	forged := &files.JobInfo{
+		VolumeName:   "tank/data",
+		BaseSnapshot: files.SnapshotInfo{Name: "x", CreationTime: time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)},
+		Compressor:   "", Separator: "|", ManifestPrefix: "manifests",
+		Volumes: []*files.VolumeInfo{
+			{ObjectName: "../victim.txt"},
+			{ObjectName: "tank/data|x.zstream.vol2"},
+		},
+	}
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if err := json.NewEncoder(gz).Encode(forged); err != nil {
+		t.Fatal(err)
+	}
+	gz.Close()
+	if err := ioutil.WriteFile(filepath.Join(env.dest, "manifests|tank/data|x.manifest.gz"), buf.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := guarded(t, func() (string, error) {
+		return cleanS3In(t, env.work, "--force", "file://"+env.dest)
+	})
+	if _, serr := os.Stat(victim); os.IsNotExist(serr) {
+		t.Errorf("DEFECT: clean --force deleted %s, outside the destination (err=%v)\n%s", victim, err, lastLines(logs, 8))
+	} else {
+		t.Logf("victim survived; err=%v\n%s", err, logs)
+	}
+}
+
+// Without --signFrom, the manifest's Compressor names the program receive executes. A file://
+// destination (a mounted disk) can supply that program itself.
+func TestAdvSecManifestCompressorExecutes(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+		{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+	})
+	env.sendOK(t, "--compressor", "", "tank/data@a", "file://"+env.dest)
+	name := "manifests|tank/data|a.manifest.gz"
+	pwned := filepath.Join(t.TempDir(), "pwned")
+	evil := filepath.Join(env.dest, "evil.sh")
+	if err := ioutil.WriteFile(evil, []byte(fmt.Sprintf("#!/bin/sh\nid > %q\ncat\n", pwned)), 0755); err != nil {
+		t.Fatal(err)
+	}
+	vol, err := files.ExtractLocal(context.Background(), &files.JobInfo{}, filepath.Join(env.dest, name), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := new(files.JobInfo)
+	if err = json.NewDecoder(vol).Decode(m); err != nil {
+		t.Fatal(err)
+	}
+	vol.Close()
+	m.Compressor = evil
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	json.NewEncoder(gz).Encode(m)
+	gz.Close()
+	if err = ioutil.WriteFile(filepath.Join(env.dest, name), buf.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	os.RemoveAll(filepath.Join(env.work, "cache"))
+	t.Setenv("FAKEZFS_RECEIVE_LOG", filepath.Join(t.TempDir(), "r.log"))
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive("tank/data@a", "file://"+env.dest, "restored/data")
+	})
+	if out, rerr := ioutil.ReadFile(pwned); rerr == nil {
+		t.Errorf("DEFECT: receive executed the destination's %s: %s (receive err=%v)", evil, out, err)
+	} else {
+		t.Logf("not executed; err=%v\n%s", err, logs)
+	}
+}
+
+// Without PGP flags, clean --force computes the manifest object name to delete from the forged
+// manifest's VolumeName, and the file backend joins it unchecked: a file outside the destination
+// whose name ends in "|<snap>.manifest.gz" is deleted.
+func TestAdvSecCleanForceManifestNameTraversal(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+		{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+	})
+	env.sendOK(t, "--compressor", "", "tank/data@a", "file://"+env.dest)
+	victim := filepath.Join(filepath.Dir(env.dest), "victim|x.manifest.gz")
+	if err := ioutil.WriteFile(victim, []byte("another destination's manifest"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	forged := &files.JobInfo{
+		VolumeName:   "a/../../victim",
+		BaseSnapshot: files.SnapshotInfo{Name: "x", CreationTime: time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)},
+		Compressor:   "", Separator: "|", ManifestPrefix: "manifests",
+		Volumes:      []*files.VolumeInfo{{ObjectName: "nothing-here"}},
+	}
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	json.NewEncoder(gz).Encode(forged)
+	gz.Close()
+	if err := ioutil.WriteFile(filepath.Join(env.dest, "manifests|zz.manifest.gz"), buf.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := guarded(t, func() (string, error) { return cleanS3In(t, env.work, "--force", "file://"+env.dest) })
+	if _, serr := os.Stat(victim); os.IsNotExist(serr) {
+		t.Errorf("DEFECT: clean --force deleted %s, outside the destination (err=%v)\n%s", victim, err, lastLines(logs, 4))
+	} else {
+		t.Logf("victim survived; err=%v\n%s", err, logs)
+	}
+}

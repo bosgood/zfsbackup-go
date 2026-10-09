@@ -1,0 +1,56 @@
+package main
+
+import (
+	"crypto/sha256"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/internal/fakezfs"
+)
+
+// After 2a54b31, receive --auto always restores a snapshot from its full when one exists, even
+// when the local dataset already holds the parent of its incremental. Updating a restored copy
+// (local has @a; destination has full a, a->b, full b) then receives the FULL of b into a dataset
+// that already has snapshots, which real zfs refuses ("destination has snapshots ... must destroy
+// them to overwrite it"); the incremental a->b would have applied.
+func TestAdvRev2AutoRestoreFullOverExistingChain(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+	a := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).Unix()
+	b := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Unix()
+	fixture := fmt.Sprintf("tank/data@b\t%d\tsnapshot\ntank/data@a\t%d\tsnapshot\n", b, a)
+	if err := ioutil.WriteFile(env.snapshots, []byte(fixture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"tank/data@a"}, {"-i", "a", "tank/data@b"}, {"tank/data@b"}} {
+		args = append([]string{"--compressor", ""}, args...)
+		if logs, err := env.send(append(args, "file://"+env.dest)...); err != nil {
+			t.Fatalf("send %v: %v\n%s", args, err, logs)
+		}
+	}
+	// The restored copy already has @a.
+	fixture += fmt.Sprintf("restored/data@a\t%d\tsnapshot\n", a)
+	if err := ioutil.WriteFile(env.snapshots, []byte(fixture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	receiveLog := t.TempDir() + "/receive.log"
+	t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive("--auto", "--logLevel", "info", "tank/data@b", "file://"+env.dest, "restored/data")
+	})
+	if err != nil {
+		t.Fatalf("receive: %v\n%s", err, logs)
+	}
+	got, _ := ioutil.ReadFile(receiveLog)
+	h := sha256.New()
+	_, _ = io.Copy(h, fakezfs.Stream("", "tank/data@b", 4096))
+	full := fmt.Sprintf("4096 %x", h.Sum(nil))
+	t.Logf("received: %s(full of b: %s)\n%s", got, full, logs)
+	if strings.TrimSpace(string(got)) == full {
+		t.Errorf("receive --auto sent the FULL of b into restored/data, which already has @a; the incremental a->b applies there")
+	}
+}

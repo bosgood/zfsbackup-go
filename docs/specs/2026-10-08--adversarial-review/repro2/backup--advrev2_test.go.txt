@@ -1,0 +1,77 @@
+package backup
+
+import (
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/files"
+)
+
+func TestAdvrev2SkipEmptySideSilentlyIgnored(t *testing.T) {
+	for _, spec := range []string{"until=2027-02-01,skip=..2026-12-31", "until=2027-02-01,skip=2026-12-24.."} {
+		s := &Scenario{}
+		err := s.ParseScheduleSpec(spec)
+		t.Logf("%q: err=%v skips=%+v", spec, err, s.Skips)
+		if err == nil {
+			t.Errorf("%q accepted; skips=%+v (a zero range skips nothing)", spec, s.Skips)
+		}
+	}
+}
+
+// A monthly taken and pruned between two runs never reaches sim.Created, so
+// coverage does not flag it as never backed up.
+func TestAdvrev2CoverageMissesMonthlyPrunedBetweenRuns(t *testing.T) {
+	s := &Scenario{Volume: "tank/data", DestBackups: [][]*files.JobInfo{{}}}
+	s.JobInfo = files.JobInfo{FullIfOlderThan: 4320 * time.Hour, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_monthly"}
+	if err := s.ParseScheduleSpec("policy=monthly=2,from=2026-09-01T01:00:00Z,until=2027-09-01,every=2160h,checks=coverage:_monthly"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReadSnapshots(strings.NewReader("autosnap_2026-09-01_00:00:00_monthly\n")); err != nil {
+		t.Fatal(err)
+	}
+	sim := s.Run()
+	v := sim.Check(s.Checks)
+	_ = sim.WriteText(os.Stdout, v)
+	var created []string
+	for _, c := range sim.Created {
+		created = append(created, c.Name)
+	}
+	t.Logf("created: %v", created)
+	sent := map[string]bool{}
+	for _, m := range sim.Manifests[0] {
+		sent[m.BaseSnapshot.Name] = true
+	}
+	// every 1st of the month from 2026-10 .. 2027-08 was taken by sanoid
+	missing := 0
+	for d := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC); d.Before(time.Date(2027, 9, 1, 0, 0, 0, 0, time.UTC)); d = d.AddDate(0, 1, 0) {
+		name := "autosnap_" + d.Format("2006-01-02_15:04:05") + "_monthly"
+		if !sent[name] {
+			missing++
+		}
+	}
+	t.Logf("monthlies never backed up: %d; violations: %d", missing, len(v))
+	if missing > 0 && len(v) == 0 {
+		t.Errorf("coverage:_monthly OK although %d monthlies were never backed up", missing)
+	}
+}
+
+// --manifests with epochs (as a real manifest records) next to a names-only
+// capture: no adoption, so the backed-up snapshot looks pruned.
+func TestAdvrev2ManifestsFileNoAdoption(t *testing.T) {
+	s := &Scenario{Volume: "tank/data"}
+	s.JobInfo = files.JobInfo{FullIfOlderThan: 4320 * time.Hour, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_monthly"}
+	if err := s.ReadSnapshots(strings.NewReader("tank/data@autosnap_2026-10-01_00:00:00_monthly\ntank/data@autosnap_2026-09-01_00:00:00_monthly\n")); err != nil {
+		t.Fatal(err)
+	}
+	sep := time.Date(2026, 9, 1, 0, 0, 7, 0, time.UTC).Unix()
+	if err := s.ReadManifests(strings.NewReader("autosnap_2026-09-01_00:00:00_monthly " + itoa(sep) + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	sim := s.Run()
+	_ = sim.WriteText(os.Stdout, sim.Check(nil))
+}
+
+func itoa(i int64) string { return fmt.Sprint(i) }

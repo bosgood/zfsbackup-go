@@ -1,0 +1,66 @@
+package files
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io/ioutil"
+	"path/filepath"
+	"testing"
+
+	"golang.org/x/crypto/openpgp"
+
+	"github.com/someone1/zfsbackup-go/pgp"
+)
+
+func extractRecovering(t *testing.T, path string, j *JobInfo) (perr interface{}, err error) {
+	defer func() { perr = recover() }()
+	v, err := ExtractLocal(context.Background(), j, path, true)
+	if v != nil {
+		v.Close()
+	}
+	return nil, err
+}
+
+// pgp.PromptFunc panics. openpgp.ReadMessage calls it for any message it cannot decrypt with an
+// already-decrypted key but that names a passphrase or a still-locked secret key. Reading such an
+// object crashes the process instead of returning an error.
+func TestAdvRev2PromptFuncPanics(t *testing.T) {
+	key := newTestKey(t, "backup@example.com")
+	old := newTestKey(t, "old@example.com")
+	loadRings(t, []*openpgp.Entity{key, old}, []*openpgp.Entity{key, old})
+
+	t.Run("symmetric message planted at the destination", func(t *testing.T) {
+		var buf bytes.Buffer
+		w, err := openpgp.SymmetricallyEncrypt(&buf, []byte("x"), nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprint(w, "not a manifest")
+		w.Close()
+		path := filepath.Join(t.TempDir(), "m")
+		if err = ioutil.WriteFile(path, buf.Bytes(), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if p, err := extractRecovering(t, path, manifestJob(key, key)); p != nil {
+			t.Errorf("Extract panicked: %v", p)
+		} else {
+			t.Logf("Extract returned %v", err)
+		}
+	})
+
+	t.Run("manifest encrypted to a rotated still-locked key", func(t *testing.T) {
+		path := writeManifest(t, manifestJob(old, nil))
+		// The old key is in the secret ring but passphrase-protected: only --encryptTo's key is decrypted.
+		locked := pgp.GetPrivateKeyByEmail("old@example.com")
+		locked.PrivateKey.Encrypted = true
+		for _, s := range locked.Subkeys {
+			s.PrivateKey.Encrypted = true
+		}
+		if p, err := extractRecovering(t, path, manifestJob(key, nil)); p != nil {
+			t.Errorf("Extract panicked: %v", p)
+		} else {
+			t.Logf("Extract returned %v", err)
+		}
+	})
+}

@@ -1,0 +1,117 @@
+package main
+
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/files"
+)
+
+// plan --full --resume must agree with send --full --resume when one destination
+// lacks the full's manifest.
+func TestAdvrev2PlanFullResumeDisagreesWithSend(t *testing.T) {
+	env := newE2EEnv(t)
+	dest2 := newDest(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(3<<20))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a_monthly", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	dests := "file://" + env.dest + ",file://" + dest2
+	env.sendOK(t, "--volsize", "1", "--compressor", "", "--full", "--fullSnapshotSuffix", "_monthly", "tank/data", dests)
+	for name := range destObjects(t, dest2) {
+		if strings.HasPrefix(name, "manifests|") {
+			if err := os.Remove(filepath.Join(dest2, name)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	out, logs, err := env.plan("--full", "--fullSnapshotSuffix", "_monthly", "--resume", "tank/data", dests)
+	t.Logf("plan --full --resume: err=%v\nout:\n%s\nlogs:\n%s", err, out, logs)
+	slogs, serr := env.send("--volsize", "1", "--compressor", "", "--full", "--fullSnapshotSuffix", "_monthly", "--resume", "--logLevel", "info", "tank/data", dests)
+	t.Logf("send --full --resume: err=%v\nlogs:\n%s", serr, slogs)
+	if (err == nil) != (serr == nil) {
+		t.Errorf("DISAGREE: plan err=%v, send err=%v", err, serr)
+	}
+}
+
+// plan --resume --manifests: --resume is ignored, so plan reports an error
+// where send --resume completes the set.
+func TestAdvrev2PlanResumeWithManifestsIgnored(t *testing.T) {
+	env := newE2EEnv(t)
+	man := filepath.Join(t.TempDir(), "m.txt")
+	if err := ioutil.WriteFile(man, []byte("autosnap_2026-09-01_00:00:00_monthly\n---\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	snaps := filepath.Join(t.TempDir(), "s.txt")
+	if err := ioutil.WriteFile(snaps, []byte("tank/data@autosnap_2026-09-01_00:00:00_monthly\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out, logs, err := env.plan("--fullIfOlderThan", "4320h", "--fullSnapshotSuffix", "_monthly", "--incrementalSnapshotSuffix", "_monthly",
+		"--resume", "--snapshots", snaps, "--manifests", man, "tank/data")
+	t.Logf("err=%v\nout:\n%s\nlogs:\n%s", err, out, logs)
+	if !strings.Contains(out, "complete-partial") {
+		t.Errorf("plan --resume --manifests does not preview complete-partial")
+	}
+}
+
+// names-only capture without location=: on a non-UTC host, plan disagrees
+// with the live pool (incrementalSnapshotSuffix unset).
+func TestAdvrev2PlanNamesOnlyZone(t *testing.T) {
+	env := newE2EEnv(t)
+	ny, _ := time.LoadLocation("America/New_York")
+	lag := 7 * time.Second
+	snap := func(local time.Time, period string) files.SnapshotInfo {
+		return files.SnapshotInfo{Name: "autosnap_" + local.Format("2006-01-02_15:04:05") + "_" + period, CreationTime: local.Add(lag)}
+	}
+	flags := []string{"--fullIfOlderThan", "4320h", "--fullSnapshotSuffix", "_monthly"}
+	target := "file://" + env.dest
+	m := snap(time.Date(2026, 9, 1, 0, 0, 0, 0, ny), "monthly")
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{m})
+	env.sendOK(t, append(flags, "tank/data", target)...)
+	pool := []files.SnapshotInfo{
+		snap(time.Date(2026, 9, 1, 3, 0, 0, 0, ny), "hourly"),
+		snap(time.Date(2026, 9, 1, 2, 0, 0, 0, ny), "hourly"),
+		m,
+	}
+	env.writeSnapshots(t, "tank/data", pool)
+	capture := filepath.Join(t.TempDir(), "capture.txt")
+	var b strings.Builder
+	for _, s := range pool {
+		b.WriteString("tank/data@" + s.Name + "\n")
+	}
+	if err := ioutil.WriteFile(capture, []byte(b.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	live, _, _ := env.plan(append(flags, "tank/data", target)...)
+	fromCapture, logs, _ := env.plan(append(flags, "--snapshots", capture, "tank/data", target)...)
+	t.Logf("live:\n%s\ncapture:\n%s\nlogs:\n%s", live, fromCapture, logs)
+	if live != fromCapture {
+		t.Errorf("DISAGREE")
+	}
+}
+
+// A manifest at the destination naming a snapshot with a future creation time
+// (forged, or from another host sharing the prefix and dataset name) makes
+// every later smart send a silent no-op with exit 0.
+func TestAdvrev2FutureManifestSilencesBackups(t *testing.T) {
+	env := newE2EEnv(t)
+	flags := []string{"--fullIfOlderThan", "4320h", "--fullSnapshotSuffix", "_monthly", "--incrementalSnapshotSuffix", "_monthly"}
+	target := "file://" + env.dest
+	// "other host": same dataset name, a monthly dated 2099.
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "autosnap_2099-01-01_00:00:00_monthly", CreationTime: time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)}})
+	env.sendOK(t, append(flags, "tank/data", target)...)
+	// this host's real pool, months of monthlies
+	var pool []files.SnapshotInfo
+	for m := 12; m >= 1; m-- {
+		d := time.Date(2026, time.Month(m), 1, 0, 0, 7, 0, time.UTC)
+		pool = append(pool, files.SnapshotInfo{Name: "autosnap_" + d.Format("2006-01-02_15:04:05") + "_monthly", CreationTime: d})
+	}
+	env.writeSnapshots(t, "tank/data", pool)
+	logs, err := env.send(append(flags, "tank/data", target)...)
+	t.Logf("send: err=%v\n%s", err, logs)
+	out, plogs, perr := env.plan(append(flags, "tank/data", target)...)
+	t.Logf("plan: err=%v\n%s\n%s", perr, out, plogs)
+}

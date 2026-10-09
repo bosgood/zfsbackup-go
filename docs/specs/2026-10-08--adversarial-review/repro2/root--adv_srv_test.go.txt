@@ -1,0 +1,13 @@
+package main
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func startServer(t *testing.T, h http.Handler) string {
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return srv.URL
+}

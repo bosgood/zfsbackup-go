@@ -1,0 +1,17 @@
+package main
+
+import (
+	"testing"
+)
+
+// s3://bucket/manifests-old/ is another destination; from the bucket root, List("manifests")
+// returns its volumes too, which clean then tries to decode as manifests.
+func TestAdvManifestPrefixCollision(t *testing.T) {
+	objects := merge(backupSet(t, "", "tank/data"), backupSetAt(t, "manifests-old/", "tank/data", "autosnap_2026-10-01_00:00:00_monthly"))
+	fake := newFakeS3(t, objects)
+	logs, err := cleanS3(t, "--dry-run=true", "s3://bucket")
+	t.Logf("err=%v deleted=%q\n%s", err, fake.deleted, logs)
+	if err != nil {
+		t.Errorf("clean of the bucket root fails because of a sibling destination named manifests-old/: %v", err)
+	}
+}

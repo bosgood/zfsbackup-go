@@ -1,0 +1,24 @@
+package main
+
+import (
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/files"
+)
+
+// With an external decompressor, openpgp sets SignatureError in os/exec's stdin-copy goroutine,
+// and VolumeInfo.Read reads it in the receive goroutine with no synchronization between them.
+func TestAdvRev2ExternalDecompressorSignatureRace(t *testing.T) {
+	env := newE2EEnv(t)
+	rings := writeRings(t, newKey(t))
+	t.Setenv("FAKEZFS_STREAM_BYTES", "200000")
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	env.sendOK(t, append(append([]string{"--compressor", "gzip"}, rings...), "tank/data@a", "file://"+env.dest)...)
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive(append(append([]string{}, rings...), "tank/data@a", "file://"+env.dest, "restored/data")...)
+	})
+	if err != nil {
+		t.Fatalf("receive: %v\n%s", err, logs)
+	}
+}
