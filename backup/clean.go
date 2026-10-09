@@ -22,7 +22,6 @@ package backup
 
 import (
 	"context"
-	"crypto/md5" // nolint:gosec // MD5 not used for cryptographic purposes here
 	"fmt"
 	"os"
 	"path/filepath"
@@ -76,16 +75,17 @@ func nestedUnder(obj string, roots []string) string {
 	return ""
 }
 
-// localOnly is a manifest in the cache that is not at the destination.
-type localOnly struct {
-	path     string
+// cleanManifest is a manifest clean read, and where it read it.
+type cleanManifest struct {
+	object   string         // its name at the destination; "" for a manifest only in the cache
+	path     string         // its copy in the cache
 	manifest *files.JobInfo // nil when it could not be read
 }
 
 // cleanView is what clean reads from a destination and its manifest cache.
 type cleanView struct {
-	manifests  []*files.JobInfo // decoded, of the manifests at the destination
-	localOnly  []localOnly
+	manifests  []cleanManifest // of the manifests at the destination
+	localOnly  []cleanManifest // of the manifests only in the cache
 	allObjects []string
 	datasets   map[string]bool // of every decoded manifest, local-only included
 }
@@ -108,13 +108,17 @@ func readForClean(
 	}
 
 	view := &cleanView{allObjects: allObjects, datasets: make(map[string]bool)}
-	view.manifests = make([]*files.JobInfo, 0, len(manifests))
+	view.manifests = make([]cleanManifest, 0, len(manifests))
 	for _, manifest := range manifests {
 		decodedManifest, oerr := readCachedManifest(ctx, jobInfo, localCachePath, backend, manifest)
 		if oerr != nil {
 			return nil, oerr
 		}
-		view.manifests = append(view.manifests, decodedManifest)
+		view.manifests = append(view.manifests, cleanManifest{
+			object:   manifest,
+			path:     filepath.Join(localCachePath, cachedManifestName(manifest)),
+			manifest: decodedManifest,
+		})
 		view.datasets[decodedManifest.VolumeName] = true
 	}
 
@@ -122,7 +126,7 @@ func readForClean(
 	// destination copy is gone). Decode them: their datasets are locked, and without
 	// --cleanLocal their volumes are protected as live. Under --cleanLocal an undecodable one
 	// cannot be matched to a lock, so it is deleted as before.
-	view.localOnly = make([]localOnly, 0, len(localOnlyFiles))
+	view.localOnly = make([]cleanManifest, 0, len(localOnlyFiles))
 	for _, manifest := range localOnlyFiles {
 		manifestPath := filepath.Join(localCachePath, manifest)
 		decodedManifest, oerr := readManifest(ctx, manifestPath, jobInfo)
@@ -142,7 +146,7 @@ func readForClean(
 		} else {
 			view.datasets[decodedManifest.VolumeName] = true
 		}
-		view.localOnly = append(view.localOnly, localOnly{path: manifestPath, manifest: decodedManifest})
+		view.localOnly = append(view.localOnly, cleanManifest{path: manifestPath, manifest: decodedManifest})
 	}
 	return view, nil
 }
@@ -256,7 +260,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	}
 	addSeparator(jobInfo.Separator)
 	for _, manifest := range decodedManifests {
-		addSeparator(manifest.Separator)
+		addSeparator(manifest.manifest.Separator)
 	}
 	for _, local := range localOnlyManifests {
 		if local.manifest != nil {
@@ -276,7 +280,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	var localDeletes []string
 	for _, local := range localOnlyManifests {
 		if !cleanLocal || (local.manifest != nil && busy[local.manifest.VolumeName]) {
-			decodedManifests = append(decodedManifests, local.manifest) // live: its volumes stay
+			decodedManifests = append(decodedManifests, local) // live: its volumes stay
 			continue
 		}
 		if dryRun {
@@ -312,13 +316,24 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 		manifestPrefix = jobInfo.ManifestPrefix + files.DefaultSeparator
 	}
 	nested := nestedDestinations(allObjects, manifestPrefix)
+	// Every volume a manifest here names is ours, whatever directory it seems to be in: from
+	// s3://bucket, the volumes of tank/data are under tank/, which may also be a nested
+	// destination's directory.
+	named := make(map[string]bool)
+	for _, m := range decodedManifests {
+		for _, vol := range m.manifest.Volumes {
+			named[vol.ObjectName] = true
+		}
+	}
+	present := make(map[string]bool, len(allObjects))
 	candidates := make([]string, 0, len(allObjects))
 	skipped := 0
 	for _, obj := range allObjects {
+		present[obj] = true
 		if strings.HasPrefix(obj, manifestPrefix) {
 			continue
 		}
-		if root := nestedUnder(obj, nested); root != "" {
+		if root := nestedUnder(obj, nested); root != "" && !named[obj] {
 			log.AppLogger.Noticef("Skipping %s: %s holds its own manifests, so it is another destination.", obj, root)
 			skipped++
 			continue
@@ -344,73 +359,60 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	if skipped > 0 {
 		log.AppLogger.Noticef("Found %d objects in destination that clean does not recognize; they will not be deleted.", skipped)
 	}
-	allObjects = candidates
 
-	// Go through all manifests and remove from the allObjects list what we know should exist
-	for _, manifest := range decodedManifests {
+	// Go through all manifests and keep what we know should exist. Whether a set is complete is
+	// judged against everything listed, not just the candidates.
+	keep := make(map[string]bool)
+	var forcedManifests []string
+	for _, m := range decodedManifests {
+		manifest := m.manifest
 		// Not judged at all, so --force cannot remove a set a running send is still completing.
 		if busy[manifest.VolumeName] {
 			continue
 		}
-		for vidx, vol := range manifest.Volumes {
-			found := false
-			for idx := range allObjects {
-				if strings.Compare(vol.ObjectName, allObjects[idx]) == 0 {
-					allObjects = append(allObjects[:idx], allObjects[idx+1:]...)
-					found = true
-					break
-				}
-			}
-
-			if !found {
-				// Broken backup set! inform the user!
-				if jobInfo.Force {
-					log.AppLogger.Warningf(
-						"The following backup set is missing volume %s. Removing entire backupset:\n\n%s",
-						vol.ObjectName, manifest.String(),
-					)
-
-					// Compute the manifest object name and cache name to delete
-					manifest.ManifestPrefix = jobInfo.ManifestPrefix
-					manifest.SignKey = jobInfo.SignKey
-					manifest.EncryptKey = jobInfo.EncryptKey
-					tempManifest, terr := files.CreateManifestVolume(ctx, manifest)
-					if terr != nil {
-						log.AppLogger.Errorf("Could not compute manifest path due to error - %v.", terr)
-						return terr
-					}
-					allObjects = append(allObjects, tempManifest.ObjectName)
-					if err = tempManifest.Close(); err != nil {
-						log.AppLogger.Warningf("Could not close temporary manifest %v", err)
-					}
-					if err = tempManifest.DeleteVolume(); err != nil {
-						log.AppLogger.Warningf("Could not delete temporary manifest %v", err)
-					}
-					// nolint:gosec // MD5 not used for cryptographic purposes here
-					manifestPath := filepath.Join(localCachePath, fmt.Sprintf("%x", md5.Sum([]byte(tempManifest.ObjectName))))
-					if dryRun {
-						log.AppLogger.Noticef("Would delete local cached manifest %s.", manifestPath)
-					} else {
-						err = os.Remove(manifestPath)
-						if err != nil {
-							log.AppLogger.Errorf("Could not delete local manifest %s due to error - %v. Continuing.", manifestPath, err)
-						}
-					}
-
-					// Delete all volumes already processed in the manifest
-					for i := range vidx {
-						allObjects = append(allObjects, manifest.Volumes[i].ObjectName)
-					}
-					break
-				} else {
-					log.AppLogger.Warningf(
-						"The following backup set is missing volume %s:\n\n%s\n\nPass the --force flag to delete this backup set.",
-						vol.ObjectName, manifest.String(),
-					)
-				}
+		missing := ""
+		for _, vol := range manifest.Volumes {
+			if !present[vol.ObjectName] {
+				missing = vol.ObjectName
+				break
 			}
 		}
+		if missing == "" || !jobInfo.Force {
+			if missing != "" {
+				// Broken backup set! inform the user!
+				log.AppLogger.Warningf(
+					"The following backup set is missing volume %s:\n\n%s\n\nPass the --force flag to delete this backup set.",
+					missing, manifest.String(),
+				)
+			}
+			for _, vol := range manifest.Volumes {
+				keep[vol.ObjectName] = true
+			}
+			continue
+		}
+		// Its volumes are not kept, so the ones that are there are deleted with the
+		// orphans. The manifest deleted is the object read, not a name computed from its
+		// content, which nothing has checked.
+		log.AppLogger.Warningf(
+			"The following backup set is missing volume %s. Removing entire backupset:\n\n%s",
+			missing, manifest.String(),
+		)
+		if m.object != "" {
+			forcedManifests = append(forcedManifests, m.object)
+		}
+		if dryRun {
+			log.AppLogger.Noticef("Would delete local cached manifest %s.", m.path)
+		} else {
+			localDeletes = append(localDeletes, m.path)
+		}
 	}
+	allObjects = make([]string, 0, len(candidates)+len(forcedManifests))
+	for _, obj := range candidates {
+		if !keep[obj] {
+			allObjects = append(allObjects, obj)
+		}
+	}
+	allObjects = append(allObjects, forcedManifests...)
 
 	if dryRun {
 		log.AppLogger.Noticef("Dry-run: would delete %d objects in destination.", len(allObjects))

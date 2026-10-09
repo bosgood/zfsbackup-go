@@ -129,9 +129,17 @@ func adoptCacheDir(from, to string) error {
 // nolint:gocritic // Don't need to name the results
 func syncCache(ctx context.Context, j *files.JobInfo, localCache string, backend backends.Backend) ([]string, []string, error) {
 	// List all manifests at the destination
-	manifests, merr := backend.List(ctx, j.ManifestPrefix)
+	listed, merr := backend.List(ctx, j.ManifestPrefix)
 	if merr != nil {
 		return nil, nil, fmt.Errorf("could not list manifest files from the backed due to error - %v", merr)
+	}
+	manifests := make([]string, 0, len(listed))
+	for _, name := range listed {
+		if !isManifestObject(name, j.ManifestPrefix, j.Separator) {
+			log.AppLogger.Debugf("Ignoring %s: it is not a manifest, it only starts with %q.", name, j.ManifestPrefix)
+			continue
+		}
+		manifests = append(manifests, name)
 	}
 
 	atDestination := append([]string(nil), manifests...)
@@ -189,6 +197,23 @@ func syncCache(ctx context.Context, j *files.JobInfo, localCache string, backend
 	}
 
 	return atDestination, localOnlyFiles, nil
+}
+
+// isManifestObject returns whether name, listed by manifestPrefix, is a manifest rather than an
+// object under a sibling prefix such as "manifests-old/". A manifest's prefix is followed by its
+// separator, which is separator or (written with another --separator) holds a character no ZFS
+// dataset name can, while a sibling's name goes on with one a dataset name can.
+func isManifestObject(name, manifestPrefix, separator string) bool {
+	rest, ok := strings.CutPrefix(name, manifestPrefix)
+	if !ok || rest == "" {
+		return false
+	}
+	if separator != "" && strings.HasPrefix(rest, separator) {
+		return true
+	}
+	c := rest[0]
+	inDatasetName := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("_-:./", c) >= 0
+	return !inDatasetName
 }
 
 // cachedManifestName is the file name objectName is cached under.

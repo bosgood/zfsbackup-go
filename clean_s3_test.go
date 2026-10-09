@@ -22,6 +22,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/md5" // nolint:gosec // MD5 not used for cryptographic purposes here
 	"encoding/json"
@@ -35,6 +36,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/op/go-logging"
 
@@ -348,6 +350,28 @@ func TestCleanS3Prefixes(t *testing.T) {
 			args:    []string{"s3://bucket"},
 			logText: "is another destination",
 		},
+		{
+			// The same, with --force: the root's own volume "tank/data|..." is under tank/, so
+			// its set used to look incomplete and --force deleted its manifest.
+			name: "nested destination named like a dataset with --force",
+			objects: merge(
+				backupSet(t, "", "tank/data"),
+				backupSetAt(t, "tank/", "data", "autosnap_2026-10-01_00:00:00_monthly"),
+			),
+			args:    []string{"--force=true", "s3://bucket"},
+			logText: "is another destination",
+		},
+		{
+			// s3://bucket/manifests-old/ is another destination; List("manifests") from the
+			// bucket root returns its objects too, which used to be decoded as manifests.
+			name: "sibling destination named manifests-something",
+			objects: merge(
+				backupSet(t, "", "tank/data"),
+				backupSetAt(t, "manifests-old/", "tank/data", "autosnap_2026-10-01_00:00:00_monthly"),
+			),
+			args:    []string{"s3://bucket"},
+			logText: "is another destination",
+		},
 	}
 
 	for _, c := range testCases {
@@ -367,6 +391,9 @@ func TestCleanS3Prefixes(t *testing.T) {
 				}
 				if strings.Contains(logs, "Would delete") || len(fake.deleted) != 0 {
 					t.Errorf("clean %v deleted %q\n%s", args, fake.deleted, logs)
+				}
+				if strings.Contains(logs, "missing volume") {
+					t.Errorf("clean %v reports an intact set as broken\n%s", args, logs)
 				}
 				for _, prefix := range fake.listed {
 					// Besides Init's bucket probe ("") and legacy-layout check ("mediamanifests"),
@@ -563,5 +590,64 @@ func TestCleanS3GivesUpOnChangingManifests(t *testing.T) {
 	}
 	if len(fake.deleted) != 0 {
 		t.Errorf("clean deleted %q", fake.deleted)
+	}
+}
+
+// TestCleanS3ForceDeletesBrokenSet: --force deletes a set missing a volume, manifest and cached
+// copy included, and leaves the intact set alone.
+func TestCleanS3ForceDeletesBrokenSet(t *testing.T) {
+	work := t.TempDir()
+	broken := backupSetAt(t, "", "tank/data", "autosnap_2026-10-01_00:00:00_monthly")
+	brokenManifest, _ := splitSet(broken)
+	fake := newFakeS3(t, merge(backupSet(t, "", "tank/data"), map[string][]byte{brokenManifest: broken[brokenManifest]}))
+	logs, err := cleanS3In(t, work, "--dry-run=false", "--force=true", "s3://bucket")
+	if err != nil {
+		t.Fatalf("clean --force: %v\n%s", err, logs)
+	}
+	if len(fake.deleted) != 1 || fake.deleted[0] != brokenManifest {
+		t.Errorf("clean --force deleted %q, want only %q\n%s", fake.deleted, brokenManifest, logs)
+	}
+	if _, serr := os.Stat(cachePathIn(t, work, "s3://bucket", brokenManifest)); !os.IsNotExist(serr) {
+		t.Errorf("clean --force kept the broken set's cached manifest (%v)\n%s", serr, logs)
+	}
+}
+
+// TestE2ECleanForceDeletesTheManifestItRead: --force deletes the manifest object it read, not
+// a name computed from that manifest's (possibly forged) content.
+func TestE2ECleanForceDeletesTheManifestItRead(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+		{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+	})
+	env.sendOK(t, "--compressor", "", "tank/data@a", "file://"+env.dest)
+	victim := filepath.Join(filepath.Dir(env.dest), "victim|x.manifest.gz")
+	if err := ioutil.WriteFile(victim, []byte("another destination's manifest"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// A set missing its volume, whose name computes to ../victim|x.manifest.gz.
+	forged := &files.JobInfo{
+		VolumeName:     "a/../../victim",
+		BaseSnapshot:   files.SnapshotInfo{Name: "x", CreationTime: time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)},
+		Separator:      "|",
+		ManifestPrefix: "manifests",
+		Volumes:        []*files.VolumeInfo{{ObjectName: "nothing-here"}},
+	}
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if err := json.NewEncoder(gz).Encode(forged); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ioutil.WriteFile(filepath.Join(env.dest, "manifests|zz.manifest.gz"), buf.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := guarded(t, func() (string, error) {
+		return cleanS3In(t, env.work, "--dry-run=false", "--force=true", "file://"+env.dest)
+	})
+	if _, serr := os.Stat(victim); serr != nil {
+		t.Errorf("clean --force deleted %s, outside the destination (clean: %v)\n%s", victim, err, logs)
 	}
 }
