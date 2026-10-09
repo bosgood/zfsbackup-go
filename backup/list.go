@@ -221,21 +221,5 @@ func linkManifests(manifests []*files.JobInfo) map[string][]*files.JobInfo {
 }
 
 func readManifest(ctx context.Context, manifestPath string, j *files.JobInfo) (*files.JobInfo, error) {
-	decodedManifest := new(files.JobInfo)
-	manifestVol, err := files.ExtractLocal(ctx, j, manifestPath, true)
-	if err != nil {
-		return nil, err
-	}
-	defer manifestVol.Close()
-	decoder := json.NewDecoder(manifestVol)
-	err = decoder.Decode(decodedManifest)
-	if err != nil {
-		return nil, err
-	}
-	// The decoder stops at the end of the JSON value; the signature is checked at EOF.
-	if err = manifestVol.VerifyEnd(); err != nil {
-		return nil, err
-	}
-
-	return decodedManifest, nil
+	return files.ReadManifest(ctx, j, manifestPath)
 }
