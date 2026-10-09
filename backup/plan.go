@@ -370,6 +370,7 @@ func (s *Scenario) run(at time.Time, snapshots []files.SnapshotInfo, dest [][]*f
 		SnapshotPrefix:            s.JobInfo.SnapshotPrefix,
 		FullSnapshotSuffix:        s.JobInfo.FullSnapshotSuffix,
 		IncrementalSnapshotSuffix: s.JobInfo.IncrementalSnapshotSuffix,
+		Resume:                    s.JobInfo.Resume,
 	}
 	plan, err := planSmartSnapshots(&jobInfo, snapshots, dest, s.Completable)
 	if err == nil && plan.Action != PlanNoop {

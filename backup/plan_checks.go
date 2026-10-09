@@ -222,8 +222,9 @@ func (sim *Simulation) checkNoOrphanFull() []Violation {
 // window (minus the slack, see fullSlack) after the previous one, and never
 // more than one window plus the slack after the previous full a run sent: a
 // full is never overdue. The first full after the initial state may come any
-// time later: it may be catching up. Without a known slack (no snapshot
-// period to go by) there is nothing to judge.
+// time later: it may be catching up, as may the first after a completed
+// partial set. Without a known slack (no snapshot period to go by) there is
+// nothing to judge.
 func (sim *Simulation) checkFullCadence() []Violation {
 	window := sim.Scenario.JobInfo.FullIfOlderThan
 	slack := sim.fullSlack()
@@ -246,6 +247,13 @@ func (sim *Simulation) checkFullCadence() []Violation {
 	overdue := false
 	for _, st := range sim.Steps {
 		if st.Err == nil && st.Plan.Action == PlanFull {
+			// Completing a partial set sends a full that some destination already holds:
+			// it is the latest full from here on, but not a new one to judge.
+			if st.Plan.Reason == reasonCompletePartial {
+				base := st.Plan.Base
+				last, lastSent, overdue = &base, false, false
+				continue
+			}
 			if last != nil {
 				gap := st.Plan.Base.CreationTime.Sub(last.CreationTime)
 				if gap < window-slack || (lastSent && gap > window+slack) {
