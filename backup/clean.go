@@ -76,6 +76,80 @@ func nestedUnder(obj string, roots []string) string {
 	return ""
 }
 
+// localOnly is a manifest in the cache that is not at the destination.
+type localOnly struct {
+	path     string
+	manifest *files.JobInfo // nil when it could not be read
+}
+
+// cleanView is what clean reads from a destination and its manifest cache.
+type cleanView struct {
+	manifests  []*files.JobInfo // decoded, of the manifests at the destination
+	localOnly  []localOnly
+	allObjects []string
+	datasets   map[string]bool // of every decoded manifest, local-only included
+}
+
+// readForClean syncs the cache of the destination at backend, lists it and decodes its manifests.
+func readForClean(
+	ctx context.Context, jobInfo *files.JobInfo, target, localCachePath string, backend backends.Backend, cleanLocal bool,
+) (*cleanView, error) {
+	manifests, localOnlyFiles, serr := syncCache(ctx, jobInfo, localCachePath, backend)
+	if serr != nil {
+		log.AppLogger.Errorf("Could not sync cache dir for target %s due to error - %v.", backends.RedactURI(target), serr)
+		return nil, serr
+	}
+
+	// TODO: The following can be done in a much more efficient way (probably)
+	allObjects, err := backend.List(ctx, "")
+	if err != nil {
+		log.AppLogger.Errorf("Could not list objects in backend %s due to error - %v", backends.RedactURI(target), err)
+		return nil, err
+	}
+
+	view := &cleanView{allObjects: allObjects, datasets: make(map[string]bool)}
+	view.manifests = make([]*files.JobInfo, 0, len(manifests))
+	for _, manifest := range manifests {
+		decodedManifest, oerr := readCachedManifest(ctx, jobInfo, localCachePath, backend, manifest)
+		if oerr != nil {
+			return nil, oerr
+		}
+		view.manifests = append(view.manifests, decodedManifest)
+		view.datasets[decodedManifest.VolumeName] = true
+	}
+
+	// Local-only manifests are the cached state of sends that never finished (or whose
+	// destination copy is gone). Decode them: their datasets are locked, and without
+	// --cleanLocal their volumes are protected as live. Under --cleanLocal an undecodable one
+	// cannot be matched to a lock, so it is deleted as before.
+	view.localOnly = make([]localOnly, 0, len(localOnlyFiles))
+	for _, manifest := range localOnlyFiles {
+		manifestPath := filepath.Join(localCachePath, manifest)
+		decodedManifest, oerr := readManifest(ctx, manifestPath, jobInfo)
+		if oerr != nil && !cleanLocal {
+			// Its volumes are unknown, so none can be told apart from orphans.
+			log.AppLogger.Errorf(
+				"Could not read local manifest %s due to error - %v. It is not at the destination, so it cannot be "+
+					"downloaded again: if it is the state of an interrupted send (cut short by a kill), delete it, "+
+					"or run clean with --cleanLocal.",
+				manifestPath, oerr,
+			)
+			return nil, oerr
+		}
+		if oerr != nil {
+			log.AppLogger.Warningf("Could not read local manifest %s due to error - %v; --cleanLocal deletes it.", manifestPath, oerr)
+			decodedManifest = nil
+		} else {
+			view.datasets[decodedManifest.VolumeName] = true
+		}
+		view.localOnly = append(view.localOnly, localOnly{path: manifestPath, manifest: decodedManifest})
+	}
+	return view, nil
+}
+
+// cleanReadRounds is how many times clean reads the destination before giving up on it settling.
+const cleanReadRounds = 3
+
 // Clean will remove files found in the desination that are not found in any of the manifests found locally or in the destination.
 // If cleanLocal is true, then local manifests not found in the destination are ignored and deleted. This function will optionally
 // delete broken backup sets in the destination if the --force flag is provided.
@@ -100,68 +174,73 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 		return cerr
 	}
 
-	// Sync the local cache
-	manifests, localOnlyFiles, serr := syncCache(ctx, jobInfo, localCachePath, backend)
-	if serr != nil {
-		log.AppLogger.Errorf("Could not sync cache dir for target %s due to error - %v.", backends.RedactURI(target), serr)
-		return serr
+	// A running send has volumes at the destination that its cached manifest does not list yet,
+	// and that cached manifest is what --resume continues from. Hold each dataset's send lock for
+	// the rest of the run; where a send holds it, leave that dataset alone, cached manifest
+	// included. This only sees sends on this host with the same --workingDirectory: the lock is a
+	// file in it.
+	//
+	// The datasets come from the manifests, so read once to learn them, lock them, and read
+	// again: a send that finished in between has uploaded volumes and a manifest the first read
+	// did not see, and every decision below must come from a read made under the locks. A
+	// dataset that first appears in a later read is locked and read again.
+	busy := make(map[string]bool)
+	locked := make(map[string]bool)
+	var view *cleanView
+	var err error
+	for round := 1; ; round++ {
+		if view, err = readForClean(ctx, jobInfo, target, localCachePath, backend, cleanLocal); err != nil {
+			return err
+		}
+		names := make([]string, 0, len(view.datasets))
+		for dataset := range view.datasets {
+			if !locked[dataset] && !busy[dataset] {
+				names = append(names, dataset)
+			}
+		}
+		if len(names) == 0 {
+			break // every dataset this read names was locked (or found busy) before it
+		}
+		if round == cleanReadRounds {
+			err = fmt.Errorf("the manifests at %s keep changing; run clean again", backends.RedactURI(target))
+			log.AppLogger.Errorf("%v.", err)
+			return err
+		}
+		sort.Strings(names)
+		for _, dataset := range names {
+			lock, lockPath, lerr := volumeLock(dataset)
+			if lerr != nil {
+				log.AppLogger.Errorf("Cannot init lock for %s. reason: %v", dataset, lerr)
+				return lerr
+			}
+			if lerr = lock.TryLock(); lerr != nil {
+				log.AppLogger.Noticef(
+					"A send of %s appears to be running (%s: %v); leaving its volumes and its cached manifest alone. "+
+						"Run clean again when it is done.",
+					dataset, lockPath, lerr,
+				)
+				busy[dataset] = true
+				continue
+			}
+			locked[dataset] = true
+			defer func() {
+				if uerr := lock.Unlock(); uerr != nil {
+					log.AppLogger.Warningf("Could not release lock %s: %v", lockPath, uerr)
+				}
+			}()
+		}
 	}
-
-	// TODO: The following can be done in a much more efficient way (probably)
-	allObjects, err := backend.List(ctx, "")
-	if err != nil {
-		log.AppLogger.Errorf("Could not list objects in backend %s due to error - %v", backends.RedactURI(target), err)
-		return err
-	}
+	decodedManifests, localOnlyManifests, allObjects, datasets := view.manifests, view.localOnly, view.allObjects, view.datasets
 
 	// With no manifests at all there is nothing to protect: the URI is almost certainly wrong,
 	// or the manifests are already gone. Either way, a bulk delete must not be one command away.
-	if len(manifests) == 0 && len(localOnlyFiles) == 0 && len(allObjects) > 0 {
+	if len(decodedManifests) == 0 && len(localOnlyManifests) == 0 && len(allObjects) > 0 {
 		err = fmt.Errorf(
 			"destination %s holds %d objects but no manifests; refusing to clean. If this is intended, delete the objects manually",
 			backends.RedactURI(target), len(allObjects),
 		)
 		log.AppLogger.Errorf("%v.", err)
 		return err
-	}
-
-	// Read in Manifests
-	decodedManifests := make([]*files.JobInfo, 0, len(manifests))
-	for _, manifest := range manifests {
-		decodedManifest, oerr := readCachedManifest(ctx, jobInfo, localCachePath, backend, manifest)
-		if oerr != nil {
-			return oerr
-		}
-		decodedManifests = append(decodedManifests, decodedManifest)
-	}
-
-	// Local-only manifests are the cached state of sends that never finished (or whose
-	// destination copy is gone). Decode them: their datasets are locked below, and without
-	// --cleanLocal their volumes are protected as live. Under --cleanLocal an undecodable one
-	// cannot be matched to a lock, so it is deleted as before.
-	type localOnly struct {
-		path     string
-		manifest *files.JobInfo // nil when it could not be read
-	}
-	localOnlyManifests := make([]localOnly, 0, len(localOnlyFiles))
-	for _, manifest := range localOnlyFiles {
-		manifestPath := filepath.Join(localCachePath, manifest)
-		decodedManifest, oerr := readManifest(ctx, manifestPath, jobInfo)
-		if oerr != nil && !cleanLocal {
-			// Its volumes are unknown, so none can be told apart from orphans.
-			log.AppLogger.Errorf(
-				"Could not read local manifest %s due to error - %v. It is not at the destination, so it cannot be "+
-					"downloaded again: if it is the state of an interrupted send (cut short by a kill), delete it, "+
-					"or run clean with --cleanLocal.",
-				manifestPath, oerr,
-			)
-			return oerr
-		}
-		if oerr != nil {
-			log.AppLogger.Warningf("Could not read local manifest %s due to error - %v; --cleanLocal deletes it.", manifestPath, oerr)
-			decodedManifest = nil
-		}
-		localOnlyManifests = append(localOnlyManifests, localOnly{path: manifestPath, manifest: decodedManifest})
 	}
 
 	// Only delete what we can name: objects that parse as a backup volume written by this tool,
@@ -176,44 +255,13 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 		separators = append(separators, sep)
 	}
 	addSeparator(jobInfo.Separator)
-	datasets := make(map[string]bool)
 	for _, manifest := range decodedManifests {
 		addSeparator(manifest.Separator)
-		datasets[manifest.VolumeName] = true
 	}
 	for _, local := range localOnlyManifests {
 		if local.manifest != nil {
 			addSeparator(local.manifest.Separator)
-			datasets[local.manifest.VolumeName] = true
 		}
-	}
-
-	// A running send has volumes at the destination that its cached manifest does not list yet,
-	// and that cached manifest is what --resume continues from. Hold each dataset's send lock for
-	// the rest of the run; where a send holds it, leave that dataset alone, cached manifest
-	// included. This only sees sends on this host with the same --workingDirectory: the lock is a
-	// file in it.
-	busy := make(map[string]bool)
-	for dataset := range datasets {
-		lock, lockPath, lerr := volumeLock(dataset)
-		if lerr != nil {
-			log.AppLogger.Errorf("Cannot init lock for %s. reason: %v", dataset, lerr)
-			return lerr
-		}
-		if lerr = lock.TryLock(); lerr != nil {
-			log.AppLogger.Noticef(
-				"A send of %s appears to be running (%s: %v); leaving its volumes and its cached manifest alone. "+
-					"Run clean again when it is done.",
-				dataset, lockPath, lerr,
-			)
-			busy[dataset] = true
-			continue
-		}
-		defer func() {
-			if uerr := lock.Unlock(); uerr != nil {
-				log.AppLogger.Warningf("Could not release lock %s: %v", lockPath, uerr)
-			}
-		}()
 	}
 
 	if !cleanLocal && len(localOnlyManifests) > 0 {
@@ -223,6 +271,9 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 			len(localOnlyManifests),
 		)
 	}
+	// Removed only once their volumes are gone: a local manifest is how a later clean finds
+	// volumes a failed delete left behind.
+	var localDeletes []string
 	for _, local := range localOnlyManifests {
 		if !cleanLocal || (local.manifest != nil && busy[local.manifest.VolumeName]) {
 			decodedManifests = append(decodedManifests, local.manifest) // live: its volumes stay
@@ -232,11 +283,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 			log.AppLogger.Noticef("Would delete local manifest %s.", local.path)
 			continue
 		}
-		if err = os.Remove(local.path); err != nil {
-			log.AppLogger.Errorf("Could not delete local manifest %s due to error - %v", local.path, err)
-			return err
-		}
-		log.AppLogger.Debugf("Deleted %s.", local.path)
+		localDeletes = append(localDeletes, local.path)
 	}
 
 	// Volumes an older version wrote under a raw key prefix are outside this destination: say so,
@@ -423,6 +470,14 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	if err != nil {
 		log.AppLogger.Errorf("Could not finish clean operation due to error, aborting: %v", err)
 		return err
+	}
+
+	for _, path := range localDeletes {
+		if err = os.Remove(path); err != nil {
+			log.AppLogger.Errorf("Could not delete local manifest %s due to error - %v", path, err)
+			return err
+		}
+		log.AppLogger.Debugf("Deleted %s.", path)
 	}
 
 	log.AppLogger.Noticef("Done.")

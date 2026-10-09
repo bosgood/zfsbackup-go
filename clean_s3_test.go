@@ -65,6 +65,12 @@ type fakeS3 struct {
 	// x-amz-restore before it appears (S3 is eventually consistent here).
 	headsWithoutRestoreHeader int
 	headsSeen                 map[string]int
+
+	// onList, when set, runs (with mu held, so it may change objects) before each listing
+	// that returns keys: not Init's max-keys=0 probe.
+	onList func(prefix string)
+	// onDelete, when set, runs (with mu held) before each DELETE; false fails it with a 500.
+	onDelete func(key string) bool
 }
 
 // cold returns whether key is in an archive storage class that has not been restored.
@@ -105,6 +111,10 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.objects[key] = body
 		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodDelete:
+		if f.onDelete != nil && !f.onDelete(key) {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		f.deleted = append(f.deleted, key)
 		w.WriteHeader(http.StatusNoContent)
 	case !ok:
@@ -146,6 +156,9 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (f *fakeS3) list(w http.ResponseWriter, r *http.Request) {
 	prefix := r.URL.Query().Get("prefix")
 	f.listed = append(f.listed, prefix)
+	if f.onList != nil && r.URL.Query().Get("max-keys") != "0" {
+		f.onList(prefix)
+	}
 	keys := make([]string, 0, len(f.objects))
 	for k := range f.objects {
 		if strings.HasPrefix(k, prefix) {
@@ -232,6 +245,12 @@ func cleanS3(t *testing.T, args ...string) (string, error) {
 // cleanS3In is cleanS3 with the working directory (and so the manifest cache) work.
 func cleanS3In(t *testing.T, work string, args ...string) (string, error) {
 	t.Helper()
+	return cleanS3Ctx(context.Background(), t, work, args...)
+}
+
+// cleanS3Ctx is cleanS3In under ctx.
+func cleanS3Ctx(ctx context.Context, t *testing.T, work string, args ...string) (string, error) {
+	t.Helper()
 	cmd.ResetReceiveJobInfo()
 	var logs bytes.Buffer
 	log.AppLogger.SetBackend(logging.AddModuleLevel(logging.NewLogBackend(&logs, "", 0)))
@@ -240,7 +259,14 @@ func cleanS3In(t *testing.T, work string, args ...string) (string, error) {
 		cmd.RootCmd.SetArgs(nil)
 		cmd.ResetReceiveJobInfo()
 	}()
-	err := cmd.RootCmd.ExecuteContext(context.Background())
+	// cobra hands a subcommand the root's context only if it has none, so a context an earlier
+	// run left on clean would win over ctx.
+	cleanCmd, _, err := cmd.RootCmd.Find([]string{"clean"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanCmd.SetContext(ctx)
+	err = cmd.RootCmd.ExecuteContext(ctx)
 	return logs.String(), err
 }
 
@@ -386,5 +412,156 @@ func TestCleanS3KeepsCacheAcrossCanonicalization(t *testing.T) {
 		if strings.Contains(logs, "Would delete") || len(fake.deleted) != 0 {
 			t.Errorf("clean %s would delete the interrupted send's volume\n%s", uri, logs)
 		}
+	}
+}
+
+// cachePathIn is where clean, run with working directory work, caches manifest objectName of
+// destination uri.
+func cachePathIn(t *testing.T, work, uri, objectName string) string {
+	t.Helper()
+	// nolint:gosec // MD5 not used for cryptographic purposes here
+	dir := filepath.Join(work, "cache", fmt.Sprintf("%x", md5.Sum([]byte(uri))))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// nolint:gosec // MD5 not used for cryptographic purposes here
+	return filepath.Join(dir, fmt.Sprintf("%x", md5.Sum([]byte(objectName))))
+}
+
+// holdSendLock writes the send lock of dataset under work as held by the test runner (a pid this
+// user can signal, so lockfile sees a live holder) and returns its path.
+func holdSendLock(t *testing.T, work, dataset string) string {
+	t.Helper()
+	dir := filepath.Join(work, "locks")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// nolint:gosec // MD5 not used for cryptographic purposes here
+	p := filepath.Join(dir, fmt.Sprintf("%x.lck", md5.Sum([]byte(dataset))))
+	if err := ioutil.WriteFile(p, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// splitSet returns the manifest and the volume of a backupSet.
+func splitSet(set map[string][]byte) (manifest, volume string) {
+	for k := range set {
+		if strings.Contains(k, "manifests|") {
+			manifest = k
+		} else {
+			volume = k
+		}
+	}
+	return manifest, volume
+}
+
+// TestCleanS3SparesSendFinishingDuringClean: a send of tank/data holds its lock while clean
+// starts, and finishes (last volume and manifest uploaded, manifest cached, lock released)
+// while clean lists the bucket. clean then gets the lock; it must judge the volumes by what is
+// at the destination after that, not by the manifests it read before.
+func TestCleanS3SparesSendFinishingDuringClean(t *testing.T) {
+	old := backupSet(t, "", "tank/data")
+	newSet := backupSetAt(t, "", "tank/data", "autosnap_2026-10-01_00:00:00_monthly")
+	newManifest, newVol := splitSet(newSet)
+	for _, cleanLocal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cleanLocal=%v", cleanLocal), func(t *testing.T) {
+			work := t.TempDir()
+			objects := merge(old)
+			cached := cachePathIn(t, work, "s3://bucket", newManifest)
+			if cleanLocal {
+				// The send has finished volume 1: its partial manifest is cached, the volume is up.
+				objects[newVol] = newSet[newVol]
+				if err := ioutil.WriteFile(cached, newSet[newManifest], 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			lock := holdSendLock(t, work, "tank/data")
+			fake := newFakeS3(t, objects)
+			finished := false
+			fake.onList = func(prefix string) {
+				if prefix != "" || finished {
+					return
+				}
+				finished = true
+				fake.objects[newVol] = newSet[newVol]
+				fake.objects[newManifest] = newSet[newManifest]
+				if err := ioutil.WriteFile(cached, newSet[newManifest], 0600); err != nil {
+					t.Error(err)
+				}
+				if err := os.Remove(lock); err != nil {
+					t.Error(err)
+				}
+			}
+			args := []string{"--dry-run=false", fmt.Sprintf("--cleanLocal=%v", cleanLocal), "s3://bucket"}
+			logs, err := cleanS3In(t, work, args...)
+			if err != nil {
+				t.Fatalf("clean %v: %v\n%s", args, err, logs)
+			}
+			if !finished {
+				t.Fatalf("clean %v never listed the bucket\n%s", args, logs)
+			}
+			if len(fake.deleted) != 0 {
+				t.Errorf("clean %v deleted %q, of a set whose manifest %s is at the destination\n%s", args, fake.deleted, newManifest, logs)
+			}
+			if _, serr := os.Stat(cached); serr != nil {
+				t.Errorf("clean %v removed the finished set's cached manifest: %v\n%s", args, serr, logs)
+			}
+		})
+	}
+}
+
+// TestCleanLocalKeepsManifestWhenDeleteFails: --cleanLocal removes a local-only manifest only
+// after its volumes are deleted at the destination. Removed first, a failed delete would leave
+// those volumes listed by nothing, out of every later clean's reach.
+func TestCleanLocalKeepsManifestWhenDeleteFails(t *testing.T) {
+	work := t.TempDir()
+	objects := backupSet(t, "", "tank/data")
+	partial := backupSetAt(t, "", "tank/data", "autosnap_2026-10-01_00:00:00_monthly")
+	partialManifest, partialVol := splitSet(partial)
+	objects[partialVol] = partial[partialVol]
+	cached := cachePathIn(t, work, "s3://bucket", partialManifest)
+	if err := ioutil.WriteFile(cached, partial[partialManifest], 0600); err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeS3(t, objects)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fake.onDelete = func(string) bool {
+		cancel() // or clean retries a failed delete for minutes
+		return false
+	}
+	logs, err := cleanS3Ctx(ctx, t, work, "--dry-run=false", "--cleanLocal=true", "s3://bucket")
+	if err == nil {
+		t.Fatalf("clean succeeded although every delete failed\n%s", logs)
+	}
+	if _, serr := os.Stat(cached); serr != nil {
+		t.Errorf("clean removed local manifest %s before deleting its volume: %v\n%s", cached, serr, logs)
+	}
+}
+
+// TestCleanS3GivesUpOnChangingManifests: clean locks the datasets its read names and reads
+// again; a destination that names a new dataset on every read never settles.
+func TestCleanS3GivesUpOnChangingManifests(t *testing.T) {
+	var sets []map[string][]byte
+	for i := range 4 {
+		sets = append(sets, backupSet(t, "", fmt.Sprintf("tank/d%d", i)))
+	}
+	fake := newFakeS3(t, merge(sets[0]))
+	next := 1
+	fake.onList = func(prefix string) {
+		if prefix == "manifests" && next < len(sets) {
+			for k, v := range sets[next] {
+				fake.objects[k] = v
+			}
+			next++
+		}
+	}
+	logs, err := cleanS3(t, "--dry-run=false", "s3://bucket")
+	if err == nil || !strings.Contains(logs, "keep changing") {
+		t.Errorf("clean: got %v, want it to give up on a destination that keeps changing\n%s", err, logs)
+	}
+	if len(fake.deleted) != 0 {
+		t.Errorf("clean deleted %q", fake.deleted)
 	}
 }
