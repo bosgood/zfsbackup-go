@@ -370,3 +370,13 @@ func TestScheduleSkipDateOnlyCoversLastDay(t *testing.T) {
 		t.Errorf("no run on 2026-11-06, after the skip= range")
 	}
 }
+
+// A skip= range with an empty side is a mistake, not a range that skips nothing.
+func TestScheduleSkipEmptySideIsAnError(t *testing.T) {
+	for _, spec := range []string{"until=2027-02-01,skip=..2026-12-31", "until=2027-02-01,skip=2026-12-24..", "until=2027-02-01,skip=.."} {
+		s := &Scenario{Location: time.UTC}
+		if err := s.ParseScheduleSpec(spec); err == nil {
+			t.Errorf("ParseScheduleSpec(%q) succeeded with skips %+v, want an error", spec, s.Skips)
+		}
+	}
+}

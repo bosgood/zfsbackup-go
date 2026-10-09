@@ -131,8 +131,10 @@ func (s *Schedule) String() string {
 
 // Advance returns the pool as of time to: snaps plus every snapshot sanoid
 // takes at a period boundary in (from, to], pruned as sanoid would prune at
-// to. The result is newest-first; snaps is not modified.
-func (s *Schedule) Advance(snaps []files.SnapshotInfo, from, to time.Time) []files.SnapshotInfo {
+// to. It also returns the snapshots it took, before pruning, so that those
+// taken and destroyed between two runs are known. Both are newest-first; snaps
+// is not modified.
+func (s *Schedule) Advance(snaps []files.SnapshotInfo, from, to time.Time) (pool, taken []files.SnapshotInfo) {
 	type boundary struct {
 		at      time.Time
 		periods []string // in tie order
@@ -155,30 +157,34 @@ func (s *Schedule) Advance(snaps []files.SnapshotInfo, from, to time.Time) []fil
 		}
 	}
 
-	pool := append([]files.SnapshotInfo(nil), snaps...)
 	for _, b := range boundaries {
 		for i, name := range b.periods {
 			creation := b.at.Add(s.Delay + time.Duration(len(b.periods)-1-i)*s.tieGap)
-			pool = append(pool, files.SnapshotInfo{
+			taken = append(taken, files.SnapshotInfo{
 				Name:         fmt.Sprintf("autosnap_%s_%s", creation.In(s.location()).Format(zfs.SanoidTimeLayout), name),
 				CreationTime: creation,
 			})
 		}
 	}
-	// Stable, so snapshots with equal creation times keep the order above.
-	sort.SliceStable(pool, func(i, j int) bool {
-		return pool[i].CreationTime.After(pool[j].CreationTime)
-	})
-	return s.prune(pool, to)
+	newestFirst := func(snaps []files.SnapshotInfo) {
+		// Stable, so snapshots with equal creation times keep the order above.
+		sort.SliceStable(snaps, func(i, j int) bool {
+			return snaps[i].CreationTime.After(snaps[j].CreationTime)
+		})
+	}
+	newestFirst(taken)
+	pool = append(append([]files.SnapshotInfo(nil), snaps...), taken...)
+	newestFirst(pool)
+	return s.prune(pool, to), taken
 }
 
 // boundaries returns the times in (from, to] at which sanoid snapshots period
-// p, oldest first. Boundaries so old that pruning would remove them anyway are
-// skipped, which keeps a zero from cheap.
+// p, oldest first. A zero from starts at boundaries so old that pruning would
+// remove them anyway, which keeps it cheap.
 func (s *Schedule) boundaries(p Period, from, to time.Time) []time.Time {
 	length := periodLength(p.Name)
-	if horizon := to.Add(-time.Duration(p.Keep+2) * length); from.Before(horizon) {
-		from = horizon
+	if from.IsZero() {
+		from = to.Add(-time.Duration(p.Keep+2) * length)
 	}
 
 	f := from.In(s.location())

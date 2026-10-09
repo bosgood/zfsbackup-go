@@ -354,8 +354,9 @@ func (s *Scenario) Run() *Simulation {
 	}
 	for at := s.firstRun(); !at.After(s.Until); at = s.nextRun(at) {
 		if s.Schedule != nil {
-			snapshots = s.Schedule.Advance(snapshots, taken, at)
-			sim.record(snapshots, known)
+			var took []files.SnapshotInfo
+			snapshots, took = s.Schedule.Advance(snapshots, taken, at)
+			sim.record(took, known) // including those already pruned again
 			if at.After(taken) {
 				taken = at
 			}

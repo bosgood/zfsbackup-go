@@ -82,7 +82,7 @@ func TestScheduleAdvance(t *testing.T) {
 
 	t.Run("a day of hourlies is added and pruned by age", func(t *testing.T) {
 		s := mustSchedule(t, "hourly=36")
-		got := s.Advance(hourlies(t0, 36), t0, t0.Add(24*time.Hour))
+		got, _ := s.Advance(hourlies(t0, 36), t0, t0.Add(24*time.Hour))
 		// Sanoid keeps a snapshot until it is older than 36 hours, so the one
 		// taken exactly 36 hours ago survives: Keep+1 snapshots, as on a real
 		// pool (hourly=48 shows 49 hourlies).
@@ -94,7 +94,7 @@ func TestScheduleAdvance(t *testing.T) {
 	t.Run("the 1st of a month brings coincident monthly, daily and hourly", func(t *testing.T) {
 		s := mustSchedule(t, "hourly=2,daily=2,monthly=2")
 		oct1 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-		got := s.Advance(nil, oct1.Add(-30*time.Minute), oct1.Add(30*time.Minute))
+		got, _ := s.Advance(nil, oct1.Add(-30*time.Minute), oct1.Add(30*time.Minute))
 		want := []string{
 			"autosnap_2026-10-01_00:00:00_monthly",
 			"autosnap_2026-10-01_00:00:00_daily",
@@ -113,7 +113,7 @@ func TestScheduleAdvance(t *testing.T) {
 	t.Run("nothing is added without a boundary", func(t *testing.T) {
 		s := mustSchedule(t, "hourly=36,daily=30,monthly=3")
 		in := hourlies(t0, 3)
-		got := s.Advance(in, t0.Add(10*time.Minute), t0.Add(50*time.Minute))
+		got, _ := s.Advance(in, t0.Add(10*time.Minute), t0.Add(50*time.Minute))
 		if !reflect.DeepEqual(snapshotNames(got), snapshotNames(in)) {
 			t.Errorf("got %v, want %v", snapshotNames(got), snapshotNames(in))
 		}
@@ -128,7 +128,7 @@ func TestScheduleAdvance(t *testing.T) {
 			{Name: autosnap("hourly", old).Name, CreationTime: old, Bookmark: true},
 			autosnap("hourly", old),
 		}
-		got := s.Advance(in, t0, t0.Add(30*time.Minute))
+		got, _ := s.Advance(in, t0, t0.Add(30*time.Minute))
 		want := []string{autosnap("hourly", t0).Name, "manual-before-upgrade", autosnap("hourly", old).Name}
 		if !reflect.DeepEqual(snapshotNames(got), want) || !got[2].Bookmark {
 			t.Errorf("got %+v, want %v with the last one a bookmark", got, want)
@@ -141,7 +141,7 @@ func TestScheduleAdvance(t *testing.T) {
 			autosnap("monthly", time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)),
 			autosnap("monthly", time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)),
 		}
-		got := s.Advance(in, t0, t0.Add(time.Hour))
+		got, _ := s.Advance(in, t0, t0.Add(time.Hour))
 		if !reflect.DeepEqual(snapshotNames(got), snapshotNames(in)) {
 			t.Errorf("got %v, want %v", snapshotNames(got), snapshotNames(in))
 		}
@@ -149,7 +149,7 @@ func TestScheduleAdvance(t *testing.T) {
 
 	t.Run("a count of 0 takes none and prunes the rest", func(t *testing.T) {
 		s := mustSchedule(t, "hourly=0,daily=1")
-		got := s.Advance(hourlies(t0, 3), t0, t0.Add(2*time.Hour))
+		got, _ := s.Advance(hourlies(t0, 3), t0, t0.Add(2*time.Hour))
 		if len(got) != 0 {
 			t.Errorf("got %v, want no snapshots", snapshotNames(got))
 		}
@@ -157,7 +157,7 @@ func TestScheduleAdvance(t *testing.T) {
 
 	t.Run("weekly snapshots fall on Monday", func(t *testing.T) {
 		s := mustSchedule(t, "weekly=4")
-		got := s.Advance(nil, t0, t0.Add(7*24*time.Hour)) // Thursday to Thursday
+		got, _ := s.Advance(nil, t0, t0.Add(7*24*time.Hour)) // Thursday to Thursday
 		if want := []string{"autosnap_2026-09-28_00:00:00_weekly"}; !reflect.DeepEqual(snapshotNames(got), want) {
 			t.Errorf("got %v, want %v", snapshotNames(got), want)
 		}
@@ -171,7 +171,7 @@ func TestScheduleAdvance(t *testing.T) {
 		s := mustSchedule(t, "daily=1")
 		s.Location = ny
 		midnight := time.Date(2026, 9, 24, 0, 0, 0, 0, ny)
-		got := s.Advance(nil, midnight.Add(-time.Hour), midnight.Add(time.Hour))
+		got, _ := s.Advance(nil, midnight.Add(-time.Hour), midnight.Add(time.Hour))
 		if len(got) != 1 || got[0].Name != "autosnap_2026-09-24_00:00:00_daily" || !got[0].CreationTime.Equal(t0.Add(4*time.Hour)) {
 			t.Errorf("got %+v, want autosnap_2026-09-24_00:00:00_daily at 04:00 UTC", got)
 		}
@@ -182,7 +182,7 @@ func TestScheduleAdvance(t *testing.T) {
 		s.tieOrder = []string{"daily", "hourly", "monthly"}
 		s.tieGap = time.Second
 		oct1 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-		got := s.Advance(nil, oct1.Add(-30*time.Minute), oct1.Add(30*time.Minute))
+		got, _ := s.Advance(nil, oct1.Add(-30*time.Minute), oct1.Add(30*time.Minute))
 		want := []string{
 			"autosnap_2026-10-01_00:00:02_daily",
 			"autosnap_2026-10-01_00:00:01_hourly",
@@ -197,7 +197,7 @@ func TestScheduleAdvance(t *testing.T) {
 		s := mustSchedule(t, "hourly=36,monthly=3")
 		s.Delay = 3 * time.Minute
 		oct1 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-		got := s.Advance(nil, oct1.Add(-time.Hour), oct1)
+		got, _ := s.Advance(nil, oct1.Add(-time.Hour), oct1)
 		if len(got) != 2 {
 			t.Fatalf("got %v, want the monthly and the hourly", snapshotNames(got))
 		}
@@ -205,6 +205,21 @@ func TestScheduleAdvance(t *testing.T) {
 			if !snap.CreationTime.Equal(oct1.Add(3*time.Minute)) || !strings.HasPrefix(snap.Name, "autosnap_2026-10-01_00:03:00_") {
 				t.Errorf("got %s at %v, want a 00:03:00 creation time and name", snap.Name, snap.CreationTime)
 			}
+		}
+	})
+
+	t.Run("everything taken is reported, also what was pruned again", func(t *testing.T) {
+		s := mustSchedule(t, "monthly=1")
+		pool, taken := s.Advance(nil, t0, t0.AddDate(0, 4, 0))
+		if want := []string{"autosnap_2027-01-01_00:00:00_monthly"}; !reflect.DeepEqual(snapshotNames(pool), want) {
+			t.Errorf("pool %v, want %v", snapshotNames(pool), want)
+		}
+		want := []string{
+			"autosnap_2027-01-01_00:00:00_monthly", "autosnap_2026-12-01_00:00:00_monthly",
+			"autosnap_2026-11-01_00:00:00_monthly", "autosnap_2026-10-01_00:00:00_monthly",
+		}
+		if !reflect.DeepEqual(snapshotNames(taken), want) {
+			t.Errorf("taken %v, want %v", snapshotNames(taken), want)
 		}
 	})
 

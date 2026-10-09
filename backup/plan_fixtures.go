@@ -523,16 +523,16 @@ func (s *Scenario) ParseScheduleSpec(spec string) error {
 // its whole day; an end with a time is inclusive of that instant.
 func (s *Scenario) parseSkip(value string) (TimeRange, error) {
 	first, last, ok := strings.Cut(value, "..")
-	if !ok {
-		return TimeRange{}, errors.New("want <from>..<until>")
+	if !ok || strings.TrimSpace(first) == "" || strings.TrimSpace(last) == "" {
+		return TimeRange{}, errors.New("want <from>..<until>, both set")
 	}
 	var r TimeRange
-	from, _, err := s.parseTimeDetail(first)
-	if err != nil || from.IsZero() {
+	from, _, err := s.parseTimeDetail(strings.TrimSpace(first))
+	if err != nil {
 		return TimeRange{}, err
 	}
-	until, dateOnly, err := s.parseTimeDetail(last)
-	if err != nil || until.IsZero() {
+	until, dateOnly, err := s.parseTimeDetail(strings.TrimSpace(last))
+	if err != nil {
 		return TimeRange{}, err
 	}
 	if until.Before(from) {

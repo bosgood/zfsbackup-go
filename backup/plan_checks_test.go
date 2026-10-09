@@ -324,3 +324,42 @@ func TestFormatDays(t *testing.T) {
 		}
 	}
 }
+
+// With runs further apart than the retention, monthlies are taken and pruned between two runs.
+// No run sees them, and coverage must still name them as never backed up.
+func TestCoverageNamesMonthlyPrunedBetweenRuns(t *testing.T) {
+	s := &Scenario{Volume: "tank/data", DestBackups: [][]*files.JobInfo{{}}, Location: time.UTC}
+	s.JobInfo = files.JobInfo{FullIfOlderThan: 4320 * time.Hour, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_monthly"}
+	if err := s.ParseScheduleSpec("policy=monthly=2,from=2026-09-01T01:00:00Z,until=2027-09-01,every=2160h,checks=coverage:_monthly"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReadSnapshots(strings.NewReader("autosnap_2026-09-01_00:00:00_monthly\n")); err != nil {
+		t.Fatal(err)
+	}
+	sim := s.Run()
+	sent := make(map[string]bool)
+	for _, m := range sim.Manifests[0] {
+		sent[m.BaseSnapshot.Name] = true
+	}
+	var never []string
+	for _, v := range sim.Check(s.Checks) {
+		if v.Check == "coverage:_monthly" && strings.Contains(v.Detail, "is never backed up") {
+			never = append(never, v.Detail)
+		}
+	}
+	joined := strings.Join(never, "\n")
+	missing := 0
+	for d := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC); d.Before(time.Date(2027, 9, 1, 0, 0, 0, 0, time.UTC)); d = d.AddDate(0, 1, 0) {
+		name := "autosnap_" + d.Format("2006-01-02_15:04:05") + "_monthly"
+		if sent[name] {
+			continue
+		}
+		missing++
+		if !strings.Contains(joined, name) {
+			t.Errorf("coverage does not name %s, which no run sent; got:\n%s", name, joined)
+		}
+	}
+	if missing == 0 {
+		t.Fatalf("every monthly was sent; the scenario no longer prunes monthlies between runs")
+	}
+}
