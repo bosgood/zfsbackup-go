@@ -37,6 +37,7 @@ import (
 // that is what the manifests hold. plan must adopt the manifests' times for
 // those snapshots so that it agrees with send against the live pool.
 func TestE2EPlanNamesOnlyCaptureMatchesLivePool(t *testing.T) {
+	setLocal(t, time.UTC) // the names below are in UTC
 	env := newE2EEnv(t)
 	lag := 7 * time.Second
 	at := func(y int, m time.Month) time.Time { return time.Date(y, m, 1, 0, 0, 0, 0, time.UTC) }
@@ -215,5 +216,60 @@ func TestE2EPlanManifestsFileAdoptsCreationTimes(t *testing.T) {
 	}
 	if !strings.Contains(slogs, "would perform a incremental backup of tank/data@"+pool[0].Name) {
 		t.Errorf("send -n does not send the incremental:\n%s", slogs)
+	}
+}
+
+// setLocal makes loc the host's zone (time.Local) for the rest of the test.
+func setLocal(t *testing.T, loc *time.Location) {
+	t.Helper()
+	old := time.Local
+	time.Local = loc
+	t.Cleanup(func() { time.Local = old })
+}
+
+// Sanoid names snapshots in the host's local time. Without location=, a names-only capture
+// dates them in that zone: on a New York host the adopted monthly would otherwise sort after
+// hourlies taken hours later, and plan would disagree with send against the live pool.
+func TestE2EPlanNamesOnlyCaptureInHostZone(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	setLocal(t, ny)
+	env := newE2EEnv(t)
+	lag := 7 * time.Second
+	snap := func(local time.Time, period string) files.SnapshotInfo {
+		return files.SnapshotInfo{Name: "autosnap_" + local.Format("2006-01-02_15:04:05") + "_" + period, CreationTime: local.Add(lag)}
+	}
+	flags := []string{"--fullIfOlderThan", "4320h", "--fullSnapshotSuffix", "_monthly"}
+	target := "file://" + env.dest
+	monthly := snap(time.Date(2026, 9, 1, 0, 0, 0, 0, ny), "monthly")
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{monthly})
+	env.sendOK(t, append(flags, "tank/data", target)...)
+	pool := []files.SnapshotInfo{
+		snap(time.Date(2026, 9, 1, 3, 0, 0, 0, ny), "hourly"),
+		snap(time.Date(2026, 9, 1, 2, 0, 0, 0, ny), "hourly"),
+		monthly,
+	}
+	env.writeSnapshots(t, "tank/data", pool)
+	capture := filepath.Join(t.TempDir(), "capture.txt")
+	var b strings.Builder
+	for _, s := range pool {
+		b.WriteString("tank/data@" + s.Name + "\n")
+	}
+	if err := ioutil.WriteFile(capture, []byte(b.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	live, _, lerr := env.plan(append(flags, "tank/data", target)...)
+	if lerr != nil || !strings.Contains(live, "INCR") {
+		t.Fatalf("plan against the live pool (%v) is not an INCR:\n%s", lerr, live)
+	}
+	fromCapture, logs, cerr := env.plan(append(flags, "--snapshots", capture, "tank/data", target)...)
+	if cerr != nil || live != fromCapture {
+		t.Errorf("plan from a names-only capture (%v) differs from plan against the live pool:\n--- live\n%s--- capture\n%s", cerr, live, fromCapture)
+	}
+	if !strings.Contains(logs, "read as local (E") { // EST or EDT
+		t.Errorf("the names-only warning does not name the zone the names were read in; logs:\n%s", logs)
 	}
 }

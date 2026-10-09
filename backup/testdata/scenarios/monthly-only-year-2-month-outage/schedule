@@ -9,3 +9,6 @@ until=2027-10-01T01:00:00Z
 every=24h
 skip=2026-11-03T01:00:00Z..2027-01-05T01:00:00Z
 checks=coverage:_monthly
+# Sanoid names are in the host's zone by default; pin it so the golden does not
+# depend on the machine running it.
+location=UTC

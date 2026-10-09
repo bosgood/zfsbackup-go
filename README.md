@@ -102,7 +102,7 @@ next  FULL  autosnap_2026-09-01_00:00:00_monthly  no-previous-full
 checks: OK
 ```
 
-Daily runs until a date, with sanoid's retention policy taking and pruning snapshots in between (`location=` is the time zone of sanoid's snapshot names, UTC by default; `--manifests FILE` stands in for a destination):
+Daily runs until a date, with sanoid's retention policy taking and pruning snapshots in between (`location=` is the time zone of sanoid's snapshot names, this host's by default; `--manifests FILE` stands in for a destination):
 
 ```bash
 $ ./zfsbackup plan --fullIfOlderThan 4320h --fullSnapshotSuffix _monthly --incrementalSnapshotSuffix _monthly --snapshots snaps.txt \

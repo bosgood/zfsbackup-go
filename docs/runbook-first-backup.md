@@ -107,12 +107,13 @@ of the day, on Monday and on the 1st, a few minutes after the boundary, and
 `autoprune = yes`. A template that moves them makes the simulated runs land at
 the wrong time of day.
 
-Sanoid names snapshots in the host's local time. If the host is not on UTC,
-pass `location=<zone>` in `--schedule` below; the copy-paste commands in this
-runbook write `location=<your zone>`, and the examples and committed scenarios
-assume `America/New_York`.
-Otherwise the simulated sanoid snapshots are taken, and the run times rendered,
-at UTC wall-clock times. For a capture without creation times, such as
+Sanoid names snapshots in the host's local time, and `plan` uses the zone of
+the host it runs on for those names, for the simulated sanoid snapshots and for
+the run times it renders. On a host in another zone than the sanoid host, pass
+`location=<zone>` in `--schedule`; the copy-paste commands in this runbook
+write `location=<your zone>`, the examples and the `prod-navidrome-*` scenarios
+assume `America/New_York`, and the other committed scenarios pin `location=UTC`.
+For a capture without creation times, such as
 `zfs list` output converted to JSON (see `testdata/zfs`), the times also come
 from the snapshot names, read in that zone. Sanoid takes its snapshots seconds
 after the time in the name, and the manifests at the destination record that

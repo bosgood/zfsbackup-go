@@ -281,7 +281,7 @@ func TestE2EPlanFromDestinationWithSchedule(t *testing.T) {
 	env.sendOK(t, append(flags, "tank/data", target)...)
 
 	out, logs, err := env.plan(append(flags,
-		"--schedule", "policy=hourly=36,daily=30,monthly=3,from=2026-09-24T01:00:00Z,until=2026-10-02T01:00:00Z,every=24h,checks=coverage:_monthly",
+		"--schedule", "policy=hourly=36,daily=30,monthly=3,from=2026-09-24T01:00:00Z,until=2026-10-02T01:00:00Z,every=24h,checks=coverage:_monthly,location=UTC",
 		"tank/data", target)...)
 	want := "2026-09-24T01:00:00Z..2026-09-30T01:00:00Z  NOOP x7  nothing-newer\n" +
 		"2026-10-01T01:00:00Z  INCR  autosnap_2026-10-01_00:00:00_monthly  from autosnap_2026-09-01_00:00:00_monthly  newer-candidate\n" +

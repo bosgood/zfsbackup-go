@@ -8,3 +8,6 @@ from=2026-09-24T00:00:00Z
 until=2026-12-03T00:00:00Z
 every=24h
 checks=coverage:_monthly
+# Sanoid names are in the host's zone by default; pin it so the golden does not
+# depend on the machine running it.
+location=UTC

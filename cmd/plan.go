@@ -22,9 +22,11 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -99,7 +101,7 @@ func init() {
 		"project runs over time, e.g. \"policy=hourly=36,daily=30,monthly=3,until=2027-10-01T00:00:00Z,every=24h\". Also "+
 			"from= (default: an hour after the newest snapshot), snapshot-delay= (how long after a boundary sanoid takes its "+
 			"snapshots, e.g. 3m), skip=<from>..<until> (no runs in that range; repeatable), checks=coverage:_monthly, and "+
-			"location= for sanoid names in a time zone other than UTC.",
+			"location= for sanoid names in a time zone other than this host's (e.g. location=UTC).",
 	)
 }
 
@@ -221,9 +223,19 @@ func runPlan(cmd *cobra.Command, args []string) error {
 func adoptManifestTimes(sc *backup.Scenario) {
 	if adopted := sc.AdoptCreationTimes(); len(sc.NameDated) > 0 {
 		log.AppLogger.Warningf("The capture has no creation times: %d taken from the manifests at the destination, "+
-			"the rest from the snapshot names. Capture `zfs list -H -p -o name,creation -t snapshot,bookmark -S creation %s` "+
-			"to plan exactly what send will do.", adopted, sc.Volume)
+			"the rest from the snapshot names, read as %s time (--schedule location= sets the zone sanoid runs in). "+
+			"Capture `zfs list -H -p -o name,creation -t snapshot,bookmark -S creation %s` to plan exactly what send will do.",
+			adopted, zoneName(sc.Zone()), sc.Volume)
 	}
+}
+
+// zoneName names loc for a message: time.Local calls itself "Local", so add
+// its current abbreviation.
+func zoneName(loc *time.Location) string {
+	if loc == time.Local {
+		return fmt.Sprintf("local (%s)", time.Now().In(loc).Format("MST"))
+	}
+	return loc.String()
 }
 
 // readPlanInput reads a --snapshots or --manifests file, or stdin for "-".

@@ -57,7 +57,8 @@ type Scenario struct {
 	// there (see PartialSetCompletable); plan sets it from the destinations.
 	Completable bool
 	// Location is the zone of sanoid name timestamps and of rendered times.
-	// nil means UTC.
+	// nil means the host's zone (time.Local): sanoid names snapshots in local
+	// time.
 	Location *time.Location
 	// Schedule is the sanoid policy applied between runs; nil leaves the pool
 	// unchanged.
@@ -386,9 +387,14 @@ func (s *Scenario) resolveSnapshot(fields []string) (files.SnapshotInfo, error) 
 	return files.SnapshotInfo{}, fmt.Errorf("no creation time for %s: it is not in the snapshot list, so add its epoch", name)
 }
 
+// Zone is the zone sanoid names are read in and times are rendered in.
+func (s *Scenario) Zone() *time.Location {
+	return s.location()
+}
+
 func (s *Scenario) location() *time.Location {
 	if s.Location == nil {
-		return time.UTC
+		return time.Local
 	}
 	return s.Location
 }
@@ -405,7 +411,7 @@ func (s *Scenario) location() *time.Location {
 //	                                     A date means the whole day, a time means that instant.
 //	checks=coverage:_monthly             opt-in checks, in addition to the defaults
 //	volume=tank/data                     the volume being backed up
-//	location=America/New_York            zone of sanoid names and rendered times; default UTC
+//	location=America/New_York            zone of sanoid names and rendered times; default the host's
 //
 // Setting any of policy, from, until or every simulates runs over time, which
 // requires until. Times are RFC 3339, or 2006-01-02[T15:04:05] in location.

@@ -73,6 +73,7 @@ func TestChecks(t *testing.T) {
 			Volume:      "tank/data",
 			JobInfo:     files.JobInfo{FullIfOlderThan: 4320 * time.Hour, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_monthly"},
 			DestBackups: [][]*files.JobInfo{initial},
+			Location:    time.UTC,
 			From:        day(0),
 			Until:       day(1000),
 		}
@@ -265,7 +266,7 @@ func TestChecks(t *testing.T) {
 }
 
 func TestWriteTextViolations(t *testing.T) {
-	sc := &Scenario{Until: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)}
+	sc := &Scenario{Until: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC), Location: time.UTC}
 	at := time.Date(2026, 10, 1, 1, 0, 0, 0, time.UTC)
 	sim := &Simulation{Scenario: sc, Steps: []Step{{At: at, Plan: Plan{Action: PlanNoop, Reason: reasonNothingNewer}}}}
 	var buf bytes.Buffer

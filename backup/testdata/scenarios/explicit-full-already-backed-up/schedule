@@ -1,0 +1,3 @@
+# Sanoid names are in the host's zone by default; pin it so the golden does not
+# depend on the machine running it.
+location=UTC

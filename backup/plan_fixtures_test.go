@@ -118,7 +118,7 @@ func TestLoadScenarioSnapshotsJSON(t *testing.T) {
 }
 
 func TestReadManifests(t *testing.T) {
-	s := &Scenario{Volume: "pool/app"}
+	s := &Scenario{Volume: "pool/app", Location: time.UTC}
 	if err := s.ReadSnapshots(strings.NewReader("tank/data@snap-a\t1788220800\tsnapshot\n")); err != nil {
 		t.Fatalf("ReadSnapshots: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestScenarioAdoptCreationTimes(t *testing.T) {
 // the given schedule spec, for tests of skip= ranges.
 func skipScenario(t *testing.T, spec string) *Scenario {
 	t.Helper()
-	sc := &Scenario{Volume: "tank/data"}
+	sc := &Scenario{Volume: "tank/data", Location: time.UTC}
 	if err := sc.ParseScheduleSpec(spec); err != nil {
 		t.Fatalf("ParseScheduleSpec(%s): %v", spec, err)
 	}

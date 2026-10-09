@@ -6,3 +6,6 @@ policy=hourly=36,daily=30,monthly=3
 from=2027-01-01T01:00:00Z
 until=2027-02-02T01:00:00Z
 every=24h
+# Sanoid names are in the host's zone by default; pin it so the golden does not
+# depend on the machine running it.
+location=UTC

@@ -130,7 +130,7 @@ func TestPlanSchedule(t *testing.T) {
 	const name = "monthly-only-5-months"
 	args := append(scenarioFlags(t, name),
 		"--snapshots", filepath.Join(scenarios, name, "snapshots.txt"),
-		"--schedule", "policy=hourly=36,daily=30,monthly=3,from=2026-09-24T01:00:00Z,until=2027-02-20T01:00:00Z,every=24h,checks=coverage:_monthly",
+		"--schedule", "policy=hourly=36,daily=30,monthly=3,from=2026-09-24T01:00:00Z,until=2027-02-20T01:00:00Z,every=24h,checks=coverage:_monthly,location=UTC",
 		"tank/data")
 	out, err := runPlanCommand(t, args...)
 	if err != nil {
