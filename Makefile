@@ -81,9 +81,10 @@ test-one:
 # Report files that `gofmt -s` would rewrite, using the pinned toolchain. The
 # `fmt` target above iterates over an undefined DIRS and so checks nothing.
 # Checks every tracked .go file outside vendor/ (so not the tmp/ scratch clones) with the pinned toolchain.
+# Fails if git lists no files: inside a git worktree the .git link points outside the mount.
 fmt-check:
 	docker run --rm -v "$(CURDIR)":/src -w /src $(GO_IMAGE) \
-		sh -c 'out=$$(git -c safe.directory=/src ls-files "*.go" | grep -v ^vendor/ | xargs gofmt -s -l); [ -z "$$out" ] || { echo "$$out"; echo "^ gofmt -s would rewrite these files"; exit 1; }'
+		sh -c 'files=$$(git -c safe.directory=/src ls-files "*.go" | grep -v ^vendor/); [ -n "$$files" ] || { echo "fmt-check: no .go files listed (a git worktree? its .git link does not resolve in the container)"; exit 1; }; out=$$(echo "$$files" | xargs gofmt -s -l); [ -z "$$out" ] || { echo "$$out"; echo "^ gofmt -s would rewrite these files"; exit 1; }'
 
 build:
 	${GOPATH}/bin/gox -ldflags="-w -s -X github.com/someone1/zfsbackup-go/config.GitCommit=${COMMIT_HASH}" -osarch=${TARGETS}
