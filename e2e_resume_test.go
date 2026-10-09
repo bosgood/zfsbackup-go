@@ -613,3 +613,102 @@ func TestE2EPlanResumePreviewsCompletion(t *testing.T) {
 		t.Errorf("plan --resume returned %v and printed:\n%s\nwant:\n%s\nlogs:\n%s", err, resume, want, logs)
 	}
 }
+
+// A --resume that starts over rewrites the set's volumes like a plain run. The cache must not
+// keep describing the earlier attempt's objects: if this run fails before its first volume is
+// cached, the next --resume would publish their SHA-256s over the rewritten volumes.
+func TestE2EResumeStartOverDiscardsCache(t *testing.T) {
+	resumeRewritesThenFails(t, 1, "Nothing verifiable to resume")
+}
+
+// A resume from volume k re-sends k.. : the cache must stop describing the earlier attempt's
+// copies of them before any is rewritten.
+func TestE2EResumeFromKRewritesCache(t *testing.T) {
+	resumeRewritesThenFails(t, 2, "Resuming from volume 2")
+}
+
+// resumeRewritesThenFails: attempt A completes and is made to look interrupted before vol3;
+// attempt B (--resume, logging want) rewrites dest1's volumes from broken on but fails at
+// dest2, whose volume broken is unreadable; attempt C resumes, and dest1 must restore.
+func resumeRewritesThenFails(t *testing.T, broken int64, want string) {
+	const streamBytes = 3 << 20
+	env := newE2EEnv(t)
+	dest2 := newDest(t)
+	rings := writeRings(t, newKey(t))
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(streamBytes))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	dests := "file://" + env.dest + ",file://" + dest2
+	args := append([]string{"--volsize", "1", "--compressor", "", "--maxRetryTime", "2s", "--maxBackoffTime", "1s"}, rings...)
+
+	env.sendOK(t, append(args, "tank/data@a", dests)...)
+	for _, d := range []string{env.dest, dest2} {
+		for _, n := range manifestNames(destObjects(t, d)) {
+			if err := os.Remove(filepath.Join(d, n)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		dropVolumesFrom(t, d, 3)
+	}
+
+	// A directory in place of dest2's volume: the upload over it fails.
+	vol := volumeNamed(t, dest2, broken)
+	aside := filepath.Join(t.TempDir(), "vol")
+	if err := os.Rename(vol, aside); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(vol, 0700); err != nil {
+		t.Fatal(err)
+	}
+	before := destObjects(t, env.dest)
+	logs, err := guarded(t, func() (string, error) { return env.send(append(args, "--resume", "tank/data@a", dests)...) })
+	if err == nil {
+		t.Fatalf("attempt B succeeded:\n%s", logs)
+	}
+	if !strings.Contains(logs, want) {
+		t.Fatalf("attempt B's log lacks %q:\n%s", want, logs)
+	}
+	after := destObjects(t, env.dest)
+	changed := 0
+	for name, data := range before {
+		if !bytes.Equal(after[name], data) {
+			changed++
+		}
+	}
+	if changed == 0 {
+		t.Fatalf("attempt B rewrote none of dest1's objects; the scenario needs it to")
+	}
+	if err = os.Remove(vol); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(aside, vol); err != nil {
+		t.Fatal(err)
+	}
+
+	env.sendOK(t, append(args, "--resume", "tank/data@a", dests)...)
+
+	t.Setenv("FAKEZFS_RECEIVE_LOG", filepath.Join(t.TempDir(), "receive.log"))
+	rargs := append(append([]string{}, rings...), "--maxRetryTime", "2s", "tank/data@a", "file://"+env.dest, "restored/data")
+	logs, err = guarded(t, func() (string, error) { return env.receive(rargs...) })
+	if err != nil {
+		t.Errorf("the resume exited 0 but a restore from dest1 fails: %v\n%s", err, logs)
+	}
+}
+
+// A --resume under --encryptTo reads the encrypted cache: without the secret ring it could only
+// ever start over, so it is refused up front.
+func TestE2EResumeWithEncryptToNeedsSecretRing(t *testing.T) {
+	env := newE2EEnv(t)
+	rings := writeRings(t, newKey(t))
+	args := []string{rings[0], rings[1], "--encryptTo", "backup@example.com", "--volsize", "1", "--compressor", ""}
+	env.interruptedSend(t, 4<<20, env.dest, args...)
+	before := destObjects(t, env.dest)
+	logs, err := guarded(t, func() (string, error) {
+		return env.send(append(args, "--resume", "tank/data@a", "file://"+env.dest)...)
+	})
+	if err == nil || !strings.Contains(logs, "secret keyring path") {
+		t.Errorf("--resume --encryptTo without --secretKeyRingPath: got %v, want a flag error:\n%s", err, logs)
+	}
+	if after := destObjects(t, env.dest); len(after) != len(before) {
+		t.Errorf("the refused resume changed the destination: %d objects, had %d", len(after), len(before))
+	}
+}

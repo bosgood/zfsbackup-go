@@ -272,6 +272,11 @@ func loadSendKeys() error {
 		if usingSmartOption() && secretKeyRingPath == "" {
 			log.AppLogger.Errorf("You must specify a secret keyring path if you use a smart option with encryptTo")
 			return errInvalidInput
+		} else if jobInfo.Resume && secretKeyRingPath == "" {
+			// The cached partial manifest is encrypted: without the secret ring a resume could
+			// never read it, and would start over every time.
+			log.AppLogger.Errorf("You must specify a secret keyring path if you use --resume with encryptTo")
+			return errInvalidInput
 		} else if publicKeyRingPath == "" {
 			log.AppLogger.Errorf("You must specify a public keyring path if you provide an encryptTo option")
 			return errInvalidInput
@@ -284,7 +289,7 @@ func loadSendKeys() error {
 	}
 
 	if jobInfo.EncryptTo != "" {
-		if usingSmartOption() {
+		if usingSmartOption() || jobInfo.Resume {
 			var err error
 			jobInfo.EncryptKey, err = getAndDecryptPrivateKey(jobInfo.EncryptTo)
 			if err != nil {

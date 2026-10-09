@@ -956,7 +956,7 @@ func partialManifestCachePath(j *files.JobInfo, uri string) string {
 }
 
 // discardPartialManifests removes the cached manifest of j's backup set at every destination. A
-// run without --resume is a fresh attempt: it rewrites the set's volumes, so whatever an earlier
+// run without --resume, or a --resume that starts over, is a fresh attempt: it rewrites the set's volumes, so whatever an earlier
 // attempt cached about them (their sizes and SHA-256s) describes objects that are about to be
 // replaced. Left in place, a later --resume would trust it and publish a manifest whose checksums
 // do not match the volumes at the destination. A cache this run cannot clear fails the run, for
@@ -973,10 +973,11 @@ func discardPartialManifests(j *files.JobInfo, dests []destination) error {
 			log.AppLogger.Errorf("Could not discard the cached manifest %s of an earlier attempt at %s - %v", path, name, err)
 			return err
 		}
-		log.AppLogger.Noticef(
-			"Discarding the cached state of an earlier attempt at %s; this run starts over. Use --resume to continue it instead.",
-			name,
-		)
+		hint := " Use --resume to continue it instead."
+		if j.Resume {
+			hint = ""
+		}
+		log.AppLogger.Noticef("Discarding the cached state of an earlier attempt at %s; this run starts over.%s", name, hint)
 	}
 	return nil
 }
@@ -1232,6 +1233,11 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 // prepared destinations of j.Destinations, in order: every volume it skips must still exist at each.
 // When the attempt got as far as its final manifest, and only that upload failed, it uploads the
 // manifest and reports done: there is nothing left to send.
+//
+// Before any volume is sent, the cache at every destination describes only what this run keeps:
+// a run that starts over discards it, and one that resumes rewrites it with the kept volumes.
+// Otherwise a run that rewrites volumes and then fails before caching them leaves the earlier
+// attempt's sizes and SHA-256s behind, and the next --resume publishes them.
 // nolint:funlen,gocyclo // Difficult to break this apart
 func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination) (done bool, err error) {
 	// Temproary Final Manifest File
@@ -1254,6 +1260,7 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination
 	switch originalManifest, oerr := readManifest(ctx, origManiPath, j); {
 	case os.IsNotExist(oerr):
 		log.AppLogger.Noticef("No previous manifest file exists, nothing to resume; starting over.")
+		return false, discardPartialManifests(j, destinations)
 	case errors.As(oerr, new(*files.KeyError)):
 		// Written by, or for, another key than this run's: a rotated key, not a damaged cache.
 		log.AppLogger.Errorf("Cannot resume backup: the interrupted attempt's manifest %v", oerr)
@@ -1261,6 +1268,7 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination
 	case oerr != nil:
 		// Cut short by a kill or a full disk: there is nothing to resume from.
 		log.AppLogger.Warningf("Could not read previous manifest file %s (%v); starting over.", origManiPath, oerr)
+		return false, discardPartialManifests(j, destinations)
 	default:
 		if j.BaseSnapshot.GUID == "" {
 			return false, fmt.Errorf("cannot resume: could not read the guid of %s@%s", j.VolumeName, j.BaseSnapshot.Name)
@@ -1287,7 +1295,7 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination
 		}
 		if len(volumes) == 0 {
 			log.AppLogger.Noticef("Nothing verifiable to resume; starting over.")
-			return false, nil
+			return false, discardPartialManifests(j, destinations)
 		}
 		// A final manifest (it has an EndTime) whose volumes are all there: only its upload failed.
 		if !originalManifest.EndTime.IsZero() && len(volumes) == len(originalManifest.Volumes) {
@@ -1299,6 +1307,14 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination
 		j.Volumes = volumes
 		j.StartTime = originalManifest.StartTime
 		manifestmutex.Unlock()
+		// The volumes past these are about to be rewritten: drop them from the cache first.
+		kept, err := saveManifest(ctx, j, false)
+		if err != nil {
+			return false, err
+		}
+		if err = kept.DeleteVolume(); err != nil {
+			log.AppLogger.Warningf("Error deleting temporary manifest file  - %v", err)
+		}
 		log.AppLogger.Infof("Will be resuming previous backup attempt.")
 	}
 	return false, nil
