@@ -83,7 +83,7 @@ func (p Plan) String() string {
 // no I/O) so it can be unit-tested and simulated: all ZFS and backend state is
 // passed in. snapshots must be sorted newest-first, and destBackups[i] holds
 // the manifests found at destination i, also newest-first. It reads only the
-// smart options from jobInfo.
+// smart options from jobInfo, and VolumeName for messages.
 //
 // When FullSnapshotSuffix/IncrementalSnapshotSuffix are set, full backups are
 // anchored on the newest snapshot matching the full suffix (e.g. "_monthly")
@@ -159,6 +159,10 @@ func planSmartSnapshots(
 				}
 			}
 		}
+	}
+
+	if err := checkLastBackupsOnPool(jobInfo.VolumeName, snapshots, lastBackup); err != nil {
+		return Plan{}, err
 	}
 
 	var lastNotEqual bool
@@ -267,6 +271,31 @@ func planSmartSnapshots(
 		return Plan{Action: PlanFull, Base: *fullBase, Source: source, Reason: reasonSourcePruned}, nil
 	}
 	return Plan{Action: PlanIncremental, Base: *incrBase, Source: source, Reason: reasonNewerCandidate, FullDue: fullDue}, nil
+}
+
+// checkLastBackupsOnPool fails with ErrLastBackupInFuture when a destination's last backup is
+// dated after every snapshot on the pool and is not on it: no snapshot would ever look newer, so
+// every run would quietly send nothing. Another host writing the same prefix and dataset name, a
+// forged manifest or a wrong clock leaves such a backup. snapshots is newest-first.
+func checkLastBackupsOnPool(volume string, snapshots []files.SnapshotInfo, lastBackup []*files.SnapshotInfo) error {
+	for idx, last := range lastBackup {
+		if last == nil || !last.CreationTime.After(snapshots[0].CreationTime) {
+			continue
+		}
+		if onPool := *last; validateSnapShotExistsFromSnaps(&onPool, snapshots, true) {
+			continue
+		}
+		dest := "the destination's"
+		if len(lastBackup) > 1 {
+			dest = fmt.Sprintf("destination #%d's", idx+1)
+		}
+		return fmt.Errorf(
+			"%w: %s last backup of %s is %s, dated %s, after every snapshot on the pool; "+
+				"is another host writing this prefix, or was the clock wrong?",
+			ErrLastBackupInFuture, dest, volume, last.Name, last.CreationTime.UTC().Format(time.RFC3339),
+		)
+	}
+	return nil
 }
 
 // Step is one simulated run.

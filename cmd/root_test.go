@@ -40,6 +40,7 @@ func TestExitCode(t *testing.T) {
 		{sendCmd, backup.ErrNoOp, 0}, // a smart send with nothing new to back up
 		{sendCmd, fmt.Errorf("wrapped: %w", backup.ErrNoOp), 0},
 		{sendCmd, errInvalidInput, 255},
+		{sendCmd, fmt.Errorf("wrapped: %w", backup.ErrLastBackupInFuture), 2},
 		{planCmd, nil, 0},
 		{planCmd, errChecksFailed, 2},
 		{planCmd, errInvalidInput, 1},

@@ -21,6 +21,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -29,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/someone1/zfsbackup-go/backup"
 	"github.com/someone1/zfsbackup-go/files"
 )
 
@@ -271,5 +273,37 @@ func TestE2EPlanNamesOnlyCaptureInHostZone(t *testing.T) {
 	}
 	if !strings.Contains(logs, "read as local (E") { // EST or EDT
 		t.Errorf("the names-only warning does not name the zone the names were read in; logs:\n%s", logs)
+	}
+}
+
+// A last backup dated after everything on the pool (another host writing the same prefix and
+// dataset name, a forged manifest, or a clock that was wrong) used to make every smart send
+// "Nothing new to back up" with exit 0. send and plan refuse it instead.
+func TestE2ESendRefusesLastBackupNewerThanPool(t *testing.T) {
+	env := newE2EEnv(t)
+	flags := []string{"--fullIfOlderThan", "4320h", "--fullSnapshotSuffix", "_monthly", "--incrementalSnapshotSuffix", "_monthly"}
+	target := "file://" + env.dest
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "autosnap_2099-01-01_00:00:00_monthly", CreationTime: time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)}})
+	env.sendOK(t, append(flags, "tank/data", target)...)
+
+	var pool []files.SnapshotInfo
+	for m := 12; m >= 1; m-- {
+		d := time.Date(2026, time.Month(m), 1, 0, 0, 7, 0, time.UTC)
+		pool = append(pool, files.SnapshotInfo{Name: "autosnap_" + d.Format("2006-01-02_15:04:05") + "_monthly", CreationTime: d})
+	}
+	env.writeSnapshots(t, "tank/data", pool)
+	const want = "the destination's last backup of tank/data is autosnap_2099-01-01_00:00:00_monthly, dated 2099-01-01T00:00:00Z, " +
+		"after every snapshot on the pool"
+
+	logs, err := env.send(append(flags, "tank/data", target)...)
+	if !errors.Is(err, backup.ErrLastBackupInFuture) {
+		t.Errorf("send returned %v, want ErrLastBackupInFuture\n%s", err, logs)
+	}
+	if !strings.Contains(logs, want) {
+		t.Errorf("send did not say why; logs:\n%s", logs)
+	}
+	out, plogs, err := env.plan(append(flags, "tank/data", target)...)
+	if err == nil || !strings.Contains(out, want) || strings.Contains(out, "checks: OK") {
+		t.Errorf("plan returned %v and printed:\n%s\nlogs:\n%s", err, out, plogs)
 	}
 }

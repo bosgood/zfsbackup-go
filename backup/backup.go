@@ -53,8 +53,11 @@ import (
 )
 
 var (
-	ErrNoOp       = errors.New("nothing new to sync")
-	manifestmutex sync.Mutex
+	ErrNoOp = errors.New("nothing new to sync")
+	// ErrLastBackupInFuture: a destination's last backup is dated after every snapshot on the
+	// pool, so a smart send would find nothing newer to send, run after run.
+	ErrLastBackupInFuture = errors.New("last backup newer than the pool")
+	manifestmutex         sync.Mutex
 )
 
 // Test hooks, nil outside tests. They widen race windows in sendStream that are otherwise

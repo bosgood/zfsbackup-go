@@ -90,12 +90,13 @@ func Execute(ctx context.Context) {
 
 // exitCode maps the outcome of a command to the process exit status: 0 on
 // success and when a smart send finds nothing new to back up, 2 when plan's
-// checks fail, 1 for other plan errors and 255 for any other error.
+// checks fail or a smart send finds the last backup newer than the pool, 1 for
+// other plan errors and 255 for any other error.
 func exitCode(cmd *cobra.Command, err error) int {
 	switch {
 	case err == nil, errors.Is(err, backup.ErrNoOp):
 		return 0
-	case errors.Is(err, errChecksFailed):
+	case errors.Is(err, errChecksFailed), errors.Is(err, backup.ErrLastBackupInFuture):
 		return 2
 	case cmd == planCmd:
 		return 1

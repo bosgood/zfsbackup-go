@@ -196,6 +196,21 @@ func TestPlanSmartSnapshotsReasons(t *testing.T) {
 			},
 		},
 		{
+			name:        "the last backup is newer than every snapshot on the pool",
+			jobInfo:     monthlyOnly,
+			snapshots:   []files.SnapshotInfo{snap("d31_monthly", day(31)), snap("d1_monthly", day(1))},
+			destBackups: [][]*files.JobInfo{{fullManifest(snap("d90_monthly", day(90)))}},
+			wantErr: "last backup newer than the pool: the destination's last backup of  is d90_monthly, dated 2026-08-30T00:00:00Z, " +
+				"after every snapshot on the pool; is another host writing this prefix, or was the clock wrong?",
+		},
+		{
+			name:        "the last backup is the newest snapshot on the pool",
+			jobInfo:     monthlyOnly,
+			snapshots:   []files.SnapshotInfo{snap("d31_monthly", day(31)), snap("d1_monthly", day(1))},
+			destBackups: [][]*files.JobInfo{{fullManifest(snap("d31_monthly", day(31)))}},
+			want:        Plan{Action: PlanNoop, Reason: "nothing-newer"},
+		},
+		{
 			name:        "diverged destinations: the one behind decides",
 			jobInfo:     monthlyOnly,
 			snapshots:   []files.SnapshotInfo{snap("d60_monthly", day(60)), snap("d30_monthly", day(30)), snap("d1_monthly", day(1))},
