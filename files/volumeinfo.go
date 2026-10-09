@@ -27,6 +27,7 @@ import (
 	"crypto/md5"  // nolint:gosec // MD5 not used for cryptographic purposes here
 	"crypto/sha1" // nolint:gosec // SHA1 not used for cryptographic purposes here
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"hash"
 	"hash/crc32"
@@ -44,6 +45,7 @@ import (
 	gzip "github.com/klauspost/pgzip"
 	"github.com/miolini/datacounter"
 	"golang.org/x/crypto/openpgp"
+	pgperrors "golang.org/x/crypto/openpgp/errors"
 	"golang.org/x/crypto/openpgp/packet"
 
 	"github.com/someone1/zfsbackup-go/config"
@@ -99,6 +101,11 @@ type VolumeInfo struct {
 	cw  io.WriteCloser
 	rw  io.ReadCloser
 	cmd *exec.Cmd
+	// cmdIn is what os/exec copies into an external decompressor; cmdWaited and cmdErr record
+	// waitDecompressor's result.
+	cmdIn     *eofReader
+	cmdWaited bool
+	cmdErr    error
 	// PGP objects
 	pgpw io.WriteCloser
 	pgpr *openpgp.MessageDetails
@@ -146,6 +153,11 @@ func (v *VolumeInfo) Read(p []byte) (int, error) {
 	}
 	i, err := v.r.Read(p)
 	if err == io.EOF && v.pgpr != nil {
+		if v.cmd != nil {
+			if werr := v.waitDecompressor(); werr != nil {
+				return i, werr
+			}
+		}
 		if serr := v.signatureError(); serr != nil {
 			return i, serr
 		}
@@ -172,6 +184,35 @@ func (v *VolumeInfo) signatureError() error {
 		}
 	}
 	return nil
+}
+
+// eofReader records whether its reader reached io.EOF.
+type eofReader struct {
+	r   io.Reader
+	eof bool
+}
+
+func (e *eofReader) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	if err == io.EOF {
+		e.eof = true
+	}
+	return n, err
+}
+
+// waitDecompressor waits for the external decompressor and for os/exec's goroutine that copies the
+// message into it. openpgp records the signature's result in that goroutine when the copy reaches
+// the end of the message, so it is only safe to read after this; and if the decompressor exited
+// before the end, the signature was never checked. Call it only once its output is at EOF.
+func (v *VolumeInfo) waitDecompressor() error {
+	if !v.cmdWaited {
+		v.cmdWaited = true
+		v.cmdErr = v.cmd.Wait()
+		if v.cmdErr == nil && !v.cmdIn.eof {
+			v.cmdErr = fmt.Errorf("decompressor %s exited before reading all of %s, so its signature was not checked", v.cmd.Path, v.ObjectName)
+		}
+	}
+	return v.cmdErr
 }
 
 // VerifyEnd reads the rest of the volume and checks its signature. Readers that stop before EOF
@@ -267,16 +308,21 @@ func (v *VolumeInfo) Extract(ctx context.Context, j *JobInfo, isManifest bool) e
 		pgpConfig := new(packet.Config)
 		pgpConfig.DefaultCompressionAlgo = packet.CompressionNone // We will do our own, thank you very much!
 		pgpConfig.DefaultCipher = packet.CipherAES256
-		pgpReader, perr := openpgp.ReadMessage(v.r, pgp.GetCombinedKeyRing(), pgp.PromptFunc, pgpConfig)
-		if perr != nil {
-			return perr
-		}
-		// Anyone holding the public key can write an encrypted message; only the holder of
-		// --signFrom's key can sign one. What was asked for must be there.
 		name := v.ObjectName
 		if name == "" {
 			name = v.filename
 		}
+		pgpReader, perr := openpgp.ReadMessage(v.r, pgp.GetCombinedKeyRing(), pgp.PromptFunc, pgpConfig)
+		switch {
+		case errors.Is(perr, pgp.ErrNeedsPassphrase):
+			return keyErrorf("%s %v", name, perr)
+		case errors.Is(perr, pgperrors.ErrKeyIncorrect):
+			return keyErrorf("%s is encrypted to no key in the secret ring (%v)", name, perr)
+		case perr != nil:
+			return perr
+		}
+		// Anyone holding the public key can write an encrypted message; only the holder of
+		// --signFrom's key can sign one. What was asked for must be there.
 		if j.SignKey != nil && !pgpReader.IsSigned {
 			return keyErrorf("%s is not signed, and --signFrom requires a signature", name)
 		}
@@ -305,7 +351,8 @@ func (v *VolumeInfo) Extract(ctx context.Context, j *JobInfo, isManifest bool) e
 	case ZfsCompressor:
 	default:
 		v.cmd = exec.CommandContext(ctx, compressor, "-c", "-d")
-		v.cmd.Stdin = v.r
+		v.cmdIn = &eofReader{r: v.r}
+		v.cmd.Stdin = v.cmdIn
 
 		decompressor, err := v.cmd.StdoutPipe()
 		if err != nil {
@@ -375,7 +422,11 @@ func (v *VolumeInfo) Close() error {
 	}
 	// If we used an external (de)compressor, wait for it to close as well
 	if v.cmd != nil {
-		keep(v.cmd.Wait())
+		if v.cmdWaited {
+			keep(v.cmdErr)
+		} else {
+			keep(v.cmd.Wait())
+		}
 		v.cmd = nil
 	}
 

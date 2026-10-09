@@ -23,8 +23,11 @@ package files
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"path/filepath"
 	"strings"
@@ -215,4 +218,121 @@ func TestVerifyEndRejectsOtherSigner(t *testing.T) {
 			t.Errorf("want VerifyEnd to fail with 'not in --signFrom's ring'; %s failed with %v", step, err)
 		}
 	})
+}
+
+// A message no already-decrypted key opens (one sealed with a passphrase, or encrypted to a
+// secret key that is still locked) makes openpgp ask for a passphrase. That must be a KeyError,
+// not a panic: one such object under the manifest prefix would crash list, send, clean and
+// receive, and a send would die holding its lock.
+func TestExtractSymmetricMessageIsKeyError(t *testing.T) {
+	key := newTestKey(t, "backup@example.com")
+	old := newTestKey(t, "old@example.com")
+	loadRings(t, []*openpgp.Entity{key, old}, []*openpgp.Entity{key, old})
+
+	extract := func(t *testing.T, path string, j *JobInfo) (perr interface{}, err error) {
+		t.Helper()
+		defer func() { perr = recover() }()
+		v, err := ExtractLocal(context.Background(), j, path, true)
+		if v != nil {
+			v.Close()
+		}
+		return nil, err
+	}
+	check := func(t *testing.T, path string, j *JobInfo) {
+		t.Helper()
+		p, err := extract(t, path, j)
+		if p != nil {
+			t.Fatalf("Extract panicked: %v", p)
+		}
+		if !errors.As(err, new(*KeyError)) {
+			t.Errorf("want a KeyError, got %T %v", err, err)
+		}
+	}
+
+	t.Run("symmetric message planted at the destination", func(t *testing.T) {
+		var buf bytes.Buffer
+		w, err := openpgp.SymmetricallyEncrypt(&buf, []byte("x"), nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprint(w, "not a manifest")
+		w.Close()
+		path := filepath.Join(t.TempDir(), "m")
+		if err = ioutil.WriteFile(path, buf.Bytes(), 0600); err != nil {
+			t.Fatal(err)
+		}
+		check(t, path, manifestJob(key, key))
+	})
+
+	t.Run("manifest encrypted to a rotated still-locked key", func(t *testing.T) {
+		path := writeManifest(t, manifestJob(old, nil))
+		// The old key is in the secret ring but passphrase-protected: only --encryptTo's key is decrypted.
+		locked := pgp.GetPrivateKeyByEmail("old@example.com")
+		locked.PrivateKey.Encrypted = true
+		for _, s := range locked.Subkeys {
+			s.PrivateKey.Encrypted = true
+		}
+		check(t, path, manifestJob(key, nil))
+	})
+
+	t.Run("manifest encrypted to a key in neither ring", func(t *testing.T) {
+		stranger := newTestKey(t, "stranger@example.com")
+		check(t, writeManifest(t, manifestJob(stranger, nil)), manifestJob(key, nil))
+	})
+}
+
+// With an external decompressor, the signature is verified when the decompressor's stdin copy
+// reaches the end of the message. A decompressor that exits before that leaves it unchecked, so
+// the volume must fail instead of ending cleanly.
+func TestExtractExternalDecompressorReadsWholeMessage(t *testing.T) {
+	key := newTestKey(t, "backup@example.com")
+	loadRings(t, []*openpgp.Entity{key}, []*openpgp.Entity{key})
+
+	// A signed message whose last payload byte is flipped after signing: it does not verify.
+	var buf bytes.Buffer
+	w, err := openpgp.Sign(&buf, key, nil, &packet.Config{DefaultHash: crypto.SHA256})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := bytes.Repeat([]byte("zfs stream "), 100000) // more than a pipe buffer
+	if _, err = w.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	msg := buf.Bytes()
+	i := bytes.LastIndex(msg, []byte("stream zfs stream "))
+	if i < 0 {
+		t.Fatal("payload not found in the message")
+	}
+	msg[i+len("stream zfs stream ")-1] ^= 0xff
+	path := filepath.Join(t.TempDir(), "vol")
+	if err = ioutil.WriteFile(path, msg, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"whole": "#!/bin/sh\nexec cat\n",
+		"early": "#!/bin/sh\nexec head -c 1000\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			script := filepath.Join(dir, name)
+			if err := ioutil.WriteFile(script, []byte(body), 0755); err != nil {
+				t.Fatal(err)
+			}
+			j := manifestJob(nil, key)
+			j.Compressor = script
+			v, err := ExtractLocal(context.Background(), j, path, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = io.Copy(io.Discard, v)
+			if cerr := v.Close(); err == nil {
+				err = cerr
+			}
+			if err == nil {
+				t.Error("a volume whose signature does not verify was read without an error")
+			}
+		})
+	}
 }

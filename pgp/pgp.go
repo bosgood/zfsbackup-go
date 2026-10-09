@@ -21,6 +21,7 @@
 package pgp
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -52,9 +53,22 @@ func GetCombinedKeyRing() openpgp.KeyRing {
 	return append(pubRing, secRing...)
 }
 
-// PromptFunc is used to satisfy the openpgp package's requirements
+// ErrNeedsPassphrase is what PromptFunc returns: a message that no already-decrypted secret key
+// opens needs a passphrase, and zfsbackup never asks for one.
+var ErrNeedsPassphrase = errors.New("needs a passphrase")
+
+// PromptFunc is used to satisfy the openpgp package's requirements. openpgp calls it for a
+// message no decrypted secret key opens: one sealed with a passphrase, or encrypted to a secret
+// key that is still locked. It never decrypts anything.
 func PromptFunc(keys []openpgp.Key, symmetric bool) ([]byte, error) {
-	panic("secret keys should have been decrypted already")
+	if len(keys) == 0 && symmetric {
+		return nil, fmt.Errorf("is encrypted with a passphrase, not to a key: %w", ErrNeedsPassphrase)
+	}
+	ids := make([]string, 0, len(keys))
+	for _, k := range keys {
+		ids = append(ids, k.PublicKey.KeyIdString())
+	}
+	return nil, fmt.Errorf("is encrypted to locked secret key %s: %w", strings.Join(ids, ", "), ErrNeedsPassphrase)
 }
 
 func getKeyByEmail(keyring openpgp.EntityList, email string) *openpgp.Entity {

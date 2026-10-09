@@ -243,3 +243,20 @@ func TestE2EReceiveAutoPrefersFull(t *testing.T) {
 		})
 	}
 }
+
+// With an external decompressor, openpgp records the signature's result in os/exec's stdin-copy
+// goroutine. Reading it must wait for that goroutine (run under -race).
+func TestE2EReceiveExternalDecompressorVerifiesSignature(t *testing.T) {
+	env := newE2EEnv(t)
+	rings := writeRings(t, newKey(t))
+	t.Setenv("FAKEZFS_STREAM_BYTES", "200000")
+	t.Setenv("FAKEZFS_RECEIVE_LOG", filepath.Join(t.TempDir(), "receive.log"))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	env.sendOK(t, append(append([]string{"--compressor", "gzip"}, rings...), "tank/data@a", "file://"+env.dest)...)
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive(append(append([]string{}, rings...), "tank/data@a", "file://"+env.dest, "restored/data")...)
+	})
+	if err != nil {
+		t.Fatalf("receive: %v\n%s", err, logs)
+	}
+}
