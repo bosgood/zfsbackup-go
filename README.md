@@ -171,6 +171,7 @@ gpg2 --output private.pgp --armor --export-secret-key test@example.com
 ```
 
 - PGP Passphrase will be prompted during execution if it is not found in the PGP_PASSPHRASE environmental variable.
+- `receive` runs the external decompressor a backup's manifest names only if it is one of gzip, pigz, bzip2, pbzip2, lbzip2, xz, pxz, lzma, zstd, pzstd, lz4 or lzop; for any other, pass the same name to `receive --compressor` if you trust it.
 - `--maxFileBuffer=0` will disable parallel uploading for some backends, multiple destinations, and upload hash verification but will use virtually no disk space.
 - For S3: Specify Standard/Bulk/Expedited in the AWS_S3_GLACIER_RESTORE_TIER environmental variable to change Glacier restore option (default: Bulk)
 - A duration string is a possibly signed sequence of decimal numbers, each with optional fraction and a unit suffix, such as "300ms", "-1.5h" or "2h45m". Valid time units are "ns", "us" (or "µs"), "ms", "s", "m", "h".

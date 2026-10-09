@@ -321,7 +321,7 @@ func TestExtractExternalDecompressorReadsWholeMessage(t *testing.T) {
 				t.Fatal(err)
 			}
 			j := manifestJob(nil, key)
-			j.Compressor = script
+			j.Compressor, j.TrustedCompressor = script, script
 			v, err := ExtractLocal(context.Background(), j, path, false)
 			if err != nil {
 				t.Fatal(err)

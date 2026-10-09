@@ -22,6 +22,9 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
+	"context"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -255,6 +258,83 @@ func TestE2EReceiveExternalDecompressorVerifiesSignature(t *testing.T) {
 	env.sendOK(t, append(append([]string{"--compressor", "gzip"}, rings...), "tank/data@a", "file://"+env.dest)...)
 	logs, err := guarded(t, func() (string, error) {
 		return env.receive(append(append([]string{}, rings...), "tank/data@a", "file://"+env.dest, "restored/data")...)
+	})
+	if err != nil {
+		t.Fatalf("receive: %v\n%s", err, logs)
+	}
+}
+
+// Without --signFrom anyone who can write the destination can rewrite a manifest. Its Compressor
+// must not choose a program for receive to run: only known decompressors, or the one receive's
+// --compressor names.
+func TestE2EReceiveRefusesManifestCompressorPath(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+	t.Setenv("FAKEZFS_RECEIVE_LOG", filepath.Join(t.TempDir(), "receive.log"))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+		{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+	})
+	env.sendOK(t, "--compressor", "", "tank/data@a", "file://"+env.dest)
+	name := "manifests|tank/data|a.manifest.gz"
+	ran := filepath.Join(t.TempDir(), "ran")
+	evil := filepath.Join(env.dest, "evil.sh")
+	if err := ioutil.WriteFile(evil, []byte(fmt.Sprintf("#!/bin/sh\ntouch %q\nexec cat\n", ran)), 0755); err != nil {
+		t.Fatal(err)
+	}
+	vol, err := files.ExtractLocal(context.Background(), &files.JobInfo{}, filepath.Join(env.dest, name), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := new(files.JobInfo)
+	if err = json.NewDecoder(vol).Decode(m); err != nil {
+		t.Fatal(err)
+	}
+	vol.Close()
+	m.Compressor = evil
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if err = json.NewEncoder(gz).Encode(m); err != nil {
+		t.Fatal(err)
+	}
+	gz.Close()
+	if err = ioutil.WriteFile(filepath.Join(env.dest, name), buf.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.RemoveAll(filepath.Join(env.work, "cache")); err != nil {
+		t.Fatal(err)
+	}
+
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive("tank/data@a", "file://"+env.dest, "restored/data")
+	})
+	if _, serr := os.Stat(ran); serr == nil {
+		t.Fatalf("receive ran the manifest's compressor %s (receive err=%v)", evil, err)
+	}
+	want := fmt.Sprintf("pass --compressor %s to receive if you trust it", evil)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("want an error saying %q, got %v\n%s", want, err, logs)
+	}
+
+	// Named by the user, it is run.
+	if logs, err = guarded(t, func() (string, error) {
+		return env.receive("--compressor", evil, "tank/data@a", "file://"+env.dest, "restored/data")
+	}); err != nil {
+		t.Fatalf("receive --compressor %s: %v\n%s", evil, err, logs)
+	}
+	if _, serr := os.Stat(ran); serr != nil {
+		t.Errorf("receive --compressor %s did not run it", evil)
+	}
+}
+
+// A known decompressor named by the manifest needs no --compressor.
+func TestE2EReceiveRunsKnownManifestCompressor(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", "200000")
+	t.Setenv("FAKEZFS_RECEIVE_LOG", filepath.Join(t.TempDir(), "receive.log"))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	env.sendOK(t, "--compressor", "gzip", "tank/data@a", "file://"+env.dest)
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive("tank/data@a", "file://"+env.dest, "restored/data")
 	})
 	if err != nil {
 		t.Fatalf("receive: %v\n%s", err, logs)

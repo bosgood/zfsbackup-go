@@ -124,6 +124,14 @@ func init() {
 		"the maximum delay you'd want a worker to sleep before retrying an download.",
 	)
 	receiveCmd.Flags().StringVar(
+		&jobInfo.TrustedCompressor,
+		"compressor",
+		"",
+		"an external decompressor to run although it is not one of the known ones (gzip, pigz, bzip2, pbzip2, lbzip2, "+
+			"xz, pxz, lzma, zstd, pzstd, lz4, lzop). The backup's manifest names its compressor; a manifest naming any "+
+			"other program is refused unless this flag names the same one.",
+	)
+	receiveCmd.Flags().StringVar(
 		&jobInfo.Separator,
 		"separator",
 		files.DefaultSeparator,
@@ -146,6 +154,7 @@ func ResetReceiveJobInfo() {
 	jobInfo.MaxRetryTime = 12 * time.Hour
 	jobInfo.MaxBackoffTime = 30 * time.Minute
 	jobInfo.Separator = files.DefaultSeparator
+	jobInfo.TrustedCompressor = ""
 }
 
 // nolint:gocyclo // Will do later

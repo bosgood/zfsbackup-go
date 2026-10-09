@@ -268,6 +268,11 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 	manifest.ManifestPrefix = jobInfo.ManifestPrefix
 	manifest.SignKey = jobInfo.SignKey
 	manifest.EncryptKey = jobInfo.EncryptKey
+	manifest.TrustedCompressor = jobInfo.TrustedCompressor
+	if err = files.CheckDecompressor(manifest.Compressor, manifest.TrustedCompressor); err != nil {
+		log.AppLogger.Errorf("Refusing to restore %s: %v", jobInfo.ManifestObjectName(), err)
+		return err
+	}
 
 	// Get list of Objects
 	toDownload := make([]string, len(manifest.Volumes))

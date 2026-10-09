@@ -282,6 +282,25 @@ func (v *VolumeInfo) OpenVolume() error {
 	return nil
 }
 
+// knownDecompressors are the external programs a manifest may name for receive to run without
+// receive's --compressor. Each takes gzip's -c -d.
+var knownDecompressors = map[string]bool{
+	"gzip": true, "pigz": true, "bzip2": true, "pbzip2": true, "lbzip2": true, "xz": true,
+	"pxz": true, "lzma": true, "zstd": true, "pzstd": true, "lz4": true, "lzop": true,
+}
+
+// CheckDecompressor returns an error unless receive may run compressor, which a manifest names,
+// to decompress that manifest's volumes. Anyone who can write an unsigned manifest chooses it, so
+// it must be one of the known decompressors, or the one the user trusted with --compressor.
+func CheckDecompressor(compressor, trusted string) error {
+	switch {
+	case compressor == "", compressor == InternalCompressor, compressor == ZfsCompressor,
+		knownDecompressors[compressor], compressor == trusted:
+		return nil
+	}
+	return fmt.Errorf("the manifest names compressor %s; pass --compressor %s to receive if you trust it", compressor, compressor)
+}
+
 // ExtractLocal will try and open a local file for extraction
 func ExtractLocal(ctx context.Context, j *JobInfo, path string, isManifest bool) (*VolumeInfo, error) {
 	v := new(VolumeInfo)
@@ -350,6 +369,9 @@ func (v *VolumeInfo) Extract(ctx context.Context, j *JobInfo, isManifest bool) e
 	case "":
 	case ZfsCompressor:
 	default:
+		if err = CheckDecompressor(compressor, j.TrustedCompressor); err != nil {
+			return err
+		}
 		v.cmd = exec.CommandContext(ctx, compressor, "-c", "-d")
 		v.cmdIn = &eofReader{r: v.r}
 		v.cmd.Stdin = v.cmdIn

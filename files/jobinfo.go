@@ -96,6 +96,9 @@ type JobInfo struct {
 	Origin      string `json:"-"`
 	LocalVolume string `json:"-"`
 	AutoRestore bool   `json:"-"`
+	// TrustedCompressor is receive's --compressor: a decompressor a manifest may name although
+	// it is not one of the known ones.
+	TrustedCompressor string `json:"-"`
 
 	Destinations []string `json:"-"`
 	// DestinationsAsTyped maps each of Destinations (canonical URIs) to the spelling given on
