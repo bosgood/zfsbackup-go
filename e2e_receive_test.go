@@ -24,8 +24,10 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -38,6 +40,7 @@ import (
 	"golang.org/x/crypto/openpgp/packet"
 
 	"github.com/someone1/zfsbackup-go/files"
+	"github.com/someone1/zfsbackup-go/internal/fakezfs"
 )
 
 // newKey returns a new RSA key for backup@example.com. Keys from NewEntity need SHA256 as their
@@ -413,5 +416,46 @@ func TestE2EReceiveRejectsSubstitutedManifest(t *testing.T) {
 	}
 	if _, serr := os.Stat(receiveLog); serr == nil {
 		t.Errorf("zfs receive ran\n%s", logs)
+	}
+}
+
+// TestE2EReceiveAutoIncrementalOntoExistingParent: updating a restored copy that already has
+// @a, from a destination holding full a, a->b and full b. receive --auto of b must apply the
+// incremental a->b: real zfs refuses a full stream into a dataset that has snapshots.
+func TestE2EReceiveAutoIncrementalOntoExistingParent(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+	a := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).Unix()
+	b := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Unix()
+	fixture := fmt.Sprintf("tank/data@b\t%d\tsnapshot\ntank/data@a\t%d\tsnapshot\n", b, a)
+	if err := ioutil.WriteFile(env.snapshots, []byte(fixture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"tank/data@a"}, {"-i", "a", "tank/data@b"}, {"tank/data@b"}} {
+		env.sendOK(t, append(append([]string{"--compressor", ""}, args...), "file://"+env.dest)...)
+	}
+	// The restored copy already has @a.
+	fixture += fmt.Sprintf("restored/data@a\t%d\tsnapshot\n", a)
+	if err := ioutil.WriteFile(env.snapshots, []byte(fixture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	receiveLog := filepath.Join(t.TempDir(), "receive.log")
+	t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive("--auto", "tank/data@b", "file://"+env.dest, "restored/data")
+	})
+	if err != nil {
+		t.Fatalf("receive: %v\n%s", err, logs)
+	}
+	got, err := ioutil.ReadFile(receiveLog)
+	if err != nil {
+		t.Fatalf("zfs receive was not run: %v\n%s", err, logs)
+	}
+	h := sha256.New()
+	if _, err = io.Copy(h, fakezfs.Stream("a", "tank/data@b", 4096)); err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("4096 %x\n", h.Sum(nil)); string(got) != want {
+		t.Errorf("zfs receive got %q, want only the incremental a->b %q\n%s", got, want, logs)
 	}
 }

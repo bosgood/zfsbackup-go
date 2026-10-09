@@ -96,21 +96,7 @@ func AutoRestore(pctx context.Context, jobInfo *files.JobInfo) error {
 		log.AppLogger.Infof("Restoring to snapshot %s.", jobInfo.BaseSnapshot.Name)
 	}
 
-	// Find the backup of the snapshot we want to restore to: its full when there is one
-	var matches []*files.JobInfo
-	for _, job := range volumeSnaps {
-		if job.BaseSnapshot.Name == jobInfo.BaseSnapshot.Name {
-			matches = append(matches, job)
-		}
-	}
-	jobToRestore := fullOrAny(matches)
-	if jobToRestore == nil {
-		log.AppLogger.Errorf("Could not find the snapshot %v for volume %s on backend.", jobInfo.BaseSnapshot.Name, jobInfo.VolumeName)
-		return errors.New("could not find snapshot provided")
-	}
-
-	// We have the snapshot we'd like to restore to, let's figure out whats already found locally and restore as required
-	jobsToRestore := make([]*files.JobInfo, 0, 10)
+	// The snapshots the local dataset already has: restore only what is missing
 	log.AppLogger.Infof("Calculating how to restore to %s.", jobInfo.BaseSnapshot.Name)
 	volume := jobInfo.LocalVolume
 	parts := strings.Split(jobInfo.VolumeName, "/")
@@ -145,6 +131,20 @@ func AutoRestore(pctx context.Context, jobInfo *files.JobInfo) error {
 		}
 	}
 
+	// Find the backup of the snapshot we want to restore to: the one that applies to what is here
+	var matches []*files.JobInfo
+	for _, job := range volumeSnaps {
+		if job.BaseSnapshot.Name == jobInfo.BaseSnapshot.Name {
+			matches = append(matches, job)
+		}
+	}
+	jobToRestore := backupThatApplies(matches, snapshots)
+	if jobToRestore == nil {
+		log.AppLogger.Errorf("Could not find the snapshot %v for volume %s on backend.", jobInfo.BaseSnapshot.Name, jobInfo.VolumeName)
+		return errors.New("could not find snapshot provided")
+	}
+
+	jobsToRestore := make([]*files.JobInfo, 0, 10)
 	for {
 		// See if the snapshots we want to restore already exist
 		if ok := validateSnapShotExistsFromSnaps(&jobToRestore.BaseSnapshot, snapshots, false); ok {
@@ -188,10 +188,21 @@ func AutoRestore(pctx context.Context, jobInfo *files.JobInfo) error {
 	return nil
 }
 
-// fullOrAny returns the full backup among backups when there is one, else the first of them,
-// else nil. A snapshot sent as an incremental and later again as a full (a restarted chain)
-// is restored from its full, which needs no parent and still works once the old chain is gone.
-func fullOrAny(backups []*files.JobInfo) *files.JobInfo {
+// backupThatApplies returns, among backups of one snapshot, an incremental whose chain of
+// parents reaches a snapshot in local (zfs refuses a full stream into a dataset that has
+// snapshots); else the full (it needs no parent, and still works once an old chain is gone);
+// else the first of them; else nil.
+func backupThatApplies(backups []*files.JobInfo, local []files.SnapshotInfo) *files.JobInfo {
+	for _, b := range backups {
+		for p := b; p != nil; p = p.ParentSnap {
+			if validateSnapShotExistsFromSnaps(&p.BaseSnapshot, local, false) {
+				return b
+			}
+			if p.IncrementalSnapshot.Name == "" {
+				break
+			}
+		}
+	}
 	for _, b := range backups {
 		if b.IncrementalSnapshot.Name == "" {
 			return b
