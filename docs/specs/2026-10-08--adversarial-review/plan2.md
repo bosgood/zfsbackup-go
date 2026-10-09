@@ -422,3 +422,41 @@ usage. Then 16 (runbook encrypts) before any first real backup. Then 5, 6, 7, 8,
 - `make devcontainer-firewall-check` passes, including the kill step.
 - `make fmt-check`, `make test-docker`, `make test-race` green.
 - Memory note `adversarial-review-2026-10-08-round2` updated with what landed.
+
+## Implementation notes (2026-10-08)
+
+Executed the same day, 21 commits `231559b..8f9bfdc` on `clean-dry-run` (plus `39175ad`,
+below). Seven subagents worked in worktrees grouped by file (1+12, 2, 3, 4+5+7, 6+8+9,
+13+14+15+N9+N10, 11+16+17); Task 10 ran after Decision 10 was confirmed, on top of 6/8/9
+and 2. Cherry-picks conflicted only in `e2e_receive_test.go` (both sides added tests).
+Every ported test was seen failing on the unfixed code. Deviations:
+
+- Task 1: the fake S3 holds no real streams, so the race test asserts nothing is deleted and
+  the cached manifest survives instead of restoring. Added `TestCleanS3GivesUpOnChangingManifests`.
+- Task 2: under `--resume` the discard notice drops "Use --resume to continue it". N7's check
+  is in `loadSendKeys`, so `plan --resume --encryptTo` also needs the secret ring.
+- Task 3: the check's steps live in `.devcontainer/firewall-check.sh`. The self-check also
+  requires the REJECT rule's counter to rise. nat/mangle are no longer flushed.
+- Task 4: the local snapshot fetch (incl. `--origin`) now precedes the choice.
+- Task 5: `ManifestObjectName()` cannot work on a decoded manifest (no prefix, no keys);
+  added `JobInfo.StoredManifestObjectName(prefix)`, which takes `.pgp` from the recorded keys.
+- Task 6: the signature is checked in `Read` at EOF (after `cmd.Wait()`), not in `Close`,
+  because `receiveStream` only logs `Close` errors. A cached resume manifest encrypted to a
+  key not in the ring is now a KeyError (refuse), not a start-over.
+- Task 7: `files.ReadManifest` reads to EOF through the limit and decodes after; `VerifyEnd`
+  has no production caller now. Largest e2e manifest: 2598 bytes (limit is ~25,000x, not 400x).
+- Task 8: the trusted name lives in `JobInfo.TrustedCompressor` because `AutoRestore`
+  overwrites `Compressor` per manifest.
+- Task 10: `--trustSigner` requires `--signFrom` (without it any ring key is accepted). The
+  runbook's rotation section gives the new key its own address: `--signFrom` takes the first
+  matching key and `ReadArmoredKeyRing` reads one armored block.
+- Task 13: `full-cadence` now skips the complete-partial full, like `no-duplicate-send`.
+- Task 14: the default zone also changes printed run times to the host zone.
+- Task 16: the runbook splits `KEYS`/`SMART`/`FLAGS`; the key must be RSA (gpg's default
+  ed25519 fails with "public key type: 22" until the pgp-ed25519 branch lands).
+- N10: `boundaries`' Keep+2 shortcut now applies only when `from` is zero.
+- `make fmt-check` passed without checking anything inside a worktree; `39175ad` makes it
+  fail on an empty file list.
+
+No golden `expected.txt` changed. Open: the encryption key cannot be rotated
+(old manifests encrypted to a retired passphrase-protected key become unreadable).
