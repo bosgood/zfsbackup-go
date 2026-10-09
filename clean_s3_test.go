@@ -50,7 +50,8 @@ import (
 // ListObjectsV2, HEAD/GET/PUT of an object, DELETE (recorded, so tests can assert nothing
 // was deleted), and archive storage classes: an object in storageClass GLACIER or
 // DEEP_ARCHIVE answers GET with InvalidObjectState until a restore (POST ?restore) was
-// seen for it, after which HEAD reports the restore done.
+// seen for it, after which HEAD reports the restore done. An INTELLIGENT_TIERING object with
+// an archiveStatus is cold the same way, and refuses a restore request that names Days.
 type fakeS3 struct {
 	bucket string
 
@@ -61,8 +62,11 @@ type fakeS3 struct {
 	requests []string
 
 	storageClass map[string]string // key -> x-amz-storage-class, when not STANDARD
-	restores     []string          // keys a restore was requested for, in order
-	restored     map[string]bool
+	// archiveStatus is key -> x-amz-archive-status (ARCHIVE_ACCESS, DEEP_ARCHIVE_ACCESS) of an
+	// INTELLIGENT_TIERING object in an archive tier.
+	archiveStatus map[string]string
+	restores      []string // keys a restore was requested for, in order
+	restored      map[string]bool
 	// headsWithoutRestoreHeader is how many HEADs of a restored object omit
 	// x-amz-restore before it appears (S3 is eventually consistent here).
 	headsWithoutRestoreHeader int
@@ -78,7 +82,7 @@ type fakeS3 struct {
 // cold returns whether key is in an archive storage class that has not been restored.
 func (f *fakeS3) cold(key string) bool {
 	class := f.storageClass[key]
-	return (class == "GLACIER" || class == "DEEP_ARCHIVE") && !f.restored[key]
+	return (class == "GLACIER" || class == "DEEP_ARCHIVE" || f.archiveStatus[key] != "") && !f.restored[key]
 }
 
 func newFakeS3(t *testing.T, objects map[string][]byte) *fakeS3 {
@@ -122,6 +126,18 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case !ok:
 		w.WriteHeader(http.StatusNotFound)
 	case r.Method == http.MethodPost && r.URL.Query().Has("restore"):
+		body, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if f.archiveStatus[key] != "" && strings.Contains(string(body), "<Days>") {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>InvalidArgument</Code>` +
+				`<Message>Days is not allowed for an object in an Intelligent-Tiering archive tier</Message></Error>`))
+			return
+		}
 		f.restores = append(f.restores, key)
 		if f.restored == nil {
 			f.restored = make(map[string]bool)
@@ -131,6 +147,9 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		if class := f.storageClass[key]; class != "" {
 			w.Header().Set("x-amz-storage-class", class)
+		}
+		if status := f.archiveStatus[key]; status != "" && !f.restored[key] {
+			w.Header().Set("x-amz-archive-status", status)
 		}
 		if f.restored[key] {
 			if f.headsSeen == nil {

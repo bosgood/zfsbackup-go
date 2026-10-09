@@ -91,6 +91,36 @@ func TestE2ES3ReceiveRestoresDeepArchive(t *testing.T) {
 	receivedOnce(t, receiveLog)
 }
 
+// Intelligent-Tiering moves an object it has not read in months to an archive tier: its
+// storage class stays INTELLIGENT_TIERING, and only x-amz-archive-status says a GET will
+// fail until it is restored.
+func TestE2ES3ReceiveRestoresIntelligentTieringArchive(t *testing.T) {
+	for _, status := range []string{"ARCHIVE_ACCESS", "DEEP_ARCHIVE_ACCESS"} {
+		t.Run(status, func(t *testing.T) {
+			env := newE2EEnv(t)
+			f, vols := coldS3Set(t, env, "INTELLIGENT_TIERING")
+			f.archiveStatus = make(map[string]string)
+			for _, v := range vols {
+				f.archiveStatus[v] = status
+			}
+			receiveLog := filepath.Join(t.TempDir(), "receive.log")
+			t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+			logs, err := guarded(t, func() (string, error) {
+				return env.receive("--maxRetryTime", "5s", "tank/data@a", "s3://bucket", "restored/data")
+			})
+			if err != nil {
+				t.Fatalf("receive from %s volumes failed: %v\n%s", status, err, logs)
+			}
+			want := append([]string(nil), vols...)
+			sort.Strings(want)
+			if got := restoresOf(f); fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Errorf("restore requests %v, want one per volume %v", got, want)
+			}
+			receivedOnce(t, receiveLog)
+		})
+	}
+}
+
 // A restored object's HEAD may not carry x-amz-restore yet: the wait loop must
 // treat that as "not yet", not dereference nil.
 func TestS3PreDownloadNilRestoreHeader(t *testing.T) {

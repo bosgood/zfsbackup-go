@@ -25,11 +25,13 @@ package backends
 
 import (
 	"context"
+	"errors"
 	"os"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -78,6 +80,7 @@ var (
 const (
 	s3TestBucketName = "s3bucketbackendtest"
 	alreadyRestoring = "alreadyrestoring"
+	restoreFails     = "restorefails" // GLACIER, and RestoreObject fails with a non-AWS error
 )
 
 func (m *mockS3Client) DeleteObjectWithContext(
@@ -180,6 +183,11 @@ func (m *mockS3Client) HeadObjectWithContext(ctx aws.Context, in *s3.HeadObjectI
 			ContentLength: aws.Int64(50),
 			Restore:       aws.String(restoreString),
 		}, nil
+	case restoreFails:
+		return &s3.HeadObjectOutput{
+			StorageClass:  aws.String(s3.ObjectStorageClassGlacier),
+			ContentLength: aws.Int64(50),
+		}, nil
 	case "needsrestore":
 		return &s3.HeadObjectOutput{
 			StorageClass:  aws.String(s3.ObjectStorageClassGlacier),
@@ -204,6 +212,8 @@ func (m *mockS3Client) RestoreObjectWithContext(
 		return nil, errTest
 	case alreadyRestoring:
 		return nil, awserr.New("RestoreAlreadyInProgress", "", errTest)
+	case restoreFails:
+		return nil, errTest
 	}
 	return nil, nil
 }
@@ -603,6 +613,21 @@ func TestS3PreDownload(t *testing.T) {
 		if err := b.PreDownload(context.Background(), c.keys); !c.errTest(err) {
 			t.Errorf("%d: Did not get expected error, got %v instead", idx, err)
 		}
+	}
+}
+
+// A RestoreObject error that is not an awserr.Error must fail PreDownload, not leave the key
+// queued with no restore coming, polled until the context ends.
+func TestS3PreDownloadRestoreError(t *testing.T) {
+	t.Setenv("AWS_S3_RESTORE_POLL_INTERVAL", "10ms")
+	b := &AWSS3Backend{}
+	if err := b.Init(context.Background(), &BackendConfig{TargetURI: AWSS3BackendPrefix + "://goodbucket"}, getOptions()...); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := b.PreDownload(ctx, []string{restoreFails}); !errors.Is(err, errTest) {
+		t.Errorf("PreDownload returned %v, want the RestoreObject error %v", err, errTest)
 	}
 }
 

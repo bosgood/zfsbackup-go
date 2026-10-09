@@ -278,7 +278,8 @@ func (a *AWSS3Backend) Delete(ctx context.Context, key string) error {
 	return err
 }
 
-// PreDownload restores objects in the GLACIER and DEEP_ARCHIVE storage classes, which a GET
+// PreDownload restores objects in the GLACIER and DEEP_ARCHIVE storage classes, and
+// INTELLIGENT_TIERING objects in its ARCHIVE_ACCESS and DEEP_ARCHIVE_ACCESS tiers, which a GET
 // cannot read until a restore has run (GLACIER_IR and the other classes read directly), and
 // waits for the restores to finish. AWS_S3_GLACIER_RESTORE_TIER picks the restore tier
 // (default Bulk); AWS_S3_RESTORE_POLL_INTERVAL sets how often a pending restore is polled
@@ -300,10 +301,10 @@ func (a *AWSS3Backend) PreDownload(ctx context.Context, keys []string) error {
 		if err != nil {
 			return err
 		}
-		if !needsRestore(resp.StorageClass) {
+		if !needsRestore(resp) {
 			continue
 		}
-		if restoreDone(resp.Restore) {
+		if restored(resp) {
 			log.AppLogger.Debugf("s3 backend: key %s is in the %s storage class and already restored.", key, *resp.StorageClass)
 			continue
 		}
@@ -314,21 +315,27 @@ func (a *AWSS3Backend) PreDownload(ctx context.Context, keys []string) error {
 			continue
 		}
 		log.AppLogger.Debugf("s3 backend: key %s will be restored from the %s storage class.", key, *resp.StorageClass)
-		_, rerr := a.client.RestoreObjectWithContext(ctx, &s3.RestoreObjectInput{
-			Bucket: aws.String(a.bucketName),
-			Key:    aws.String(key),
-			RestoreRequest: &s3.RestoreRequest{
-				Days: aws.Int64(3),
-				GlacierJobParameters: &s3.GlacierJobParameters{
-					Tier: aws.String(restoreTier),
-				},
+		request := &s3.RestoreRequest{
+			GlacierJobParameters: &s3.GlacierJobParameters{
+				Tier: aws.String(restoreTier),
 			},
+		}
+		// A restored Intelligent-Tiering object moves back to a frequent-access tier for good;
+		// S3 rejects a lifetime for it.
+		if resp.ArchiveStatus == nil {
+			request.Days = aws.Int64(3)
+		}
+		_, rerr := a.client.RestoreObjectWithContext(ctx, &s3.RestoreObjectInput{
+			Bucket:         aws.String(a.bucketName),
+			Key:            aws.String(key),
+			RestoreRequest: request,
 		})
 		if rerr != nil {
-			if aerr, ok := rerr.(awserr.Error); ok && aerr.Code() != "RestoreAlreadyInProgress" {
-				log.AppLogger.Debugf("s3 backend: error trying to restore key %s - %s: %s", key, aerr.Code(), aerr.Message())
-				return rerr
+			if aerr, ok := rerr.(awserr.Error); ok && aerr.Code() == "RestoreAlreadyInProgress" {
+				continue
 			}
+			log.AppLogger.Debugf("s3 backend: error trying to restore key %s - %v", key, rerr)
+			return rerr
 		}
 	}
 	if len(toRestore) == 0 {
@@ -350,7 +357,7 @@ func (a *AWSS3Backend) PreDownload(ctx context.Context, keys []string) error {
 		if err != nil {
 			return err
 		}
-		if restoreDone(resp.Restore) {
+		if restored(resp) {
 			backoffCount = 1
 			log.AppLogger.Debugf("s3 backend: key %s restored.", key)
 			continue
@@ -369,14 +376,23 @@ func (a *AWSS3Backend) PreDownload(ctx context.Context, keys []string) error {
 	return nil
 }
 
-// needsRestore reports whether an object of the given storage class must be restored before a
-// GET can read it.
-func needsRestore(storageClass *string) bool {
-	switch aws.StringValue(storageClass) {
+// needsRestore reports whether an object must be restored before a GET can read it: its
+// storage class is an archive one, or Intelligent-Tiering has moved it to an archive tier.
+func needsRestore(resp *s3.HeadObjectOutput) bool {
+	switch aws.StringValue(resp.StorageClass) {
 	case s3.ObjectStorageClassGlacier, s3.ObjectStorageClassDeepArchive:
 		return true
 	}
-	return false
+	return resp.ArchiveStatus != nil
+}
+
+// restored reports whether a GET can read an object needsRestore picked: an archive storage
+// class object has a restored copy, an Intelligent-Tiering one has left the archive tier.
+func restored(resp *s3.HeadObjectOutput) bool {
+	if aws.StringValue(resp.StorageClass) == s3.ObjectStorageClassIntelligentTiering {
+		return resp.ArchiveStatus == nil
+	}
+	return restoreDone(resp.Restore)
 }
 
 // restoreInProgress reads the x-amz-restore header of a HEAD response: a restore has been
