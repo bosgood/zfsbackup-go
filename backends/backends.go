@@ -282,16 +282,24 @@ func LegacySpellings(canonical, typed string) []string {
 // out of the authority ('/', '?', '#', another '@'), has no reliable structure, so the
 // fallback is blunt: everything between the scheme and the last '@' goes. Over-redacting a
 // log line is fine; leaking a password is not.
+//
+// An '@' after the authority is left alone only when the authority holds no ':' either:
+// url.Parse reads "user:1234/secret@host" as host "user", port "1234" and a path, so a
+// password that starts like a port looks like a URI with no user at all.
 func RedactURI(uri string) string {
 	scheme, rest, ok := strings.Cut(uri, "://")
 	if !ok || !strings.Contains(rest, "@") {
 		return uri
 	}
 	u, err := url.Parse(uri)
-	if err == nil && u.User == nil {
+	authority := rest
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		authority = rest[:i]
+	}
+	if err == nil && u.User == nil && !strings.ContainsAny(authority, ":@") {
 		return uri // the '@' is in the path, as in s3://bucket/p@q/
 	}
-	if err == nil && strings.Count(rest, "@") == 1 {
+	if err == nil && u.User != nil && strings.Count(rest, "@") == 1 {
 		return u.Redacted()
 	}
 	return scheme + "://" + rest[strings.LastIndex(rest, "@")+1:]

@@ -313,6 +313,7 @@ func TestRedactURI(t *testing.T) {
 	testCases := map[string]string{
 		"ssh://user:secret@host:22/path": "ssh://user:xxxxx@host:22/path",
 		"ssh://u:p@h/x":                  "ssh://u:xxxxx@h/x",
+		"ssh://bob:p%40ss@host/x":        "ssh://bob:xxxxx@host/x",
 		"ssh://user@host/path":           "ssh://user@host/path",
 		"ssh://host/path":                "ssh://host/path",
 		"s3://bucket/p@q/":               "s3://bucket/p@q/",
@@ -337,6 +338,15 @@ func TestRedactURI(t *testing.T) {
 		"ssh://u:p#w@h/x",
 		"ssh://u:p@w@h/x",
 		"ssh://u:p%zz@h/x",
+		// url.Parse reads "u:" or "u:1234" as host:port and the rest as path, query or
+		// fragment, so the URI seems to have no user at all.
+		"ssh://u:/secret@h/x",
+		"ssh://u:?secret@h/x",
+		"ssh://u:#secret@h/x",
+		"ssh://u:1234/secret@h/x",
+		"ssh://u:99?pw@h/x",
+		"ssh://u:2024/Secret@h/x",
+		"ssh://u:12345#frag@h/x",
 	} {
 		got := RedactURI(in)
 		password := in[len("ssh://u:"):strings.LastIndex(in, "@")]
