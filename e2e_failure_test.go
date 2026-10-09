@@ -240,7 +240,7 @@ func TestE2ESendRefusesWhileAnotherSendRuns(t *testing.T) {
 	}
 
 	logs, err := env.send(append(scenarioFlags(t, monthlyOnlyScenario), "tank/data", "file://"+env.dest)...)
-	want := fmt.Sprintf("Another send of tank/data is running (pid %d holds %s)", holder.Process.Pid, lock)
+	want := fmt.Sprintf("Another send or a clean of tank/data is running (pid %d holds %s)", holder.Process.Pid, lock)
 	if err == nil || !strings.Contains(logs, want) || strings.Contains(logs, "forcefully remove") {
 		t.Errorf("send returned %v; want an error and %q in the logs, without the removal hint:\n%s", err, want, logs)
 	}

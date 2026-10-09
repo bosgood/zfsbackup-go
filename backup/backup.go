@@ -434,10 +434,11 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 
 	if lferr != nil {
 		// A live holder is another send of this volume, usually one that outlived the cron
-		// interval; the lock is not stale, so do not suggest removing it.
+		// interval, or a clean (which takes the same lock, even with --dry-run); the lock is
+		// not stale, so do not suggest removing it.
 		if owner, oerr := lock.GetOwner(); oerr == nil && errors.Is(lferr, lockfile.ErrBusy) {
 			log.AppLogger.Errorf(
-				"Another send of %s is running (pid %d holds %s); exiting. Run again when it is done.",
+				"Another send or a clean of %s is running (pid %d holds %s); exiting. Run again when it is done.",
 				jobInfo.VolumeName, owner.Pid, lockFilePath,
 			)
 			return lferr

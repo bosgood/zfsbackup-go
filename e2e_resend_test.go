@@ -130,7 +130,7 @@ func TestE2EChecksExistingSetUnderLock(t *testing.T) {
 	defer os.Remove(lock)
 
 	logs, err := guarded(t, func() (string, error) { return env.send(args...) })
-	if err == nil || !strings.Contains(logs, "Another send of tank/data is running") || strings.Contains(logs, "already exists") {
+	if err == nil || !strings.Contains(logs, "Another send or a clean of tank/data is running") || strings.Contains(logs, "already exists") {
 		t.Errorf("send while another holds the lock: got %v, want only the lock error\n%s", err, logs)
 	}
 }

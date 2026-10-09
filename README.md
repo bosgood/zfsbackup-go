@@ -193,7 +193,7 @@ Usage:
   zfsbackup [command]
 
 Available Commands:
-  clean       Clean will delete any objects in the target that are not found in the manifest files found in the target.
+  clean       Clean deletes backup volumes at the destination that no manifest there lists.
   help        Help about any command
   list        List all backup sets found at the provided target.
   plan        plan shows what a smart backup would send, without sending anything.
