@@ -255,10 +255,21 @@ func (j *JobInfo) ValidateSendFlags() error {
 }
 
 func (j *JobInfo) ManifestObjectName() string {
-	extensions := []string{"manifest"}
-	nameParts := []string{j.ManifestPrefix}
+	return j.manifestObjectName(j.ManifestPrefix, j.EncryptKey != nil || j.SignKey != nil)
+}
 
-	baseParts, ext := j.volumeNameParts(true)
+// StoredManifestObjectName is the object name, under manifestPrefix, of the run this manifest
+// was decoded from. A decoded manifest has no keys; the run that wrote it had them when it
+// recorded an EncryptTo or SignFrom, and then its name has the pgp extension.
+func (j *JobInfo) StoredManifestObjectName(manifestPrefix string) string {
+	return j.manifestObjectName(manifestPrefix, j.EncryptTo != "" || j.SignFrom != "")
+}
+
+func (j *JobInfo) manifestObjectName(manifestPrefix string, pgp bool) string {
+	extensions := []string{"manifest"}
+	nameParts := []string{manifestPrefix}
+
+	baseParts, ext := j.volumeNameParts(true, pgp)
 	extensions = append(extensions, ext...)
 	nameParts = append(nameParts, baseParts...)
 
@@ -273,7 +284,7 @@ const DefaultSeparator = "|"
 func (j *JobInfo) BackupVolumeObjectPrefix() string {
 	extensions := []string{"zstream"}
 
-	nameParts, ext := j.volumeNameParts(false)
+	nameParts, ext := j.volumeNameParts(false, j.EncryptKey != nil || j.SignKey != nil)
 	extensions = append(extensions, ext...)
 	extensions = append(extensions, "vol")
 
@@ -335,10 +346,10 @@ func ParseBackupVolumeObjectName(name, separator string) (volume, base, incr str
 	return volume, base, incr, volNum, true
 }
 
-func (j *JobInfo) volumeNameParts(isManifest bool) (nameParts, extensions []string) {
+func (j *JobInfo) volumeNameParts(isManifest, pgp bool) (nameParts, extensions []string) {
 	extensions = make([]string, 0, 2)
 
-	if j.EncryptKey != nil || j.SignKey != nil {
+	if pgp {
 		extensions = append(extensions, "pgp")
 	}
 

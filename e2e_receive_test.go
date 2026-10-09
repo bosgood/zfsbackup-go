@@ -362,3 +362,56 @@ func TestReceiveRefusesStreamingWithSignFrom(t *testing.T) {
 		t.Errorf("zfs receive was run: %s", got)
 	}
 }
+
+// TestE2EReceiveRejectsSubstitutedManifest: someone who can write the destination copies the
+// validly signed manifest of tank/data@a over the object name of tank/data@b's. receive of @b
+// must fail, not restore @a's stream and exit 0.
+func TestE2EReceiveRejectsSubstitutedManifest(t *testing.T) {
+	env := newE2EEnv(t)
+	rings := writeRings(t, newKey(t))
+	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+		{Name: "b", CreationTime: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)},
+		{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+	})
+	for _, s := range []string{"tank/data@a", "tank/data@b"} {
+		env.sendOK(t, append(append([]string{"--compressor", ""}, rings...), s, "file://"+env.dest)...)
+	}
+	var ma, mb string
+	for _, n := range manifestNames(destObjects(t, env.dest)) {
+		switch {
+		case strings.Contains(n, "|a."):
+			ma = n
+		case strings.Contains(n, "|b."):
+			mb = n
+		}
+	}
+	if ma == "" || mb == "" {
+		t.Fatalf("want the manifests of a and b, got %q and %q", ma, mb)
+	}
+	data, err := ioutil.ReadFile(filepath.Join(env.dest, ma))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = ioutil.WriteFile(filepath.Join(env.dest, mb), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.RemoveAll(filepath.Join(env.work, "cache")); err != nil {
+		t.Fatal(err)
+	}
+	receiveLog := filepath.Join(t.TempDir(), "receive.log")
+	t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive(append(append([]string{}, rings...), "tank/data@b", "file://"+env.dest, "restored/data")...)
+	})
+	if err == nil {
+		got, _ := ioutil.ReadFile(receiveLog)
+		t.Fatalf("receive of b from a's manifest stored under b's name succeeded; zfs receive got %q\n%s", got, logs)
+	}
+	if !strings.Contains(logs, mb) || !strings.Contains(logs, ma) {
+		t.Errorf("want an error naming both %q and %q\n%s", mb, ma, logs)
+	}
+	if _, serr := os.Stat(receiveLog); serr == nil {
+		t.Errorf("zfs receive ran\n%s", logs)
+	}
+}

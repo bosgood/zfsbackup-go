@@ -224,14 +224,17 @@ func cachedManifestName(objectName string) string {
 
 // readCachedManifest decodes the manifest objectName at backend from its copy in localCache,
 // downloading it first if there is none. A cached copy that does not decode (cut short by a kill or
-// a failed download, before cache writes were atomic) is downloaded again, once.
+// a failed download, before cache writes were atomic) is downloaded again, once. The manifest
+// must be the one objectName names: a manifest copied over another set's name is an error.
 func readCachedManifest(
 	ctx context.Context, j *files.JobInfo, localCache string, backend backends.Backend, objectName string,
 ) (*files.JobInfo, error) {
 	path := filepath.Join(localCache, cachedManifestName(objectName))
 	manifest, err := readManifest(ctx, path, j)
 	if err == nil {
-		return manifest, nil
+		if err = manifestNamed(j, manifest, objectName); err == nil {
+			return manifest, nil
+		}
 	}
 	if !os.IsNotExist(err) {
 		log.AppLogger.Warningf("Cached manifest %s (%s) is unreadable (%v); downloading it again.", path, objectName, err)
@@ -246,11 +249,23 @@ func readCachedManifest(
 	if err = downloadTo(ctx, backend, objectName, path); err != nil {
 		return nil, err
 	}
-	if manifest, err = readManifest(ctx, path, j); err != nil {
+	if manifest, err = readManifest(ctx, path, j); err == nil {
+		err = manifestNamed(j, manifest, objectName)
+	}
+	if err != nil {
 		log.AppLogger.Errorf("Could not read manifest %s, freshly downloaded to %s, due to error - %v", objectName, path, err)
 		return nil, err
 	}
 	return manifest, nil
+}
+
+// manifestNamed returns an error unless manifest, read from the object objectName, is the
+// manifest of the set that name promises.
+func manifestNamed(j *files.JobInfo, manifest *files.JobInfo, objectName string) error {
+	if name := manifest.StoredManifestObjectName(j.ManifestPrefix); name != objectName {
+		return fmt.Errorf("the manifest stored as %s is the manifest of another backup set, %s", objectName, name)
+	}
+	return nil
 }
 
 // nolint:unparam // Some errors are not ok to ignore
