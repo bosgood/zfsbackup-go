@@ -10,10 +10,22 @@ for how the planner and its checks work.
 The production flags used throughout:
 
 ```bash
-FLAGS="--fullIfOlderThan 4320h --fullSnapshotSuffix _monthly --incrementalSnapshotSuffix _monthly"
+KEY=zfsbackup@example.org            # the e-mail in the backup key's user id (step 0)
+KEYS="--encryptTo $KEY --signFrom $KEY --publicKeyRingPath /etc/zfsbackup/pubring.asc --secretKeyRingPath /etc/zfsbackup/secring.asc"
+SMART="--fullIfOlderThan 4320h --fullSnapshotSuffix _monthly --incrementalSnapshotSuffix _monthly"
+FLAGS="$SMART $KEYS"                 # send and plan
 DS=pool/dataset                      # the dataset to back up
 URI=s3://bucket/prefix/              # the offsite destination
+export PGP_PASSPHRASE="$(cat /etc/zfsbackup/passphrase)"   # once step 0 has written it
 ```
+
+Every backup is encrypted to the backup key and signed by it. Without
+`--encryptTo` the destination holds plaintext streams; without `--signFrom`
+nothing checks that a manifest or volume read back from it is one this host
+wrote, so anyone who can write to the bucket can make `receive` restore their
+data (or run the decompressor a manifest names). `send` and `plan` take
+`$FLAGS`; `receive`, `list` and `clean` take `$KEYS` (they reject the
+`$SMART` flags) and cannot read the encrypted manifests without them.
 
 For S3, GCS, Azure and B2 the path after the bucket is a directory:
 `s3://bucket/prefix` and `s3://bucket/prefix/` are the same destination, and
@@ -25,18 +37,51 @@ every object whose name starts with `prefix` to `prefix/` and rerun.
 
 `4320h` is 180 days (Go durations have no `d` unit). Once it has elapsed since
 the last full, the next full is taken of the first monthly newer than the last
-backup, so fulls land every 181-184 days, on the 1st of March and September
-year after year (`monthly-only-3-years` runs through the 2028 leap year). Keep
-the window at 180 days: one over 181 days lets some gaps stretch to seven
-months (183 days moves the fulls to April and October, then May), which the
-`full-cadence` check tolerates. The one exception to "always on the 1st" is
-sanoid's very first monthly, taken when sanoid was installed
-(`autosnap_2026-06-16_00:18:47_monthly` on the captured pool); it is a
-candidate like any other and is pruned like any other.
+backup, so fulls land every 181-184 days: on the 1st of the month the chain
+started (its first full), then every six months, year after year. A chain
+started in September keeps March and September (`monthly-only-3-years` runs
+through the 2028 leap year). Keep the window at 180 days: one over 181 days
+lets some gaps stretch to seven months (183 days moves a March/September chain
+to April and October, then May), which the `full-cadence` check tolerates. The
+one exception to "always on the 1st" is sanoid's very first monthly, taken
+when sanoid was installed (`autosnap_2026-06-16_00:18:47_monthly` on the
+captured pool); it is a candidate like any other and is pruned like any other.
 
 Run every command with the working directory the cron job will use
 (`--workingDirectory`, default `~/.zfsbackup`). `plan` and `send` then share
 the local manifest cache.
+
+## 0. Create the backup key
+
+One PGP key encrypts and signs. The key must be RSA: this version reads
+neither ed25519 nor cv25519 keys (gpg 2.3 and later generate those by default;
+loading one fails with `openpgp: unsupported feature: public key type: 22`).
+The key rings are ASCII-armored files, so export with `--armor`. As root on the
+pool host:
+
+```bash
+export GNUPGHOME="$(mktemp -d)"     # a scratch gpg home; only the exported files are kept
+gpg --quick-gen-key "zfsbackup <$KEY>" rsa4096 sign,cert never
+FPR=$(gpg --list-keys --with-colons "$KEY" | awk -F: '/^fpr/ {print $10; exit}')
+gpg --quick-add-key "$FPR" rsa4096 encr never
+install -d -m 700 /etc/zfsbackup
+gpg --armor --export "$KEY" > /etc/zfsbackup/pubring.asc
+(umask 077; gpg --armor --export-secret-keys "$KEY" > /etc/zfsbackup/secring.asc)
+(umask 077; read -rs -p 'passphrase: ' p && printf '%s' "$p" > /etc/zfsbackup/passphrase)
+rm -rf "$GNUPGHOME"; unset GNUPGHOME
+```
+
+`gpg --quick-gen-key` asks for the passphrase; type the same one into the
+`passphrase` file, which every command reads through `PGP_PASSPHRASE` (with
+the variable unset, `zfsbackup` prompts on the terminal, so a cron job fails).
+Both `gpg` commands are checked against gpg 2.2 and 2.5.
+
+The secret key is the only way to read the backups. If it exists only on the
+pool host, it is lost with the pool it was meant to restore. Before the first
+send, put a copy of `secring.asc` and the passphrase somewhere that depends on
+neither this host nor this bucket (a password manager, or an offline USB key
+with the passphrase kept apart), and check the copy after step 5: on another
+machine, `zfsbackup list $KEYS $URI` with the copied rings must list the set.
 
 ## 1. Capture the pool and the retention policy
 
@@ -130,8 +175,8 @@ zfsbackup plan $FLAGS $DS $URI
 ```
 
 This lists the live snapshots and reads the manifests already at the
-destination (read-only). If the manifests are encrypted or signed, pass the
-same PGP flags as `send`. An object that an S3 lifecycle rule moved to the
+destination (read-only), decrypting and verifying them with the keys in
+`$FLAGS`. An object that an S3 lifecycle rule moved to the
 `GLACIER` or `DEEP_ARCHIVE` storage class is restored before it is read
 (billable, and `plan`, `send` or `receive` waits hours for it, polling every
 `AWS_S3_RESTORE_POLL_INTERVAL`, default a minute); `GLACIER_IR` reads directly.
@@ -147,9 +192,10 @@ checks: OK
 ```
 
 If the destination holds manifests from earlier attempts, the plan chains from
-them (`INCR ... from ...`, or `NOOP`). Decide whether to keep them. To start
-over, delete them at the destination **and** their cached copies under
-`<workingDirectory>/cache/<md5 of the canonical URI>/`. The canonical URI is
+them (`INCR ... from ...`, or `NOOP`). Decide whether to keep them. Manifests
+written without `$KEYS` fail here (`--signFrom` rejects an unsigned manifest),
+so those have to go. To start over, delete them at the destination **and**
+their cached copies under `<workingDirectory>/cache/<md5 of the canonical URI>/`. The canonical URI is
 what the logs print: an object-store prefix always ends in `/`
 (`s3://bucket/prefix/`) and a bucket root never does (`s3://bucket`), however
 you typed it. A cache directory left by an older version under another spelling
@@ -235,12 +281,19 @@ it is older than 3 x 31 days and more than three remain. The scenario
 real pool. Check a different cadence or retention with `every=168h` (or the
 cron interval) and the pool's `monthly=` count in step 2.
 
-The chain tolerates missed runs for about two months. Once the last backed-up
-monthly is pruned (the third 1st after it was taken, plus a day or two), the
-next run cannot send an incremental and instead sends a full of the newest
+With this runbook's `monthly=6`, missed runs do not break the chain. Sanoid
+prunes a monthly about 186 days (6 x 31) after it was taken, and by then the
+last full is older than the 180-day window, so the run after an outage sends
+either an incremental from the last backup, across every month it missed (a
+five-month outage after the March full sends August from March), or the full
+that was due anyway. Check yours with `skip=` in step 2.
+
+With `monthly=3` the chain tolerates missed runs for about two months. Once the
+last backed-up monthly is pruned (the third 1st after it was taken, plus a day
+or two), the next run cannot send an incremental and instead sends a full of the newest
 monthly, then continues from that; nothing stalls, but the full costs one
 extra upload and the next fulls fall one window after it, not on the old
-March/September rhythm. `monthly-only-gap-2-months` and
+six-month rhythm. `monthly-only-gap-2-months` and
 `monthly-only-gap-3-months` show both sides of that line,
 `monthly-only-year-2-month-outage` a two-month outage inside a year (December
 is skipped, not lost: its data is inside January's incremental, which
@@ -248,8 +301,8 @@ is skipped, not lost: its data is inside January's incremental, which
 year after a recovery full.
 
 To start a new chain by hand, run `zfsbackup send --full --fullSnapshotSuffix
-_monthly $DS $URI`: it sends a full of the newest monthly even if that monthly
-is already backed up as an incremental (`plan` shows `FULL ... explicit-full`,
+_monthly $KEYS $DS $URI`: it sends a full of the newest monthly even if that
+monthly is already backed up as an incremental (`plan` shows `FULL ... explicit-full`,
 `explicit-full-restart`), and the next monthly chains from it. From then on
 `coverage:_monthly` reports that monthly as the base of two backups in any
 simulation that starts from this destination. Changing the flags of a live
@@ -280,7 +333,7 @@ is checked against the real pool's names from now on:
 ```bash
 mkdir backup/testdata/scenarios/prod-<dataset>
 cp snaps.txt backup/testdata/scenarios/prod-<dataset>/snapshots.txt
-printf '%s\n' $FLAGS > backup/testdata/scenarios/prod-<dataset>/flags
+printf '%s\n' $SMART > backup/testdata/scenarios/prod-<dataset>/flags
 printf '%s\n' "policy=hourly=48,daily=30,monthly=6" "snapshot-delay=3m" \
   "from=<first run>" "until=<first run + 1 year>" "every=24h" \
   "checks=coverage:_monthly,only:_monthly" "location=<your zone>" \
