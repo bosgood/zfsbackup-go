@@ -17,8 +17,7 @@
     "context": "..",
     "target": "devcontainer",
     "args": {
-      "TZ": "${localEnv:TZ:UTC}",
-      "CLAUDE_CODE_VERSION": "latest"
+      "TZ": "${localEnv:TZ:UTC}"
     }
   },
   // Needed by init-firewall.sh (iptables/ipset). Only root can use them, and
