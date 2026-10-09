@@ -21,10 +21,12 @@
 package cmd
 
 import (
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/someone1/zfsbackup-go/backends"
 	"github.com/someone1/zfsbackup-go/backup"
 	"github.com/someone1/zfsbackup-go/log"
 )
@@ -91,6 +93,10 @@ func init() {
 func validateListFlags(cmd *cobra.Command, args []string) error {
 	if len(args) != 1 {
 		_ = cmd.Usage()
+		return errInvalidInput
+	}
+	if strings.Contains(args[0], ",") {
+		log.AppLogger.Errorf("list takes one destination, got %s.", backends.RedactURI(args[0]))
 		return errInvalidInput
 	}
 
