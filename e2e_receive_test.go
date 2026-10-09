@@ -340,3 +340,25 @@ func TestE2EReceiveRunsKnownManifestCompressor(t *testing.T) {
 		t.Fatalf("receive: %v\n%s", err, logs)
 	}
 }
+
+// With --maxFileBuffer 0 a volume is streamed into zfs receive before its signature is checked
+// at its end, and zfs commits on the stream's END record, before that. So --signFrom refuses it.
+func TestReceiveRefusesStreamingWithSignFrom(t *testing.T) {
+	env := newE2EEnv(t)
+	rings := writeRings(t, newKey(t))
+	env.sentSet(t, rings...)
+	receiveLog := filepath.Join(t.TempDir(), "receive.log")
+	t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive(append(append([]string{"--maxFileBuffer", "0"}, rings...), "tank/data@a", "file://"+env.dest, "restored/data")...)
+	})
+	if err == nil {
+		t.Fatalf("receive --maxFileBuffer 0 --signFrom succeeded:\n%s", logs)
+	}
+	if !strings.Contains(logs, "--maxFileBuffer 0 cannot be used with --signFrom") {
+		t.Errorf("want the streaming error, got %v\n%s", err, logs)
+	}
+	if got, _ := ioutil.ReadFile(receiveLog); len(got) != 0 {
+		t.Errorf("zfs receive was run: %s", got)
+	}
+}

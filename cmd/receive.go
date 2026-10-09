@@ -107,9 +107,10 @@ func init() {
 		&jobInfo.MaxFileBuffer,
 		"maxFileBuffer",
 		5,
-		"the maximum number of files to have active during the upload process. Should be set to at least the number "+
-			"of max parallel uploads. Set to 0 to bypass local storage and upload straight to your destination - this will "+
-			"limit you to a single destination and disable any hash checks for the upload where available.",
+		"the maximum number of volumes to download in parallel and hold on local storage before zfs receive takes "+
+			"them. Each volume's SHA-256 and signature are checked before zfs receive reads any of it. Set to 0 to stream "+
+			"each volume straight into zfs receive with no local storage: its bytes reach zfs receive before they are "+
+			"checked, so 0 cannot be used with --signFrom.",
 	)
 	receiveCmd.Flags().DurationVar(
 		&jobInfo.MaxRetryTime,
@@ -161,6 +162,14 @@ func ResetReceiveJobInfo() {
 func validateReceiveFlags(cmd *cobra.Command, args []string) error {
 	if len(args) != 3 {
 		_ = cmd.Usage()
+		return errInvalidInput
+	}
+
+	// Streaming hands a volume to zfs receive as it downloads; its signature is checked only at its
+	// end, and zfs commits a stream on its END record, before that.
+	if jobInfo.MaxFileBuffer == 0 && jobInfo.SignFrom != "" {
+		log.AppLogger.Errorf("--maxFileBuffer 0 cannot be used with --signFrom: it streams each volume into zfs receive " +
+			"before its signature is checked.")
 		return errInvalidInput
 	}
 
