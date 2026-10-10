@@ -346,12 +346,13 @@ func (a *AWSS3Backend) classifyRestores(
 		if !needsRestore(resp) {
 			continue
 		}
+		storageClass := aws.StringValue(resp.StorageClass)
 		// extend: a restored copy that expires soon. It stays readable while S3 extends it, so
 		// there is nothing to wait for.
 		extend := restored(resp)
 		switch {
 		case extend && !restoreExpiresBefore(resp.Restore, time.Now().Add(restoreExpiryMargin)):
-			log.AppLogger.Debugf("s3 backend: key %s is in the %s storage class and already restored.", key, *resp.StorageClass)
+			log.AppLogger.Debugf("s3 backend: key %s is in the %s storage class and already restored.", key, storageClass)
 			readable = append(readable, rel)
 			continue
 		case extend:
@@ -361,10 +362,10 @@ func (a *AWSS3Backend) classifyRestores(
 			bytesToRestore += aws.Int64Value(resp.ContentLength)
 			toRestore = append(toRestore, key)
 			if restoreInProgress(resp.Restore) {
-				log.AppLogger.Debugf("s3 backend: key %s is already being restored from the %s storage class.", key, *resp.StorageClass)
+				log.AppLogger.Debugf("s3 backend: key %s is already being restored from the %s storage class.", key, storageClass)
 				continue
 			}
-			log.AppLogger.Debugf("s3 backend: key %s will be restored from the %s storage class.", key, *resp.StorageClass)
+			log.AppLogger.Debugf("s3 backend: key %s will be restored from the %s storage class.", key, storageClass)
 		}
 		restoreRequest := &s3.RestoreRequest{
 			GlacierJobParameters: &s3.GlacierJobParameters{
@@ -444,12 +445,14 @@ func needsRestore(resp *s3.HeadObjectOutput) bool {
 }
 
 // restored reports whether a GET can read an object needsRestore picked: an archive storage
-// class object has a restored copy, an Intelligent-Tiering one has left the archive tier.
+// class object has a restored copy, any other (Intelligent-Tiering, or no class sent) has left
+// the archive tier.
 func restored(resp *s3.HeadObjectOutput) bool {
-	if aws.StringValue(resp.StorageClass) == s3.ObjectStorageClassIntelligentTiering {
-		return resp.ArchiveStatus == nil
+	switch aws.StringValue(resp.StorageClass) {
+	case s3.ObjectStorageClassGlacier, s3.ObjectStorageClassDeepArchive:
+		return restoreDone(resp.Restore)
 	}
-	return restoreDone(resp.Restore)
+	return resp.ArchiveStatus == nil
 }
 
 // restoreInProgress reads the x-amz-restore header of a HEAD response: a restore has been
@@ -546,13 +549,20 @@ func (a *AWSS3Backend) List(ctx context.Context, prefix string) ([]string, error
 	l := make([]string, 0, AWSS3PageSize)
 	for {
 		for _, obj := range resp.Contents {
+			if obj.Key == nil {
+				continue
+			}
 			if name, ok := relativeKey(AWSS3BackendPrefix, a.prefix, *obj.Key); ok {
 				l = append(l, name)
 			}
 		}
 
-		if !*resp.IsTruncated {
+		if !aws.BoolValue(resp.IsTruncated) {
 			break
+		}
+		if resp.NextContinuationToken == nil {
+			// Fetching again would return the first page forever.
+			return nil, fmt.Errorf("s3 backend: the listing of %q is truncated but has no continuation token", a.prefix+prefix)
 		}
 
 		// Next page
