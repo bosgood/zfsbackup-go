@@ -159,6 +159,7 @@ func AutoRestore(pctx context.Context, jobInfo *files.JobInfo) error {
 		if ok := validateSnapShotExistsFromSnaps(&jobToRestore.BaseSnapshot, snapshots, false); ok {
 			break
 		}
+		noteLocalSnapshotMismatch(jobInfo.VolumeName, &jobToRestore.BaseSnapshot, snapshots)
 		if inChain[jobToRestore] {
 			log.AppLogger.Errorf(
 				"The backups at the destination that lead to %s form a loop: the backup of %s is its own ancestor.",
@@ -179,6 +180,8 @@ func AutoRestore(pctx context.Context, jobInfo *files.JobInfo) error {
 			break
 		}
 		if jobToRestore.ParentSnap == nil {
+			// With a parent, the next round notes a mismatch of its base snapshot, the same one.
+			noteLocalSnapshotMismatch(jobInfo.VolumeName, &jobToRestore.IncrementalSnapshot, snapshots)
 			log.AppLogger.Errorf(
 				"Want to restore parent snap %s but it is not found in the backend, aborting.",
 				jobToRestore.IncrementalSnapshot.Name,
@@ -240,6 +243,25 @@ func backupThatApplies(backups []*files.JobInfo, local []files.SnapshotInfo) *fi
 		return nil
 	}
 	return backups[0]
+}
+
+// noteLocalSnapshotMismatch says so when local holds a snapshot named as snap but created at
+// another time: the name is the same, the snapshot is not (destroyed and taken again, say). A
+// chain walk that does not stop at it goes on to a full, which zfs refuses to receive into a
+// dataset that has snapshots, with a message that does not name this cause.
+func noteLocalSnapshotMismatch(volume string, snap *files.SnapshotInfo, local []files.SnapshotInfo) {
+	const layout = "2006-01-02 15:04:05 MST"
+	for i := range local {
+		if local[i].Name != snap.Name || local[i].Bookmark || local[i].Equal(snap) {
+			continue
+		}
+		log.AppLogger.Noticef(
+			"The local snapshot %s@%s is not the one backed up: it was created %s, the backup's on %s. "+
+				"The restore does not build on it.",
+			volume, snap.Name, local[i].CreationTime.UTC().Format(layout), snap.CreationTime.UTC().Format(layout),
+		)
+		return
+	}
 }
 
 // sourceIsLocal returns whether the incremental backup b is from a snapshot in local.
@@ -621,7 +643,7 @@ func receiveStream(ctx context.Context, cmd *exec.Cmd, j *files.JobInfo, c <-cha
 // make a real manifest longer than the JSON it holds), and whoever can write the destination
 // could otherwise fill the cache's disk.
 func downloadTo(ctx context.Context, backend backends.Backend, objectName, toPath string) error {
-	return downloadAtMost(ctx, backend, objectName, toPath, files.MaxManifestBytes)
+	return downloadAtMost(ctx, backend, objectName, toPath, int64(files.MaxManifestBytes))
 }
 
 // errObjectTooLarge is a download that was cut off at its limit.
