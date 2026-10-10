@@ -323,13 +323,44 @@ func TestCleanSparesOtherPrefixSetsWithManifestInName(t *testing.T) {
 func TestOtherPrefixSets(t *testing.T) {
 	for obj, want := range map[string]string{
 		"p2|tank|a.manifest.gz":                             "|tank|a",
+		"manifests-old|tank|a.manifest.gz":                  "|tank|a", // a sibling prefix, not ours
 		"old.manifests|tank|b.manifest.gz.pgp":              "|tank|b",
 		"p2|tank|daily.manifest-1.manifest.gz":              "|tank|daily.manifest-1",
 		"p2|tank|daily.manifest-1|to|d.manifest.gz":         "|tank|daily.manifest-1|to|d",
 		"p.manifest|tank|x.manifest|to|y.manifest.manifest": "|tank|x.manifest|to|y.manifest",
 	} {
-		if got := otherPrefixSets([]string{obj}, "manifests|", []string{"|"}); got[want] != obj {
+		if got := otherPrefixSets([]string{obj}, "manifests", "|", []string{"|"}); got[want] != obj {
 			t.Errorf("otherPrefixSets(%q) = %v, want key %q", obj, got, want)
 		}
+	}
+}
+
+// TestCleanOwnManifestOfAnotherSeparator: a manifest of this --manifestPrefix written with
+// another --separator ("manifests#...") is read as ours, so its sets are ours too: an orphan
+// volume of such a set is deleted, and the log does not call the manifest another prefix's.
+func TestCleanOwnManifestOfAnotherSeparator(t *testing.T) {
+	targetDir, jobInfo := setupCleanTest(t)
+	_, volA := prefixedSet(t, targetDir, "tank/data", "a", "", "manifests", nil, "")
+	set := &files.JobInfo{VolumeName: "tank/data", BaseSnapshot: files.SnapshotInfo{Name: "b"},
+		ManifestPrefix: "manifests", Separator: "#", Compressor: files.InternalCompressor}
+	set.Volumes = []*files.VolumeInfo{{ObjectName: set.BackupVolumeObjectName(1), VolumeNumber: 1}}
+	writeTestManifest(t, targetDir, set)
+	volB := writeTestObject(t, targetDir, set.BackupVolumeObjectName(1))
+	orphan := writeTestObject(t, targetDir, set.BackupVolumeObjectName(2))
+
+	logs := captureLogs(t)
+	if err := Clean(context.Background(), jobInfo, false, false); err != nil {
+		t.Fatalf("clean: %v\n%s", err, logs.String())
+	}
+	for _, kept := range []string{volA, volB} {
+		if !exists(t, kept) {
+			t.Errorf("clean deleted %s, which a manifest lists", kept)
+		}
+	}
+	if exists(t, orphan) {
+		t.Errorf("clean kept the orphan %s of our own set:\n%s", orphan, logs.String())
+	}
+	if strings.Contains(logs.String(), "another --manifestPrefix") {
+		t.Errorf("clean called our own manifest another prefix's:\n%s", logs.String())
 	}
 }

@@ -57,16 +57,18 @@ func backupSetName(volume string) string {
 }
 
 // otherPrefixSets indexes the backup sets that the manifests at the destination under another
-// --manifestPrefix than manifestPrefix (prefix plus separator) are for. Those manifests are never
-// read here (they may be encrypted to another key); their names are enough to tell which sets
-// they are for. The index maps "<sep><set>" to the manifest's object name, for every separator
-// in separators and both the full and the incremental form of a set name.
-func otherPrefixSets(allObjects []string, manifestPrefix string, separators []string) map[string]string {
+// --manifestPrefix than manifestPrefix are for. Those manifests are never read here (they may be
+// encrypted to another key); their names are enough to tell which sets they are for. A manifest
+// is ours by the test syncCache reads ours by (isManifestObject with separator, the job's
+// --separator), so one of ours written with another --separator is read, not indexed here. The
+// index maps "<sep><set>" to the manifest's object name, for every separator in separators and
+// both the full and the incremental form of a set name.
+func otherPrefixSets(allObjects []string, manifestPrefix, separator string, separators []string) map[string]string {
 	sets := make(map[string]string)
 	for _, obj := range allObjects {
 		// The last one: a prefix or snapshot name may hold ".manifest" too.
 		idx := strings.LastIndex(obj, ".manifest")
-		if idx < 0 || strings.HasPrefix(obj, manifestPrefix) {
+		if idx < 0 || isManifestObject(obj, manifestPrefix, separator) {
 			continue
 		}
 		if _, _, ok := parseBackupVolume(obj, separators); ok {
@@ -435,7 +437,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	// The manifests under another --manifestPrefix are never read (nothing lists them, and they
 	// may be another key's), so the volumes of the sets they are for would look like orphans of a
 	// dataset this run knows. Their names say which sets they are for; those sets are not ours.
-	otherSets := otherPrefixSets(allObjects, manifestPrefix, separators)
+	otherSets := otherPrefixSets(allObjects, jobInfo.ManifestPrefix, jobInfo.Separator, separators)
 	otherSetVolumes := make(map[string]int)
 	present := make(map[string]bool, len(allObjects))
 	candidates := make([]string, 0, len(allObjects))
