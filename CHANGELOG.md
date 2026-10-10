@@ -1,5 +1,10 @@
 # CHANGELOG
 
+* [FIX] clean: a cached manifest that is not at the destination and that this run cannot read (truncated, or encrypted to another key) stops the run in both modes; `--cleanLocal` no longer deletes it or its volumes. The error says whose the file may be and to delete it by hand if it is yours
+* [FIX] clean: volumes of a backup set that a manifest under another `--manifestPrefix` names at the destination are never deleted; before, a plain `clean` under one prefix deleted the other prefix's volumes of the same dataset
+* [FIX] files: the manifest limit is 1 GiB of JSON (about 2 million volumes, 400 TiB in one send at the default `--volsize`), was 64 MiB (128,558 volumes, 24.5 TiB); `send` refuses to write a manifest over the limit and says to use a larger `--volsize`; a manifest over the limit is kept in the cache, downloaded once, and the error no longer advises deleting it
+* [ADD] receive: `--auto` logs when a local snapshot has the name of a backed-up one but another creation time, instead of leaving zfs's "destination has snapshots" as the only clue
+
 * [FIX] clean: refuse a destination with objects but no manifests under `--manifestPrefix`; never delete cached manifests of another prefix; `--force` skips local-only cached manifests (d76ef3a)
 * [FIX] send: `--resume` keeps a volume only if every destination's cache records the same number, name, size and SHA-256 (d76ef3a)
 * [FIX] security: `send --dry-run` redacts credentials in logged destination URIs (d76ef3a)

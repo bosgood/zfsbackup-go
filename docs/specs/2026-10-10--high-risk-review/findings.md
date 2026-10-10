@@ -322,3 +322,19 @@ mounted at `/src`:
 docker run --rm -v /tmp/hrr-itemN:/src -v /tmp/zfsb-gocache:/root/.cache/go-build \
   -w /src golang:1.25-bookworm bash -c 'timeout 500 go test -count=1 -run "TestHRR" -v ./backup/'
 ```
+
+## Fix pass (2026-10-10)
+
+Test-driven: each regression test failed on `97dce3f` before its fix.
+
+| Finding | Fix | Tests |
+| --- | --- | --- |
+| Item 1 | An undecodable local-only cached manifest is an error in both modes (`unreadableLocalManifestError`, `backup/clean.go`); a `KeyError` gets its own message. The old `--cleanLocal` escape hatch is gone: the user deletes the file by hand. | `backup/clean_prefixes_test.go`: `TestCleanLocalKeeps{TruncatedOtherPrefixManifest,TruncatedOtherPrefixManifestSameDataset,OtherKeysManifest}`; `TestCleanDryRunLocalManifests` rewritten |
+| Other 1 | `otherPrefixSets` (`backup/clean.go`) indexes, by name only, the backup sets that manifests under other prefixes at the destination are for; their volumes are skipped with a Notice. | `TestCleanSparesOtherPrefixSetsOfSameDataset` |
+| Item 2 | `files.MaxManifestBytes` is 1 GiB (a var, so tests lower it); `files.MaxManifestVolumes()` derives from it; `files.ErrManifestTooLong`. `saveManifest` refuses a manifest over the limit before caching or uploading it. `readCachedManifest` keeps a too-long cached copy, downloads it once, and the error says not to delete it (Other 4, Other 5). | `files/manifest_limit_test.go`: `TestReadManifestLargeSend` (200,000 volumes), `TestReadManifestTooLong`; `backup/manifest_limit_test.go`: `TestReadCachedManifestKeepsTooLongManifest`, `TestSaveManifestRefusesOverLimit`; `e2e_manifest_limit_test.go`: `TestE2ESendRefusesManifestOverLimit` |
+| Item 3 | No defect. The runbook now says to run every send of a dataset from one working directory on one host. Hypotheses A and B ported (Other 6). | `e2e_resume_other_dest_test.go`: `TestE2EResumeCacheOfOtherDestinationCuts`, `TestE2EResumeUncachedDestinationStartsOver` |
+| Item 4, Other 3 | `noteLocalSnapshotMismatch` (`backup/restore.go`) logs a Notice when a local snapshot has the backed-up name but another creation time. | `backup/restore_mismatch_test.go` |
+| Items 5, 6 | No defect, nothing changed. | |
+
+The `tests/*.go.txt` files stay as the review's artifacts; the ported tests above are the
+maintained copies. `make test-one` now mounts a Go build cache (`GOCACHE_DIR`).

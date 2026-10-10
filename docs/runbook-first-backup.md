@@ -230,7 +230,16 @@ a bulk delete. Only `clean --force` deletes whole broken sets at the
 destination, manifest included. The planner ignores a cached manifest that is
 gone from the destination, but `clean` (with or without `--force`) still treats
 it as live and keeps the volumes it lists; only `--cleanLocal` deletes it, and
-never one cached under another `--manifestPrefix`.
+never one cached under another `--manifestPrefix`. A cached manifest that is
+gone from the destination and that `clean` cannot read (cut short, or encrypted
+to a key this run lacks) stops the run (`could not read the local manifest
+...`, or `the local manifest ... is encrypted to no key ...`): the cache holds
+the manifests of every job that shares the destination, so the file may be
+another job's. Delete it by hand only when you know it is yours. Two jobs may
+share a destination under different `--manifestPrefix` values, for the same
+dataset too: `clean` never reads the other prefix's manifests, but their names
+tell it which backup sets they are for, and it leaves those sets' volumes alone
+(`Skipping N volumes of the backup set ...`).
 
 ## 4. Dry-run the send
 
@@ -269,7 +278,11 @@ run starts over`), because it rewrites the set's volumes and the cache would
 describe the old ones. If that plain run fails too, `--resume` after it resumes
 that run, not the first; when it failed before its first volume finished,
 `--resume` starts over (`No previous manifest file exists, nothing to resume;
-starting over`). Then schedule the same command daily or weekly.
+starting over`). Run every `send` of a dataset from one working directory on
+one host: `--resume` cannot see sends from elsewhere, and a send from another
+working directory or host that rewrote volumes between the attempt and the
+resume is caught only by the restore's checksum. Then schedule the same command
+daily or weekly.
 
 What `send` refuses to do:
 

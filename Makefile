@@ -76,8 +76,11 @@ devcontainer-firewall-check:
 GO_IMAGE=golang:$(GO_VERSION)-bookworm
 RUN?=.
 PKG?=./...
+# GOCACHE_DIR holds the Go build cache between runs; without it every run compiles from scratch.
+GOCACHE_DIR?=/tmp/zfsb-gocache
 test-one:
-	docker run --rm -v "$(CURDIR)":/src -w /src $(GO_IMAGE) go test -run '$(RUN)' -v $(PKG)
+	mkdir -p "$(GOCACHE_DIR)"
+	docker run --rm -v "$(CURDIR)":/src -v "$(GOCACHE_DIR)":/root/.cache/go-build -w /src $(GO_IMAGE) go test -run '$(RUN)' -v $(PKG)
 
 # Report files that `gofmt -s` would rewrite, using the pinned toolchain. The
 # `fmt` target above iterates over an undefined DIRS and so checks nothing.
@@ -119,3 +122,8 @@ plan:
 # the test binary standing in for zfs (internal/fakezfs).
 e2e:
 	go test -count=1 -run TestE2E -v .
+
+# Print a command's --help from the working tree's code, for the README's help
+# blocks, e.g. `make help CMD=send` (CMD empty prints the root help).
+help:
+	go run . $(CMD) --help
