@@ -536,6 +536,8 @@ func (e *notFoundError) Is(target error) bool { return target == fs.ErrNotExist 
 
 // Close will release any resources used by the AWS S3 backend.
 func (a *AWSS3Backend) Close() error {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
 	a.client = nil
 	a.uploader = nil
 	return nil
