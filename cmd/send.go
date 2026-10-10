@@ -106,7 +106,8 @@ func init() {
 		&jobInfo.Resume,
 		"resume",
 		false,
-		"set this flag to true when you want to try and resume a previously cancelled or failed backup. It is up to the caller to ensure the same "+
+		"set this flag to true when you want to try and resume a previously canceled or failed backup. "+
+			"It is up to the caller to ensure the same "+
 			"command line arguments are provided between the original backup and the resumed one.",
 	)
 	backup.AddSmartFlags(sendCmd.Flags(), &jobInfo)

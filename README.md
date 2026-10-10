@@ -304,7 +304,7 @@ Flags:
   -p, --properties                         See the -p flag on zfs send for more information.
   -w, --raw                                See the -w flag on zfs send for more information.
   -R, --replication                        See the -R flag on zfs send for more information
-      --resume                             set this flag to true when you want to try and resume a previously cancelled or failed backup. It is up to the caller to ensure the same command line arguments are provided between the original backup and the resumed one.
+      --resume                             set this flag to true when you want to try and resume a previously canceled or failed backup. It is up to the caller to ensure the same command line arguments are provided between the original backup and the resumed one.
       --separator string                   the separator to use between object component names. (default "|")
   -s, --skip-missing                       See the -s flag on zfs send for more information
       --snapshotPrefix string              Only consider snapshots starting with the given snapshot prefix
