@@ -15,8 +15,8 @@ Diagram 9 in [../architecture.md](../architecture.md).
 3. Take the send lock of each dataset. A busy dataset is left alone.
 4. If the read found a new dataset, read again (bounded rounds).
 5. Objects but no manifests → refuse. Tell the user to check `--manifestPrefix`.
-6. Local-only cached manifests: `--cleanLocal` deletes them later. Else keep their volumes.
-7. Candidates = objects that are not manifests, not in a nested destination, parse as a volume name, and belong to a known non-busy dataset.
+6. Local-only cached manifests: `--cleanLocal` deletes them later. Else keep their volumes. One cached under another `--manifestPrefix` (`foreign`) is never deleted. One that does not decode stops the run in both modes (`unreadableLocalManifestError`): the cache holds every prefix's and key's manifests, so it may be another job's.
+7. Candidates = objects that are not manifests, not in a nested destination, parse as a volume name, belong to a known non-busy dataset, and are not of a backup set that a manifest under another `--manifestPrefix` at the destination names (`otherPrefixSets`: by name only, those manifests are never read).
 8. For each manifest: all volumes present, or no `--force` → keep its volumes (warn if broken). Missing volumes with `--force` → delete the manifest and its volumes.
 9. `--dry-run` → log the deletes. Else 5 workers call `backend.Delete` with backoff, then remove local cache files.
 

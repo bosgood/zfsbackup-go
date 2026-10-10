@@ -22,6 +22,7 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,14 +38,51 @@ import (
 	"github.com/someone1/zfsbackup-go/log"
 )
 
-// parseBackupVolume returns the dataset of a backup volume object name written with any of separators.
-func parseBackupVolume(name string, separators []string) (string, bool) {
+// parseBackupVolume returns the dataset of a backup volume object name written with any of
+// separators, and the separator it was written with.
+func parseBackupVolume(name string, separators []string) (dataset, separator string, ok bool) {
 	for _, sep := range separators {
-		if dataset, _, _, _, ok := files.ParseBackupVolumeObjectName(name, sep); ok {
-			return dataset, true
+		if dataset, _, _, _, ok = files.ParseBackupVolumeObjectName(name, sep); ok {
+			return dataset, sep, true
 		}
 	}
-	return "", false
+	return "", "", false
+}
+
+// backupSetName returns the part of a volume's object name that names its backup set:
+// "<dataset><sep><snap>" or "<dataset><sep><incr><sep>to<sep><snap>". The manifest of that set,
+// under any --manifestPrefix, is "<prefix><sep><set>.manifest...".
+func backupSetName(volume string) string {
+	return volume[:strings.LastIndex(volume, ".zstream.")]
+}
+
+// otherPrefixSets indexes the backup sets that the manifests at the destination under another
+// --manifestPrefix than manifestPrefix (prefix plus separator) are for. Those manifests are never
+// read here (they may be encrypted to another key); their names are enough to tell which sets
+// they are for. The index maps "<sep><set>" to the manifest's object name, for every separator
+// in separators and both the full and the incremental form of a set name.
+func otherPrefixSets(allObjects []string, manifestPrefix string, separators []string) map[string]string {
+	sets := make(map[string]string)
+	for _, obj := range allObjects {
+		idx := strings.Index(obj, ".manifest")
+		if idx < 0 || strings.HasPrefix(obj, manifestPrefix) {
+			continue
+		}
+		if _, _, ok := parseBackupVolume(obj, separators); ok {
+			continue // a volume of a snapshot with ".manifest" in its name
+		}
+		head := obj[:idx]
+		for _, sep := range separators {
+			parts := strings.Split(head, sep)
+			if len(parts) >= 3 {
+				sets[sep+strings.Join(parts[len(parts)-2:], sep)] = obj
+			}
+			if len(parts) >= 5 && parts[len(parts)-3] == "to" {
+				sets[sep+strings.Join(parts[len(parts)-4:], sep)] = obj
+			}
+		}
+	}
+	return sets
 }
 
 // nestedDestinations returns "<dir>/" for every listed object that is the manifest of another
@@ -95,7 +133,7 @@ type cleanView struct {
 
 // readForClean syncs the cache of the destination at backend, lists it and decodes its manifests.
 func readForClean(
-	ctx context.Context, jobInfo *files.JobInfo, target, localCachePath string, backend backends.Backend, cleanLocal bool,
+	ctx context.Context, jobInfo *files.JobInfo, target, localCachePath string, backend backends.Backend,
 ) (*cleanView, error) {
 	manifests, localOnlyFiles, serr := syncCache(ctx, jobInfo, localCachePath, backend)
 	if serr != nil {
@@ -127,35 +165,49 @@ func readForClean(
 
 	// Local-only manifests are the cached state of sends that never finished (or whose
 	// destination copy is gone). Decode them: their datasets are locked, and without
-	// --cleanLocal their volumes are protected as live. Under --cleanLocal an undecodable one
-	// cannot be matched to a lock, so it is deleted as before. One cached under another
+	// --cleanLocal their volumes are protected as live. One cached under another
 	// --manifestPrefix belongs to another job: its volumes are protected, and it is never deleted.
+	// One this run cannot decode cannot be told from another job's (the cache holds the manifests
+	// of every prefix and key that share the destination), so nothing is deleted, --cleanLocal or
+	// not: the user deletes the file by hand once they know whose it is.
 	view.localOnly = make([]cleanManifest, 0, len(localOnlyFiles))
 	for _, manifest := range localOnlyFiles {
 		manifestPath := filepath.Join(localCachePath, manifest)
 		decodedManifest, oerr := readManifest(ctx, manifestPath, jobInfo)
-		if oerr != nil && !cleanLocal {
-			// Its volumes are unknown, so none can be told apart from orphans.
-			log.AppLogger.Errorf(
-				"Could not read local manifest %s due to error - %v. It is not at the destination, so it cannot be "+
-					"downloaded again: if it is the state of an interrupted send (cut short by a kill), delete it, "+
-					"or run clean with --cleanLocal.",
-				manifestPath, oerr,
-			)
-			return nil, oerr
-		}
 		if oerr != nil {
-			log.AppLogger.Warningf("Could not read local manifest %s due to error - %v; --cleanLocal deletes it.", manifestPath, oerr)
-			decodedManifest = nil
+			return nil, unreadableLocalManifestError(manifestPath, oerr)
 		}
-		foreign := decodedManifest != nil &&
-			cachedManifestName(decodedManifest.StoredManifestObjectName(jobInfo.ManifestPrefix)) != manifest
-		if decodedManifest != nil && !foreign {
+		foreign := cachedManifestName(decodedManifest.StoredManifestObjectName(jobInfo.ManifestPrefix)) != manifest
+		if !foreign {
 			view.datasets[decodedManifest.VolumeName] = true
 		}
 		view.localOnly = append(view.localOnly, cleanManifest{path: manifestPath, manifest: decodedManifest, foreign: foreign})
 	}
 	return view, nil
+}
+
+// unreadableLocalManifestError is the error for the cached manifest at path, not at the
+// destination, that this run cannot decode. It says whose the file may be and what to do.
+func unreadableLocalManifestError(path string, err error) error {
+	if errors.As(err, new(*files.KeyError)) {
+		// Not a damaged file: this run lacks the key. The file may be another job's state.
+		err = fmt.Errorf(
+			"the local manifest %s %w. It is not at the destination, so it cannot be downloaded again, and clean "+
+				"cannot tell which volumes it lists, so nothing is deleted. It may be another job's: run clean with "+
+				"the keys of the job that wrote it, or delete the file by hand if you are sure it is not the state "+
+				"of a backup",
+			path, err,
+		)
+	} else {
+		err = fmt.Errorf(
+			"could not read the local manifest %s: %w. It is not at the destination, so it cannot be downloaded "+
+				"again, and clean cannot tell which volumes it lists, so nothing is deleted. If it is the state of "+
+				"your own interrupted send (cut short by a kill), delete the file by hand and run clean again",
+			path, err,
+		)
+	}
+	log.AppLogger.Errorf("%v.", err)
+	return err
 }
 
 // cleanReadRounds is how many times clean reads the destination before giving up on it settling.
@@ -169,9 +221,11 @@ const cleanReadRounds = 3
 //
 // Cached manifests not at the destination (local-only) are the state of interrupted sends: they
 // keep their volumes, unless cleanLocal is true, which deletes them and their volumes. One cached
-// under another manifest prefix is never deleted. jobInfo.Force also deletes broken backup sets
-// at the destination (manifest included), but never a local-only manifest. With dryRun, Clean
-// only logs what it would delete.
+// under another manifest prefix is never deleted, and one this run cannot decode stops the run.
+// The volumes of a set that a manifest under another manifest prefix at the destination is for
+// are never deleted either. jobInfo.Force also deletes broken backup sets at the destination
+// (manifest included), but never a local-only manifest. With dryRun, Clean only logs what it
+// would delete.
 // nolint:funlen,gocyclo // Difficult to break this up
 func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool) error {
 	ctx, cancel := context.WithCancel(pctx)
@@ -208,7 +262,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	var view *cleanView
 	var err error
 	for round := 1; ; round++ {
-		if view, err = readForClean(ctx, jobInfo, target, localCachePath, backend, cleanLocal); err != nil {
+		if view, err = readForClean(ctx, jobInfo, target, localCachePath, backend); err != nil {
 			return err
 		}
 		names := make([]string, 0, len(view.datasets))
@@ -361,6 +415,11 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 			named[vol.ObjectName] = true
 		}
 	}
+	// The manifests under another --manifestPrefix are never read (nothing lists them, and they
+	// may be another key's), so the volumes of the sets they are for would look like orphans of a
+	// dataset this run knows. Their names say which sets they are for; those sets are not ours.
+	otherSets := otherPrefixSets(allObjects, manifestPrefix, separators)
+	otherSetVolumes := make(map[string]int)
 	present := make(map[string]bool, len(allObjects))
 	candidates := make([]string, 0, len(allObjects))
 	skipped := 0
@@ -374,7 +433,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 			skipped++
 			continue
 		}
-		dataset, ok := parseBackupVolume(obj, separators)
+		dataset, sep, ok := parseBackupVolume(obj, separators)
 		if !ok {
 			log.AppLogger.Noticef("Skipping unrecognized object %s (not a backup volume written by this tool).", obj)
 			skipped++
@@ -387,10 +446,26 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 			skipped++
 			continue
 		}
+		if set := sep + backupSetName(obj); otherSets[set] != "" && !named[obj] {
+			otherSetVolumes[set]++
+			skipped++
+			continue
+		}
 		if busy[dataset] {
 			continue
 		}
 		candidates = append(candidates, obj)
+	}
+	otherSetNames := make([]string, 0, len(otherSetVolumes))
+	for set := range otherSetVolumes {
+		otherSetNames = append(otherSetNames, set)
+	}
+	sort.Strings(otherSetNames)
+	for _, set := range otherSetNames {
+		log.AppLogger.Noticef(
+			"Skipping %d volumes of the backup set %s: the manifest %s under another --manifestPrefix is for it.",
+			otherSetVolumes[set], set[1:], otherSets[set],
+		)
 	}
 	if skipped > 0 {
 		log.AppLogger.Noticef("Found %d objects in destination that clean does not recognize; they will not be deleted.", skipped)

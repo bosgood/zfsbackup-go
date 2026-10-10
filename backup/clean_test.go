@@ -169,35 +169,15 @@ func TestCleanRefusesWithoutManifests(t *testing.T) {
 
 // TestCleanDryRunLocalManifests covers the --cleanLocal branch: a dry run must
 // leave local-only cached manifests alone, and a real run must delete them.
+// TestCleanDryRunLocalManifests: a cached file that does not decode as a manifest (junk, or a
+// copy cut short) and is not at the destination cannot be told from another job's state (the
+// cache holds the manifests of every prefix and key that share the destination). clean refuses
+// in both modes, names the file, and leaves it: --cleanLocal does not delete what it cannot read.
 func TestCleanDryRunLocalManifests(t *testing.T) {
-	cacheDir, err := os.MkdirTemp("", "zfsbackup-clean-cache")
-	if err != nil {
-		t.Fatalf("could not create temp cache dir - %v", err)
-	}
-	defer os.RemoveAll(cacheDir)
+	targetDir, jobInfo := setupCleanTest(t)
+	cleanTestSet(t, targetDir, "tank/data", "a", "manifests")
 
-	oldWorkingDir := config.WorkingDir
-	config.WorkingDir = cacheDir
-	defer func() { config.WorkingDir = oldWorkingDir }()
-
-	targetDir, err := os.MkdirTemp("", "zfsbackup-clean-target")
-	if err != nil {
-		t.Fatalf("could not create temp target dir - %v", err)
-	}
-	defer os.RemoveAll(targetDir)
-
-	target := "file://" + targetDir
-	jobInfo := &files.JobInfo{
-		ManifestPrefix:     "manifests",
-		Destinations:       []string{target},
-		MaxParallelUploads: 1,
-		MaxBackoffTime:     5 * time.Second,
-		MaxRetryTime:       1 * time.Minute,
-	}
-
-	// A cached manifest with no counterpart in the destination is exactly what
-	// --cleanLocal removes.
-	localCachePath, cerr := getCacheDir(jobInfo, target)
+	localCachePath, cerr := getCacheDir(jobInfo, jobInfo.Destinations[0])
 	if cerr != nil {
 		t.Fatalf("could not resolve cache dir - %v", cerr)
 	}
@@ -206,20 +186,14 @@ func TestCleanDryRunLocalManifests(t *testing.T) {
 		t.Fatalf("could not write stray cached manifest - %v", werr)
 	}
 
-	// Dry-run: the cached manifest must survive.
-	if err := Clean(context.Background(), jobInfo, true, true); err != nil {
-		t.Fatalf("dry-run Clean returned error - %v", err)
-	}
-	if _, serr := os.Stat(strayManifest); serr != nil {
-		t.Fatalf("dry-run should not have deleted %s, stat error - %v", strayManifest, serr)
-	}
-
-	// Real run: it must be gone.
-	if err := Clean(context.Background(), jobInfo, true, false); err != nil {
-		t.Fatalf("Clean returned error - %v", err)
-	}
-	if _, serr := os.Stat(strayManifest); !os.IsNotExist(serr) {
-		t.Fatalf("expected %s to be deleted, got stat error - %v", strayManifest, serr)
+	for _, dryRun := range []bool{true, false} {
+		err := Clean(context.Background(), jobInfo, true, dryRun)
+		if err == nil || !strings.Contains(err.Error(), strayManifest) || !strings.Contains(err.Error(), "by hand") {
+			t.Fatalf("dryRun=%v: got %v, want a refusal naming %s and saying to delete it by hand", dryRun, err, strayManifest)
+		}
+		if _, serr := os.Stat(strayManifest); serr != nil {
+			t.Fatalf("dryRun=%v: clean --cleanLocal deleted %s, stat error - %v", dryRun, strayManifest, serr)
+		}
 	}
 }
 
