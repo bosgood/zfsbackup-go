@@ -64,7 +64,8 @@ func backupSetName(volume string) string {
 func otherPrefixSets(allObjects []string, manifestPrefix string, separators []string) map[string]string {
 	sets := make(map[string]string)
 	for _, obj := range allObjects {
-		idx := strings.Index(obj, ".manifest")
+		// The last one: a prefix or snapshot name may hold ".manifest" too.
+		idx := strings.LastIndex(obj, ".manifest")
 		if idx < 0 || strings.HasPrefix(obj, manifestPrefix) {
 			continue
 		}
@@ -77,7 +78,7 @@ func otherPrefixSets(allObjects []string, manifestPrefix string, separators []st
 			if len(parts) >= 3 {
 				sets[sep+strings.Join(parts[len(parts)-2:], sep)] = obj
 			}
-			if len(parts) >= 5 && parts[len(parts)-3] == "to" {
+			if len(parts) >= 5 && parts[len(parts)-2] == "to" { // "<dataset><sep><incr><sep>to<sep><snap>"
 				sets[sep+strings.Join(parts[len(parts)-4:], sep)] = obj
 			}
 		}

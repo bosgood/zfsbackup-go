@@ -269,7 +269,9 @@ func TestCleanSparesOtherPrefixSetsOfSameDataset(t *testing.T) {
 		Separator: "|", Compressor: files.InternalCompressor}
 	orphan := writeTestObject(t, targetDir, orphanSet.BackupVolumeObjectName(1))
 
-	for _, prefix := range []string{"p2", "manifests"} {
+	// "manifests" first: once a clean under p2 has cached p2's manifests, a clean under
+	// "manifests" spares their volumes as foreign cached manifests, and the names are not tested.
+	for _, prefix := range []string{"manifests", "p2"} {
 		jobInfo.ManifestPrefix = prefix
 		for _, dryRun := range []bool{true, false} {
 			logs := captureLogs(t)
@@ -277,7 +279,7 @@ func TestCleanSparesOtherPrefixSetsOfSameDataset(t *testing.T) {
 				t.Fatalf("clean --manifestPrefix %s dryRun=%v: %v", prefix, dryRun, err)
 			}
 			for _, kept := range []string{volA, volB, volAB} {
-				if strings.Contains(logs.String(), "Would delete "+joinURI(jobInfo.Destinations[0], filepath.Base(kept))) {
+				if strings.Contains(logs.String(), "Would delete "+joinURI(jobInfo.Destinations[0], strings.TrimPrefix(kept, targetDir+"/"))) {
 					t.Errorf("clean --manifestPrefix %s dryRun=%v announced deleting %s:\n%s", prefix, dryRun, kept, logs.String())
 				}
 				if !exists(t, kept) {
@@ -289,5 +291,45 @@ func TestCleanSparesOtherPrefixSetsOfSameDataset(t *testing.T) {
 			}
 		}
 		orphan = writeTestObject(t, targetDir, orphanSet.BackupVolumeObjectName(1))
+	}
+}
+
+// TestCleanSparesOtherPrefixSetsWithManifestInName: a prefix or snapshot name may hold
+// ".manifest". The set a manifest under another prefix is for is read from the name's last
+// ".manifest", so the volumes of that set are spared all the same.
+func TestCleanSparesOtherPrefixSetsWithManifestInName(t *testing.T) {
+	targetDir, jobInfo := setupCleanTest(t)
+	_, volA := prefixedSet(t, targetDir, "tank/data", "a", "", "manifests", nil, "")
+	_, volB := prefixedSet(t, targetDir, "tank/data", "b", "", "old.manifests", nil, "")
+	_, volC := prefixedSet(t, targetDir, "tank/data", "daily.manifest-1", "", "p2", nil, "")
+	_, volCD := prefixedSet(t, targetDir, "tank/data", "d", "daily.manifest-1", "p2", nil, "")
+
+	for _, dryRun := range []bool{true, false} {
+		logs := captureLogs(t)
+		if err := Clean(context.Background(), jobInfo, false, dryRun); err != nil {
+			t.Fatalf("clean dryRun=%v: %v", dryRun, err)
+		}
+		for _, kept := range []string{volA, volB, volC, volCD} {
+			if strings.Contains(logs.String(), "Would delete "+joinURI(jobInfo.Destinations[0], strings.TrimPrefix(kept, targetDir+"/"))) {
+				t.Errorf("clean dryRun=%v announced deleting %s:\n%s", dryRun, kept, logs.String())
+			}
+			if !exists(t, kept) {
+				t.Fatalf("clean dryRun=%v deleted %s", dryRun, kept)
+			}
+		}
+	}
+}
+
+func TestOtherPrefixSets(t *testing.T) {
+	for obj, want := range map[string]string{
+		"p2|tank|a.manifest.gz":                             "|tank|a",
+		"old.manifests|tank|b.manifest.gz.pgp":              "|tank|b",
+		"p2|tank|daily.manifest-1.manifest.gz":              "|tank|daily.manifest-1",
+		"p2|tank|daily.manifest-1|to|d.manifest.gz":         "|tank|daily.manifest-1|to|d",
+		"p.manifest|tank|x.manifest|to|y.manifest.manifest": "|tank|x.manifest|to|y.manifest",
+	} {
+		if got := otherPrefixSets([]string{obj}, "manifests|", []string{"|"}); got[want] != obj {
+			t.Errorf("otherPrefixSets(%q) = %v, want key %q", obj, got, want)
+		}
 	}
 }
