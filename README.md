@@ -39,7 +39,7 @@ This particular repo is a fork of the original at [someone1/zfsbackup-go](https:
   - [99.999999999% durability](https://aws.amazon.com/s3/faqs/#data-protection) - Using replication and checksums on the data for integrity validation and repair
   - `AWS_S3_GLACIER_RESTORE_TIER`: `Standard`, `Bulk` or `Expedited`, the restore tier for objects in Glacier (default `Bulk`)
   - `AWS_S3_RESTORE_POLL_INTERVAL`: how often `receive` polls a pending Glacier restore, as a duration such as `30s` (default `1m`)
-  - `AWS_S3_ENABLE_DEBUG`: set to `true` to log every request and retry of the AWS SDK
+  - `AWS_S3_ENABLE_DEBUG`: set to `true` to log every request and retry of the AWS SDK. The dump includes the request's `Authorization` header and any `X-Amz-Security-Token`; do not share that log.
 - Any S3 Compatible Storage Provider (e.g. Minio, StorageMadeEasy, Ceph, etc.)
   - Set the `AWS_S3_CUSTOM_ENDPOINT` environment variable to the compatible target API URI
 - Azure Blob Storage (azure://)

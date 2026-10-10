@@ -1,5 +1,6 @@
 # CHANGELOG
 
+* [FIX] s3: AWS_S3_ENABLE_DEBUG lines no longer carry a "%!(EXTRA ...)" suffix; README warns that the dump includes credentials
 * [FIX] s3: receive stops at once when a volume is gone from the bucket, instead of retrying the download for --maxRetryTime
 * [FIX] s3: receive re-checks already-restored Glacier copies after waiting for the others, and extends or restores any that expired meanwhile; a DEEP_ARCHIVE Bulk restore can take longer than the 24-hour margin
 * [FIX] s3: uploads obey --maxUploadSpeed; they ignored it unless --maxFileBuffer was 0

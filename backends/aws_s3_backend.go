@@ -70,8 +70,9 @@ type AWSS3Backend struct {
 
 type logger struct{}
 
+// Log prints the SDK's arguments as fmt.Println would, which is how the SDK's own logger does.
 func (l logger) Log(args ...interface{}) {
-	log.AppLogger.Debugf("s3 backend:", args...)
+	log.AppLogger.Debugf("s3 backend: %s", strings.TrimSuffix(fmt.Sprintln(args...), "\n"))
 }
 
 type withS3Client struct{ client s3iface.S3API }
