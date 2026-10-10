@@ -107,8 +107,7 @@ func startSftpServer(t testing.TB, user string, password string) net.Listener {
 						for req := range in {
 							fmt.Println("Request:", req.Type)
 							ok := false
-							switch req.Type {
-							case "subsystem":
+							if req.Type == "subsystem" {
 								fmt.Printf("Subsystem: %s\n", req.Payload[4:])
 								if string(req.Payload[4:]) == "sftp" {
 									ok = true

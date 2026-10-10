@@ -24,7 +24,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -68,7 +68,7 @@ func TestReadManifestBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "manifest")
-	if err = ioutil.WriteFile(path, msg.Bytes(), 0600); err != nil {
+	if err = os.WriteFile(path, msg.Bytes(), 0600); err != nil {
 		t.Fatal(err)
 	}
 

@@ -29,7 +29,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,7 +45,7 @@ func TestE2EReceiveStopsOversizeVolumeEarly(t *testing.T) {
 	env := newE2EEnv(t)
 	rings := writeRings(t, newKey(t))
 	vols := env.sentSet(t, rings...)
-	if err := ioutil.WriteFile(filepath.Join(env.dest, vols[0]), make([]byte, 64<<20), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(env.dest, vols[0]), make([]byte, 64<<20), 0600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("FAKEZFS_RECEIVE_LOG", filepath.Join(t.TempDir(), "receive.log"))
@@ -68,7 +67,7 @@ func writeOtherDatasetJunk(t *testing.T, dest string, size int) {
 	if _, err := rand.Read(junk); err != nil {
 		t.Fatal(err)
 	}
-	if err := ioutil.WriteFile(filepath.Join(dest, "manifests|tank/other|zz.manifest.gz.pgp"), junk, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dest, "manifests|tank/other|zz.manifest.gz.pgp"), junk, 0600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -144,7 +143,7 @@ func reforgeManifest(t *testing.T, env *e2eEnv, name string, edit func(*files.Jo
 	if err = os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if err = ioutil.WriteFile(filepath.Join(env.dest, m.StoredManifestObjectName("manifests")), buf.Bytes(), 0600); err != nil {
+	if err = os.WriteFile(filepath.Join(env.dest, m.StoredManifestObjectName("manifests")), buf.Bytes(), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err = os.RemoveAll(filepath.Join(env.work, "cache")); err != nil {
@@ -197,7 +196,7 @@ func TestE2EAutoIncrementalOntoExistingParentAfterFullRetired(t *testing.T) {
 	a := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).Unix()
 	b := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Unix()
 	fixture := fmt.Sprintf("tank/data@b\t%d\tsnapshot\ntank/data@a\t%d\tsnapshot\n", b, a)
-	if err := ioutil.WriteFile(env.snapshots, []byte(fixture), 0600); err != nil {
+	if err := os.WriteFile(env.snapshots, []byte(fixture), 0600); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{{"tank/data@a"}, {"-i", "a", "tank/data@b"}, {"tank/data@b"}} {
@@ -214,7 +213,7 @@ func TestE2EAutoIncrementalOntoExistingParentAfterFullRetired(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture += fmt.Sprintf("restored/data@a\t%d\tsnapshot\n", a)
-	if err := ioutil.WriteFile(env.snapshots, []byte(fixture), 0600); err != nil {
+	if err := os.WriteFile(env.snapshots, []byte(fixture), 0600); err != nil {
 		t.Fatal(err)
 	}
 	receiveLog := filepath.Join(t.TempDir(), "receive.log")
@@ -225,7 +224,7 @@ func TestE2EAutoIncrementalOntoExistingParentAfterFullRetired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("receive --auto: %v\n%s", err, logs)
 	}
-	got, _ := ioutil.ReadFile(receiveLog)
+	got, _ := os.ReadFile(receiveLog)
 	h := sha256.New()
 	if _, err = io.Copy(h, fakezfs.Stream("a", "tank/data@b", 4096)); err != nil {
 		t.Fatal(err)

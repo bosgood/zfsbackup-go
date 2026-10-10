@@ -28,7 +28,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	oglog "log"
 	"net/url"
 	"os"
@@ -392,7 +391,7 @@ func restoreWrapper(dataset, bucket, target string) func(*testing.T) {
 		logBuf := bytes.NewBuffer(nil)
 		log.AppLogger.SetBackend(logging.MultiLogger(logging.NewLogBackend(logBuf, "", oglog.Ldate|oglog.Ltime)))
 
-		scratchDir, sErr := ioutil.TempDir("", "")
+		scratchDir, sErr := os.MkdirTemp("", "")
 		if sErr != nil {
 			t.Fatalf("could not create temp scratch dir: %v", sErr)
 		}
@@ -443,13 +442,13 @@ func restoreWrapper(dataset, bucket, target string) func(*testing.T) {
 func TestEncryptionAndSign(t *testing.T) {
 	ctx := context.Background()
 
-	tempDir, err := ioutil.TempDir("", t.Name())
+	tempDir, err := os.MkdirTemp("", t.Name())
 	if err != nil {
 		t.Fatalf("error preparing temp dir for tests - %v", err)
 	}
 	defer os.RemoveAll(tempDir) // clean up
 
-	scratchDir, err := ioutil.TempDir("", "")
+	scratchDir, err := os.MkdirTemp("", "")
 	if err != nil {
 		t.Fatalf("could not create temp scratch dir: %v", err)
 	}

@@ -28,7 +28,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,7 +55,7 @@ func newKey(t *testing.T) *openpgp.Entity {
 		id.SelfSignature.PreferredSymmetric = []uint8{9} // AES256
 	}
 	// Sign the identities, so that Serialize writes self-signatures.
-	if err = e.SerializePrivate(ioutil.Discard, nil); err != nil {
+	if err = e.SerializePrivate(io.Discard, nil); err != nil {
 		t.Fatal(err)
 	}
 	return e
@@ -92,7 +91,7 @@ func writeRings(t *testing.T, keys ...*openpgp.Entity) []string {
 		}
 		w.Close()
 		path := filepath.Join(dir, ring.flag[2:])
-		if err = ioutil.WriteFile(path, buf.Bytes(), 0600); err != nil {
+		if err = os.WriteFile(path, buf.Bytes(), 0600); err != nil {
 			t.Fatal(err)
 		}
 		flags = append(flags, ring.flag, path)
@@ -165,11 +164,11 @@ func TestE2EReceiveFailsOnUndecryptableVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	vols := other.sentSet(t, writeRings(t, k2)...)
-	data, err := ioutil.ReadFile(filepath.Join(other.dest, vols[1]))
+	data, err := os.ReadFile(filepath.Join(other.dest, vols[1]))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = ioutil.WriteFile(filepath.Join(env.dest, vols[1]), data, 0600); err != nil {
+	if err = os.WriteFile(filepath.Join(env.dest, vols[1]), data, 0600); err != nil {
 		t.Fatal(err)
 	}
 	env.receiveFails(t, writeRings(t, k1)...)
@@ -179,12 +178,12 @@ func TestE2EReceiveFailsFastOnHashMismatch(t *testing.T) {
 	env := newE2EEnv(t)
 	vols := env.sentSet(t)
 	path := filepath.Join(env.dest, vols[0])
-	data, err := ioutil.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	data[len(data)/2] ^= 0xff
-	if err = ioutil.WriteFile(path, data, 0600); err != nil {
+	if err = os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
 	env.receiveFails(t)
@@ -242,7 +241,7 @@ func TestE2EReceiveAutoPrefersFull(t *testing.T) {
 			if err != nil {
 				t.Fatalf("receive --auto of b failed although a full of b is at the destination: %v\n%s", err, logs)
 			}
-			got, _ := ioutil.ReadFile(receiveLog)
+			got, _ := os.ReadFile(receiveLog)
 			if n := strings.Count(string(got), "\n"); n != 1 {
 				t.Errorf("want 1 zfs receive (the full of b), got %d\n%s", n, logs)
 			}
@@ -281,7 +280,7 @@ func TestE2EReceiveRefusesManifestCompressorPath(t *testing.T) {
 	name := "manifests|tank/data|a.manifest.gz"
 	ran := filepath.Join(t.TempDir(), "ran")
 	evil := filepath.Join(env.dest, "evil.sh")
-	if err := ioutil.WriteFile(evil, []byte(fmt.Sprintf("#!/bin/sh\ntouch %q\nexec cat\n", ran)), 0755); err != nil {
+	if err := os.WriteFile(evil, []byte(fmt.Sprintf("#!/bin/sh\ntouch %q\nexec cat\n", ran)), 0755); err != nil {
 		t.Fatal(err)
 	}
 	vol, err := files.ExtractLocal(context.Background(), &files.JobInfo{}, filepath.Join(env.dest, name), true)
@@ -300,7 +299,7 @@ func TestE2EReceiveRefusesManifestCompressorPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	gz.Close()
-	if err = ioutil.WriteFile(filepath.Join(env.dest, name), buf.Bytes(), 0600); err != nil {
+	if err = os.WriteFile(filepath.Join(env.dest, name), buf.Bytes(), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err = os.RemoveAll(filepath.Join(env.work, "cache")); err != nil {
@@ -361,7 +360,7 @@ func TestReceiveRefusesStreamingWithSignFrom(t *testing.T) {
 	if !strings.Contains(logs, "--maxFileBuffer 0 cannot be used with --signFrom") {
 		t.Errorf("want the streaming error, got %v\n%s", err, logs)
 	}
-	if got, _ := ioutil.ReadFile(receiveLog); len(got) != 0 {
+	if got, _ := os.ReadFile(receiveLog); len(got) != 0 {
 		t.Errorf("zfs receive was run: %s", got)
 	}
 }
@@ -392,11 +391,11 @@ func TestE2EReceiveRejectsSubstitutedManifest(t *testing.T) {
 	if ma == "" || mb == "" {
 		t.Fatalf("want the manifests of a and b, got %q and %q", ma, mb)
 	}
-	data, err := ioutil.ReadFile(filepath.Join(env.dest, ma))
+	data, err := os.ReadFile(filepath.Join(env.dest, ma))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = ioutil.WriteFile(filepath.Join(env.dest, mb), data, 0600); err != nil {
+	if err = os.WriteFile(filepath.Join(env.dest, mb), data, 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err = os.RemoveAll(filepath.Join(env.work, "cache")); err != nil {
@@ -408,7 +407,7 @@ func TestE2EReceiveRejectsSubstitutedManifest(t *testing.T) {
 		return env.receive(append(append([]string{}, rings...), "tank/data@b", "file://"+env.dest, "restored/data")...)
 	})
 	if err == nil {
-		got, _ := ioutil.ReadFile(receiveLog)
+		got, _ := os.ReadFile(receiveLog)
 		t.Fatalf("receive of b from a's manifest stored under b's name succeeded; zfs receive got %q\n%s", got, logs)
 	}
 	if !strings.Contains(logs, mb) || !strings.Contains(logs, ma) {
@@ -428,7 +427,7 @@ func TestE2EReceiveAutoIncrementalOntoExistingParent(t *testing.T) {
 	a := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).Unix()
 	b := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Unix()
 	fixture := fmt.Sprintf("tank/data@b\t%d\tsnapshot\ntank/data@a\t%d\tsnapshot\n", b, a)
-	if err := ioutil.WriteFile(env.snapshots, []byte(fixture), 0600); err != nil {
+	if err := os.WriteFile(env.snapshots, []byte(fixture), 0600); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{{"tank/data@a"}, {"-i", "a", "tank/data@b"}, {"tank/data@b"}} {
@@ -436,7 +435,7 @@ func TestE2EReceiveAutoIncrementalOntoExistingParent(t *testing.T) {
 	}
 	// The restored copy already has @a.
 	fixture += fmt.Sprintf("restored/data@a\t%d\tsnapshot\n", a)
-	if err := ioutil.WriteFile(env.snapshots, []byte(fixture), 0600); err != nil {
+	if err := os.WriteFile(env.snapshots, []byte(fixture), 0600); err != nil {
 		t.Fatal(err)
 	}
 	receiveLog := filepath.Join(t.TempDir(), "receive.log")
@@ -447,7 +446,7 @@ func TestE2EReceiveAutoIncrementalOntoExistingParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("receive: %v\n%s", err, logs)
 	}
-	got, err := ioutil.ReadFile(receiveLog)
+	got, err := os.ReadFile(receiveLog)
 	if err != nil {
 		t.Fatalf("zfs receive was not run: %v\n%s", err, logs)
 	}

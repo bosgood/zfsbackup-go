@@ -30,7 +30,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sort"
@@ -112,7 +111,7 @@ func PartialSetCompletable(ctx context.Context, jobInfo *files.JobInfo, destBack
 // partialVolumesPresent reports whether every destination that lacks the backup set partial has
 // an object named like each of its volumes: the trace of a send whose manifest upload failed
 // there, rather than of destinations that diverged. Backup checks the volumes' contents.
-func partialVolumesPresent(ctx context.Context, jobInfo *files.JobInfo, partial *files.JobInfo, destBackups [][]*files.JobInfo) (bool, error) {
+func partialVolumesPresent(ctx context.Context, jobInfo, partial *files.JobInfo, destBackups [][]*files.JobInfo) (bool, error) {
 	if len(partial.Volumes) == 0 {
 		return false, nil
 	}
@@ -258,7 +257,7 @@ func getBackupsForTarget(ctx context.Context, volume, target string, jobInfo *fi
 		if oerr != nil {
 			return nil, oerr
 		}
-		if strings.Compare(decodedManifest.VolumeName, volume) == 0 {
+		if decodedManifest.VolumeName == volume {
 			decodedManifests = append(decodedManifests, decodedManifest)
 		}
 	}
@@ -620,7 +619,7 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-		// The forwarder also counts down when it stops on a cancelled ctx, so both cases can be
+		// The forwarder also counts down when it stops on a canceled ctx, so both cases can be
 		// ready at once; a failed pipeline must never get as far as a final manifest.
 		if err := ctx.Err(); err != nil {
 			return err
@@ -783,7 +782,7 @@ func refuseExistingSet(ctx context.Context, jobInfo *files.JobInfo, destinations
 // nolint:funlen // Difficult to break this apart
 func copyManifest(ctx context.Context, jobInfo *files.JobInfo, destinations []destination, from int, missing []int) error {
 	name := jobInfo.ManifestObjectName()
-	tmp, err := ioutil.TempFile(config.BackupTempdir, config.ProgramName)
+	tmp, err := os.CreateTemp(config.BackupTempdir, config.ProgramName)
 	if err != nil {
 		return err
 	}
@@ -1055,14 +1054,11 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 	streamHash := sha256.New()
 	stream := bufio.NewReaderSize(cin, files.BufferSize) // Peek tells a stream's end from a pause
 	counter := datacounter.NewReaderCounter(io.TeeReader(stream, streamHash))
-	usingPipe := false
-	if j.MaxFileBuffer == 0 {
-		usingPipe = true
-	}
+	usingPipe := j.MaxFileBuffer == 0
 
 	// With pipes, a volume's writer (below) and its uploader block on each other: once the
 	// pipeline fails, abort the volume in flight so whichever side is still waiting gets an error.
-	// Watch pctx: group's ctx is also cancelled by a successful Wait, while the last volume uploads.
+	// Watch pctx: group's ctx is also canceled by a successful Wait, while the last volume uploads.
 	var current atomic.Pointer[files.VolumeInfo]
 	if usingPipe {
 		stop := context.AfterFunc(pctx, func() {
@@ -1093,7 +1089,7 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 			// Skip bytes if we are resuming, and check they are the bytes the kept volumes hold
 			if skipBytes > 0 {
 				log.AppLogger.Debugf("Want to skip %d bytes.", skipBytes)
-				written, serr := io.CopyN(ioutil.Discard, counter, int64(skipBytes))
+				written, serr := io.CopyN(io.Discard, counter, int64(skipBytes))
 				if serr == io.EOF {
 					serr = fmt.Errorf(
 						"zfs stream ended before the %d bytes recorded in the cached manifest were skipped; run without --resume",

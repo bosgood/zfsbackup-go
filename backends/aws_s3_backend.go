@@ -126,9 +126,9 @@ func (a *AWSS3Backend) Init(ctx context.Context, conf *BackendConfig, opts ...Op
 				WithLogLevel(aws.LogDebugWithRequestRetries | aws.LogDebugWithRequestErrors)
 		}
 
-		sess, err := session.NewSession(awsconf)
-		if err != nil {
-			return err
+		sess, serr := session.NewSession(awsconf)
+		if serr != nil {
+			return serr
 		}
 
 		a.client = s3.New(sess)
@@ -196,10 +196,11 @@ func withRequestLimiter(buffer chan bool) request.Option {
 
 func withComputeMD5HashHandler(ro *request.Request) {
 	ro.Handlers.Build.PushBack(func(r *request.Request) {
-		reader := r.GetBody()
-		if reader == nil {
+		// GetBody wraps a nil body in a non-nil interface, so check Body itself.
+		if r.Body == nil {
 			return
 		}
+		reader := r.GetBody()
 
 		//nolint:gosec // MD5 not used cryptographically here
 		md5Raw := md5.New()
@@ -326,7 +327,7 @@ func (a *AWSS3Backend) PreDownload(ctx context.Context, keys []string) error {
 			}
 			log.AppLogger.Debugf("s3 backend: key %s will be restored from the %s storage class.", key, *resp.StorageClass)
 		}
-		request := &s3.RestoreRequest{
+		restoreRequest := &s3.RestoreRequest{
 			GlacierJobParameters: &s3.GlacierJobParameters{
 				Tier: aws.String(restoreTier),
 			},
@@ -334,12 +335,12 @@ func (a *AWSS3Backend) PreDownload(ctx context.Context, keys []string) error {
 		// A restored Intelligent-Tiering object moves back to a frequent-access tier for good;
 		// S3 rejects a lifetime for it.
 		if resp.ArchiveStatus == nil {
-			request.Days = aws.Int64(3)
+			restoreRequest.Days = aws.Int64(3)
 		}
 		_, rerr := a.client.RestoreObjectWithContext(ctx, &s3.RestoreObjectInput{
 			Bucket:         aws.String(a.bucketName),
 			Key:            aws.String(key),
-			RestoreRequest: request,
+			RestoreRequest: restoreRequest,
 		})
 		if rerr != nil {
 			if aerr, ok := rerr.(awserr.Error); ok && aerr.Code() == "RestoreAlreadyInProgress" {

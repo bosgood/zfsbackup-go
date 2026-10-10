@@ -95,9 +95,9 @@ func (a *AzureBackend) Init(ctx context.Context, conf *BackendConfig, opts ...Op
 		},
 	}
 	if a.containersas != "" {
-		parsedsas, err := url.Parse(a.containersas)
-		if err != nil {
-			return errors.Wrap(err, "failed to parse SAS URI")
+		parsedsas, perr := url.Parse(a.containersas)
+		if perr != nil {
+			return errors.Wrap(perr, "failed to parse SAS URI")
 		}
 		pipeline := azblob.NewPipeline(azblob.NewAnonymousCredential(), pipelineOpts)
 		sasParts := azblob.NewBlobURLParts(*parsedsas)
@@ -106,13 +106,13 @@ func (a *AzureBackend) Init(ctx context.Context, conf *BackendConfig, opts ...Op
 		}
 		a.containerSvc = azblob.NewContainerURL(*parsedsas, pipeline)
 	} else {
-		credential, err := azblob.NewSharedKeyCredential(a.accountName, a.accountKey)
-		if err != nil {
-			return errors.Wrap(err, "failed to initilze Azure credential")
+		credential, cerr := azblob.NewSharedKeyCredential(a.accountName, a.accountKey)
+		if cerr != nil {
+			return errors.Wrap(cerr, "failed to initilze Azure credential")
 		}
-		destURL, err := url.Parse(a.azureURL)
-		if err != nil {
-			return errors.Wrap(err, "failed to construct Azure API URL")
+		destURL, uerr := url.Parse(a.azureURL)
+		if uerr != nil {
+			return errors.Wrap(uerr, "failed to construct Azure API URL")
 		}
 		pipeline := azblob.NewPipeline(credential, pipelineOpts)
 		svcURL := azblob.NewServiceURL(*destURL, pipeline)
@@ -230,7 +230,8 @@ func (a *AzureBackend) Upload(ctx context.Context, vol *files.VolumeInfo) error 
 
 	// Finally, finalize the storage blob by giving Azure the block list order
 	_, err = blobURL.CommitBlockList(
-		ctx, blockIDs, azblob.BlobHTTPHeaders{ContentMD5: md5Raw}, azblob.Metadata{}, azblob.BlobAccessConditions{}, azblob.DefaultAccessTier, azblob.BlobTagsMap{},
+		ctx, blockIDs, azblob.BlobHTTPHeaders{ContentMD5: md5Raw}, azblob.Metadata{}, azblob.BlobAccessConditions{},
+		azblob.DefaultAccessTier, azblob.BlobTagsMap{},
 	)
 	if err != nil {
 		log.AppLogger.Debugf("azure backend: Error while finalizing volume %s - %v", vol.ObjectName, err)

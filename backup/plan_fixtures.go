@@ -234,7 +234,8 @@ func ParseSmartFlags(r io.Reader) (files.JobInfo, error) {
 	if fs.NArg() > 0 {
 		return j, fmt.Errorf("unexpected argument %q: only smart send flags are allowed", fs.Arg(0))
 	}
-	return j, ValidateSmartOptions(&j)
+	err := ValidateSmartOptions(&j)
+	return j, err
 }
 
 // ReadSnapshots sets the scenario's snapshots from a listing (see

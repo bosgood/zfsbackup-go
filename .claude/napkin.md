@@ -23,6 +23,7 @@
 | 2026-10-05 | self | (twice) An e2e subtest name with a comma (`"same size, other bytes"`) made send fail with "invalid URI": `t.TempDir()` puts the test name in the path, and `--destinations` / the dest argument is comma-separated | Never put `,` in a subtest name of a test that uses t.TempDir() for a destination |
 | 2026-10-08 | self | Five parallel agents in git worktrees each ran `make fmt-check` and it passed while checking NOTHING: the worktree's `.git` is a link to a host path outside the container mount, so `git ls-files` listed no files | Fixed in 39175ad (fmt-check now fails on an empty file list). Run `make fmt-check` from the main checkout after merging worktree branches |
 | 2026-10-08 | self | `go test -race ./...` "failed" with a 10m timeout and a DATA RACE on HEAD itself: the root package takes ~20 min under -race, and `setLocal` wrote `time.Local`, which runtime timers read from other goroutines | `make test-race` now passes `-timeout 45m`. Tests set `backup.HostZone`, never `time.Local` |
+| 2026-10-10 | self | `make lint` died at once: `.golangci.yml` was v1 format, the host has golangci-lint v2. A plain migrate also turned on depguard's v2 default rule (only std imports allowed), which v1 never had | `make lint` now runs the pinned `golangci/golangci-lint:v2.12.2` image on a v2 config. Bump the image tag on purpose; a new version can add issues |
 
 ## User Preferences
 - Use Makefile targets for repeatable operations (test, build, lint). Keep the Makefile as the source of truth; extend it when a task is missing.

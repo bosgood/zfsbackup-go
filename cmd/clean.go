@@ -58,7 +58,8 @@ manifests of another --manifestPrefix are never deleted.`,
 func init() {
 	RootCmd.AddCommand(cleanCmd)
 
-	cleanCmd.Flags().BoolVarP(&cleanLocal, "cleanLocal", "", false, "Delete cached manifests that are not at the destination, and delete their volumes at the destination.")
+	cleanCmd.Flags().BoolVarP(&cleanLocal, "cleanLocal", "", false,
+		"Delete cached manifests that are not at the destination, and delete their volumes at the destination.")
 	cleanCmd.Flags().BoolVarP(&cleanDryRun, "dry-run", "n", false, "Do not delete anything; only log what would be deleted.")
 	cleanCmd.Flags().BoolVarP(&jobInfo.Force, "force", "", false,
 		"Also delete broken backup sets at the destination (sets where volumes expected in the manifest file are not found), manifest included. "+

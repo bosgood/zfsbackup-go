@@ -25,7 +25,6 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,7 +153,7 @@ func rewriteManifest(t *testing.T, path string, edit func(map[string]interface{}
 	if err = zw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err = ioutil.WriteFile(path, buf.Bytes(), 0600); err != nil {
+	if err = os.WriteFile(path, buf.Bytes(), 0600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -190,12 +189,12 @@ func TestE2EResumeRefusesToCompleteOverForeignVolumes(t *testing.T) {
 			env.interruptedSend(t, streamBytes, dest2, "--volsize", "1", "--compressor", "")
 			env.sendOK(t, "--volsize", "1", "--compressor", "", "tank/data@a", "file://"+env.dest)
 			vol := volumeNamed(t, dest2, 2)
-			data, err := ioutil.ReadFile(vol)
+			data, err := os.ReadFile(vol)
 			if err != nil {
 				t.Fatal(err)
 			}
 			data[len(data)/2] ^= 0xff
-			if err = ioutil.WriteFile(vol, data, 0600); err != nil {
+			if err = os.WriteFile(vol, data, 0600); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -269,7 +268,7 @@ func TestE2ECompletedSetRefreshesLaggingCache(t *testing.T) {
 		t.Fatalf("want a cached manifest per destination, got %q (%v)", paths, err)
 	}
 	for _, path := range paths {
-		data, err := ioutil.ReadFile(path)
+		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -371,7 +370,7 @@ func smartCompletesPartial(t *testing.T, volumesThere bool) {
 	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(3<<20))
 	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
 	blocker := filepath.Join(dest2, "manifests|tank")
-	if err := ioutil.WriteFile(blocker, nil, 0600); err != nil {
+	if err := os.WriteFile(blocker, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
 	dests := "file://" + env.dest + ",file://" + dest2
@@ -413,7 +412,7 @@ func TestE2EPlanCompletesPartialLikeSend(t *testing.T) {
 	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(3<<20))
 	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
 	blocker := filepath.Join(dest2, "manifests|tank")
-	if err := ioutil.WriteFile(blocker, nil, 0600); err != nil {
+	if err := os.WriteFile(blocker, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
 	dests := "file://" + env.dest + ",file://" + dest2
@@ -465,7 +464,7 @@ func TestE2EResumeAfterManifestUploadFailureUploadsOnlyManifest(t *testing.T) {
 	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(streamBytes))
 	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
 	blocker := filepath.Join(env.dest, "manifests|tank")
-	if err := ioutil.WriteFile(blocker, nil, 0600); err != nil {
+	if err := os.WriteFile(blocker, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
 	dest := "file://" + env.dest
@@ -494,7 +493,7 @@ func TestE2EResumeAfterManifestUploadFailureUploadsOnlyManifest(t *testing.T) {
 	if len(added) != 1 || !strings.HasPrefix(added[0], "manifests|") {
 		t.Errorf("the resume added %q, want only the manifest", added)
 	}
-	zfsLog, _ := ioutil.ReadFile(env.zfsLog)
+	zfsLog, _ := os.ReadFile(env.zfsLog)
 	for _, line := range strings.Split(string(zfsLog), "\n") {
 		if strings.HasPrefix(line, "send ") && !strings.Contains(line, " -n") {
 			t.Errorf("the resume ran zfs %s", line)
@@ -555,10 +554,10 @@ func TestE2EResumeIgnoresCacheOfAbandonedAttempt(t *testing.T) {
 	if changed == 0 {
 		t.Fatalf("attempt B rewrote none of dest1's objects; the scenario needs it to")
 	}
-	if err := os.Remove(filepath.Join(dest2, "tank")); err != nil {
+	if err = os.Remove(filepath.Join(dest2, "tank")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(hidden, filepath.Join(dest2, "tank")); err != nil {
+	if err = os.Rename(hidden, filepath.Join(dest2, "tank")); err != nil {
 		t.Fatal(err)
 	}
 

@@ -25,7 +25,6 @@ import (
 	"crypto/md5" // nolint:gosec // names the old lock file, not for security
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,7 +42,7 @@ func writeTestManifest(t *testing.T, dir string, j *files.JobInfo) {
 	if err != nil {
 		t.Fatalf("could not create manifest - %v", err)
 	}
-	defer manifest.DeleteVolume()
+	defer func() { _ = manifest.DeleteVolume() }()
 	if err = json.NewEncoder(manifest).Encode(j); err != nil {
 		t.Fatalf("could not encode manifest - %v", err)
 	}
@@ -66,7 +65,7 @@ func writeTestObject(t *testing.T, dir, name string) string {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := ioutil.WriteFile(path, []byte("payload"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("payload"), 0600); err != nil {
 		t.Fatalf("could not write object %s - %v", name, err)
 	}
 	return path
@@ -171,7 +170,7 @@ func TestCleanRefusesWithoutManifests(t *testing.T) {
 // TestCleanDryRunLocalManifests covers the --cleanLocal branch: a dry run must
 // leave local-only cached manifests alone, and a real run must delete them.
 func TestCleanDryRunLocalManifests(t *testing.T) {
-	cacheDir, err := ioutil.TempDir("", "zfsbackup-clean-cache")
+	cacheDir, err := os.MkdirTemp("", "zfsbackup-clean-cache")
 	if err != nil {
 		t.Fatalf("could not create temp cache dir - %v", err)
 	}
@@ -181,7 +180,7 @@ func TestCleanDryRunLocalManifests(t *testing.T) {
 	config.WorkingDir = cacheDir
 	defer func() { config.WorkingDir = oldWorkingDir }()
 
-	targetDir, err := ioutil.TempDir("", "zfsbackup-clean-target")
+	targetDir, err := os.MkdirTemp("", "zfsbackup-clean-target")
 	if err != nil {
 		t.Fatalf("could not create temp target dir - %v", err)
 	}
@@ -203,7 +202,7 @@ func TestCleanDryRunLocalManifests(t *testing.T) {
 		t.Fatalf("could not resolve cache dir - %v", cerr)
 	}
 	strayManifest := filepath.Join(localCachePath, "0123456789abcdef")
-	if werr := ioutil.WriteFile(strayManifest, []byte("stale"), 0600); werr != nil {
+	if werr := os.WriteFile(strayManifest, []byte("stale"), 0600); werr != nil {
 		t.Fatalf("could not write stray cached manifest - %v", werr)
 	}
 
@@ -247,7 +246,7 @@ func TestCleanSkipsDatasetOfRunningSend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = ioutil.WriteFile(lockPath, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
+	if err = os.WriteFile(lockPath, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
 		t.Fatal(err)
 	}
 	defer os.Remove(lockPath)
@@ -297,7 +296,7 @@ func TestCleanHonoursSendLockAcrossTMPDIR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = ioutil.WriteFile(lockPath, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
+	if err = os.WriteFile(lockPath, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
 		t.Fatal(err)
 	}
 	defer os.Remove(lockPath)
@@ -306,7 +305,7 @@ func TestCleanHonoursSendLockAcrossTMPDIR(t *testing.T) {
 	// Where builds before dc37d16 kept the lock; any local user can plant it, naming a live pid
 	// (our parent here: pid 1 is invisible to a non-root signal 0, so it would look dead).
 	planted := filepath.Join(os.TempDir(), fmt.Sprintf("zfsbackup.%x.lck", md5.Sum([]byte("tank/data"))))
-	if err = ioutil.WriteFile(planted, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
+	if err = os.WriteFile(planted, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if cerr := Clean(context.Background(), jobInfo, false, false); cerr != nil {
@@ -378,7 +377,7 @@ func TestCleanLocalSparesRunningSendState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = ioutil.WriteFile(lockPath, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
+	if err = os.WriteFile(lockPath, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
 		t.Fatal(err)
 	}
 	defer os.Remove(lockPath)

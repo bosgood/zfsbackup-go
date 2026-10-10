@@ -731,6 +731,7 @@ func sameSets(a, b []*files.JobInfo) bool {
 		return false
 	}
 	for i := range a {
+		//nolint:gosec // G602: len(a) == len(b) above
 		if !a[i].BaseSnapshot.Equal(&b[i].BaseSnapshot) || !a[i].IncrementalSnapshot.Equal(&b[i].IncrementalSnapshot) {
 			return false
 		}

@@ -24,7 +24,6 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,7 +38,7 @@ var update = flag.Bool("update", false, "rewrite expected.txt for every scenario
 // TestScenarios runs every scenario under testdata/scenarios and compares the
 // rendered plan with its expected.txt. `make scenarios-update` rewrites them.
 func TestScenarios(t *testing.T) {
-	entries, err := ioutil.ReadDir("testdata/scenarios")
+	entries, err := os.ReadDir("testdata/scenarios")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,11 +60,11 @@ func TestScenarios(t *testing.T) {
 
 			golden := filepath.Join(dir, "expected.txt")
 			if *update {
-				if err = ioutil.WriteFile(golden, buf.Bytes(), 0644); err != nil { // nolint:gosec // not secret
+				if err = os.WriteFile(golden, buf.Bytes(), 0644); err != nil { // nolint:gosec // not secret
 					t.Fatal(err)
 				}
 			}
-			want, err := ioutil.ReadFile(golden)
+			want, err := os.ReadFile(golden)
 			if os.IsNotExist(err) {
 				t.Fatalf("%s is missing; create it with `make scenarios-update`:\n%s", golden, buf.String())
 			} else if err != nil {

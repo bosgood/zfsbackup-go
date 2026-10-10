@@ -25,7 +25,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -65,7 +65,7 @@ func runPlanCommand(t *testing.T, args ...string) (string, error) {
 // scenarioFlags returns the send flags a scenario's flags file holds.
 func scenarioFlags(t *testing.T, name string) []string {
 	t.Helper()
-	b, err := ioutil.ReadFile(filepath.Join(scenarios, name, "flags"))
+	b, err := os.ReadFile(filepath.Join(scenarios, name, "flags"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func scenarioFlags(t *testing.T, name string) []string {
 
 func readGolden(t *testing.T, name string) string {
 	t.Helper()
-	b, err := ioutil.ReadFile(filepath.Join(scenarios, name, "expected.txt"))
+	b, err := os.ReadFile(filepath.Join(scenarios, name, "expected.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,12 +185,12 @@ func TestPlanChecksFailed(t *testing.T) {
 	dir := t.TempDir()
 	snapshots := filepath.Join(dir, "snapshots.txt")
 	manifests := filepath.Join(dir, "manifests.txt")
-	if err := ioutil.WriteFile(snapshots, []byte("autosnap_2026-10-01_00:00:00_monthly\nautosnap_2026-09-01_00:00:00_monthly\n"), 0600); err != nil {
+	if err := os.WriteFile(snapshots, []byte("autosnap_2026-10-01_00:00:00_monthly\nautosnap_2026-09-01_00:00:00_monthly\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	// An incremental whose source was never backed up cannot be restored.
 	manifests1 := "autosnap_2026-08-01_00:00:00_monthly to autosnap_2026-09-01_00:00:00_monthly\n"
-	if err := ioutil.WriteFile(manifests, []byte(manifests1), 0600); err != nil {
+	if err := os.WriteFile(manifests, []byte(manifests1), 0600); err != nil {
 		t.Fatal(err)
 	}
 	out, err := runPlanCommand(t, "--increment", "--snapshots", snapshots, "--manifests", manifests, "tank/data")

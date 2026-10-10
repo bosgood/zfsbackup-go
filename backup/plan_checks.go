@@ -275,9 +275,10 @@ func (sim *Simulation) checkFullCadence() []Violation {
 		if age := st.Snapshots[0].CreationTime.Sub(last.CreationTime); age > window+slack {
 			overdue = true
 			found = append(found, Violation{
-				Check:  "full-cadence",
-				At:     st.At,
-				Detail: fmt.Sprintf("no full since %s, %s ago, want one every %s ± %s", last.Name, formatDays(age), formatDays(window), formatDays(slack)),
+				Check: "full-cadence",
+				At:    st.At,
+				Detail: fmt.Sprintf("no full since %s, %s ago, want one every %s ± %s",
+					last.Name, formatDays(age), formatDays(window), formatDays(slack)),
 			})
 		}
 	}

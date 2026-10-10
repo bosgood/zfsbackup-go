@@ -26,7 +26,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,7 +49,7 @@ func (m *mockBackend) Init(ctx context.Context, conf *backends.BackendConfig, op
 
 func (m *mockBackend) Upload(ctx context.Context, vol *files.VolumeInfo) error {
 	// make sure we can read the volume
-	_, err := ioutil.ReadAll(vol)
+	_, err := io.ReadAll(vol)
 	return err
 }
 
@@ -455,21 +454,21 @@ func prepareTestVols() (payload []byte, goodVol, badVol *files.VolumeInfo, err e
 func fakeZFS(t *testing.T, listing string) {
 	t.Helper()
 
-	dir, err := ioutil.TempDir("", "zfsbackup-fake-zfs")
+	dir, err := os.MkdirTemp("", "zfsbackup-fake-zfs")
 	if err != nil {
 		t.Fatalf("could not create temp dir - %v", err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 
 	listPath := filepath.Join(dir, "snapshots")
-	if werr := ioutil.WriteFile(listPath, []byte(listing), 0600); werr != nil {
+	if werr := os.WriteFile(listPath, []byte(listing), 0600); werr != nil {
 		t.Fatalf("could not write snapshot listing - %v", werr)
 	}
 
 	script := "#!/bin/sh\ncase \"$1\" in\nlist) cat " + listPath + " ;;\nsend) printf 'size\\t123456\\n' ;;\n*) exit 1 ;;\nesac\n"
 	zfsPath := filepath.Join(dir, "zfs")
 	// nolint:gosec // the stub must be executable
-	if werr := ioutil.WriteFile(zfsPath, []byte(script), 0700); werr != nil {
+	if werr := os.WriteFile(zfsPath, []byte(script), 0700); werr != nil {
 		t.Fatalf("could not write fake zfs - %v", werr)
 	}
 
@@ -484,7 +483,7 @@ func TestBackupDryRun(t *testing.T) {
 	const creation = 1700000000
 	fakeZFS(t, "tank/data@snap1\t1700000000\tsnapshot\n")
 
-	targetDir, err := ioutil.TempDir("", "zfsbackup-dryrun-target")
+	targetDir, err := os.MkdirTemp("", "zfsbackup-dryrun-target")
 	if err != nil {
 		t.Fatalf("could not create temp target dir - %v", err)
 	}
@@ -500,7 +499,7 @@ func TestBackupDryRun(t *testing.T) {
 		t.Fatalf("dry-run Backup returned error - %v", berr)
 	}
 
-	entries, rerr := ioutil.ReadDir(targetDir)
+	entries, rerr := os.ReadDir(targetDir)
 	if rerr != nil {
 		t.Fatalf("could not read target dir - %v", rerr)
 	}

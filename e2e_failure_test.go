@@ -29,7 +29,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,7 +119,7 @@ func destObjects(t *testing.T, dir string) map[string][]byte {
 		if err != nil || info.IsDir() {
 			return err
 		}
-		data, rerr := ioutil.ReadFile(path)
+		data, rerr := os.ReadFile(path)
 		if rerr != nil {
 			return rerr
 		}
@@ -168,28 +167,6 @@ func (env *e2eEnv) cachedManifests(t *testing.T) []*files.JobInfo {
 	return manifests
 }
 
-// copyDir copies the regular files under src to dst.
-func copyDir(t *testing.T, src, dst string) {
-	t.Helper()
-	err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(src, path)
-		if info.IsDir() {
-			return os.MkdirAll(filepath.Join(dst, rel), 0700)
-		}
-		data, rerr := ioutil.ReadFile(path)
-		if rerr != nil {
-			return rerr
-		}
-		return ioutil.WriteFile(filepath.Join(dst, rel), data, 0600)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
 // checkRestores receives the newest backup of tank/data@snap from dest and checks the fake
 // zfs got exactly the stream it sent.
 func (env *e2eEnv) checkRestores(t *testing.T, dest, snap string, streamBytes int64) {
@@ -200,7 +177,7 @@ func (env *e2eEnv) checkRestores(t *testing.T, dest, snap string, streamBytes in
 	if err != nil {
 		t.Fatalf("receive: %v\n%s", err, logs)
 	}
-	got, err := ioutil.ReadFile(receiveLog)
+	got, err := os.ReadFile(receiveLog)
 	if err != nil {
 		t.Fatalf("zfs receive was not run: %v\n%s", err, logs)
 	}
@@ -235,7 +212,7 @@ func TestE2ESendRefusesWhileAnotherSendRuns(t *testing.T) {
 	if err = os.MkdirAll(filepath.Dir(lock), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err = ioutil.WriteFile(lock, []byte(fmt.Sprintf("%d\n", holder.Process.Pid)), 0600); err != nil {
+	if err = os.WriteFile(lock, []byte(fmt.Sprintf("%d\n", holder.Process.Pid)), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -247,7 +224,7 @@ func TestE2ESendRefusesWhileAnotherSendRuns(t *testing.T) {
 	if names := manifestNames(destObjects(t, env.dest)); len(names) != 0 {
 		t.Errorf("the overlapping run uploaded %q", names)
 	}
-	if content, rerr := ioutil.ReadFile(lock); rerr != nil || strings.TrimSpace(string(content)) != fmt.Sprint(holder.Process.Pid) {
+	if content, rerr := os.ReadFile(lock); rerr != nil || strings.TrimSpace(string(content)) != fmt.Sprint(holder.Process.Pid) {
 		t.Errorf("lock file changed: %q, %v", content, rerr)
 	}
 }
@@ -257,7 +234,7 @@ func TestE2EUploadFailureExits(t *testing.T) {
 	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
 	// A file where the data volumes' parent directory must go: every volume upload fails,
 	// while manifests (manifests|...) could still be written.
-	if err := ioutil.WriteFile(filepath.Join(env.dest, "tank"), nil, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(env.dest, "tank"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
 	logs, err := guarded(t, func() (string, error) {
@@ -325,7 +302,7 @@ func TestE2EZFSSendFailureExits(t *testing.T) {
 func TestE2EStreamingUploadFailureExits(t *testing.T) {
 	env := newE2EEnv(t)
 	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
-	if err := ioutil.WriteFile(filepath.Join(env.dest, "tank"), nil, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(env.dest, "tank"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
 	logs, err := guarded(t, func() (string, error) {
@@ -377,7 +354,7 @@ func TestE2EResumeCompletesManifestAtOneDestination(t *testing.T) {
 	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
 	// A file where dest2's manifest directory must go: only the manifest upload fails there.
 	blocker := filepath.Join(dest2, "manifests|tank")
-	if err := ioutil.WriteFile(blocker, nil, 0600); err != nil {
+	if err := os.WriteFile(blocker, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
 	args := []string{
@@ -566,7 +543,7 @@ func TestE2EResumeShortStreamFails(t *testing.T) {
 func TestE2EFailedSendLeavesNoWaiter(t *testing.T) {
 	env := newE2EEnv(t)
 	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
-	if err := ioutil.WriteFile(filepath.Join(env.dest, "tank"), nil, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(env.dest, "tank"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
 	logs, err := guarded(t, func() (string, error) {
@@ -645,7 +622,7 @@ func TestE2ESendIgnoresTmpLockFile(t *testing.T) {
 	// nolint:gosec // MD5 names the old lock file, not for security
 	planted := filepath.Join(os.TempDir(), fmt.Sprintf("zfsbackup.%x.lck", md5.Sum([]byte("tank/data"))))
 	holder := fmt.Sprintf("%d\n", os.Getppid())
-	if err := ioutil.WriteFile(planted, []byte(holder), 0600); err != nil {
+	if err := os.WriteFile(planted, []byte(holder), 0600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
@@ -668,7 +645,7 @@ func TestE2ESendIgnoresTmpLockFile(t *testing.T) {
 	if names := manifestNames(destObjects(t, env.dest)); len(names) != 2 {
 		t.Errorf("want 2 manifests at the destination, got %q", names)
 	}
-	if content, err := ioutil.ReadFile(planted); err != nil || string(content) != holder {
+	if content, err := os.ReadFile(planted); err != nil || string(content) != holder {
 		t.Errorf("send touched the planted file: %q, %v", content, err)
 	}
 }

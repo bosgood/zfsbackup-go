@@ -160,7 +160,6 @@ func syncCache(ctx context.Context, j *files.JobInfo, localCache string, backend
 	}
 
 	var localOnlyFiles []string
-	var foundFiles []string
 	for _, file := range manifestFiles {
 		if files.IsAtomicTemp(file.Name()) && !file.IsDir() {
 			removeStaleTemp(filepath.Join(localCache, file.Name()), file)
@@ -176,7 +175,6 @@ func syncCache(ctx context.Context, j *files.JobInfo, localCache string, backend
 			}
 
 			found = true
-			foundFiles = append(foundFiles, safeManifests[idx])
 			manifests = append(manifests[:idx], manifests[idx+1:]...)
 			safeManifests = append(safeManifests[:idx], safeManifests[idx+1:]...)
 			break

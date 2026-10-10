@@ -94,7 +94,7 @@ func TestE2EENOSPCAtFinalFlushFails(t *testing.T) {
 			}
 			t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(200<<10))
 			env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
-			args := append(tc.args, "--maxRetryTime", "2s", "--maxBackoffTime", "1s", "tank/data@a", "file://"+env.dest)
+			args := append(append([]string(nil), tc.args...), "--maxRetryTime", "2s", "--maxBackoffTime", "1s", "tank/data@a", "file://"+env.dest)
 			logs, err := guarded(t, func() (string, error) { return env.send(args...) })
 			if err == nil {
 				t.Errorf("send succeeded although the temp dir is full:\n%s", logs)

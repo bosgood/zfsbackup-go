@@ -1,98 +1,95 @@
-linters-settings:
-  dupl:
-    threshold: 100
-  funlen:
-    lines: 100
-    statements: 50
-  goconst:
-    min-len: 2
-    min-occurrences: 3
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - experimental
-      - opinionated
-      - performance
-      - style
-  gocyclo:
-    min-complexity: 15
-  goimports:
-    local-prefixes: github.com/someone1/zfsbackup-go
-  golint:
-    min-confidence: 0
-  gomnd:
-    settings:
-      mnd:
-        # don't include the "operation" and "assign"
-        checks: argument,case,condition,return
-  govet:
-    check-shadowing: true
-  lll:
-    line-length: 140
-  maligned:
-    suggest-new: true
-  misspell:
-    locale: US
-
+version: "2"
 linters:
-  # please, do not use `enable-all`: it's deprecated and will be removed soon.
-  # inverted configuration with `enable-all` and `disable` is not scalable during updates of golangci-lint
-  disable-all: true
+  default: none
   enable:
     - bodyclose
-    - deadcode
-    - depguard
     - dogsled
     - dupl
     - errcheck
     - funlen
-    - goconst
     - gocritic
-    - gocyclo
-    - gofmt
-    - goimports
-    - golint
     - goprintffuncname
     - gosec
-    - gosimple
     - govet
     - ineffassign
-    - interfacer
     - lll
     - misspell
     - nakedret
     - rowserrcheck
-    - scopelint
     - staticcheck
-    - structcheck
-    - stylecheck
-    - typecheck
     - unconvert
     - unparam
     - unused
-    - varcheck
     - whitespace
-
-  # don't enable:
-  # - gochecknoglobals
-  # - gocognit
-  # - godox
-  # - maligned
-  # - prealloc
-  # - gochecknoinits
-  # - gomnd
-
-issues:
-  # Excluding configuration per-path, per-linter, per-text and per-source
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - lll
-        - funlen
-        - gocyclo
-
-
-# golangci.com configuration
-# https://github.com/golangci/golangci/wiki/Configuration
-service:
-  golangci-lint-version: 1.24.x # use the fixed version to not introduce new linters unexpectedly
+  settings:
+    dupl:
+      threshold: 100
+    funlen:
+      lines: 100
+      statements: 80
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - opinionated
+        - performance
+        - style
+      disabled-checks:
+        - commentedOutCode
+        - filepathJoin
+        - hugeParam
+        - octalLiteral
+        - paramTypeCombine
+        - rangeValCopy
+        - sloppyReassign
+        - unnamedResult
+    gosec:
+      excludes:
+        - G115 # integer overflow conversion: sizes and counts here fit
+        - G204 # zfs and the compressors are subprocesses by design
+        - G703 # path traversal: paths come from the user's own flags and config
+        - G704 # SSRF: hosts come from the user's own flags and config
+    govet:
+      enable:
+        - shadow
+    lll:
+      line-length: 140
+    misspell:
+      locale: US
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - funlen
+          - gosec
+          - lll
+          - nakedret
+          - unparam
+        path: _test\.go
+      # x/crypto/openpgp is deprecated but is the format of existing backups.
+      - linters:
+          - staticcheck
+        text: 'SA1019: "golang.org/x/crypto/openpgp'
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/someone1/zfsbackup-go
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

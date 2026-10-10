@@ -195,7 +195,7 @@ func send(args []string, stdout io.Writer) error {
 		return errUnexpected
 	}
 	target := args[0]
-	dataset := target[:strings.Index(target, "@")]
+	dataset, _, _ := strings.Cut(target, "@")
 	snaps, err := datasetSnapshots(dataset)
 	if err != nil {
 		return err

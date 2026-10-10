@@ -24,7 +24,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -36,7 +35,7 @@ import (
 	"github.com/op/go-logging"
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/openpgp"
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 
 	"github.com/someone1/zfsbackup-go/backends"
 	"github.com/someone1/zfsbackup-go/backup"
@@ -279,15 +278,16 @@ func getAndDecryptPrivateKey(email string) (*openpgp.Entity, error) {
 
 func loadSendKeys() error {
 	if jobInfo.EncryptTo != "" {
-		if usingSmartOption() && secretKeyRingPath == "" {
+		switch {
+		case usingSmartOption() && secretKeyRingPath == "":
 			log.AppLogger.Errorf("You must specify a secret keyring path if you use a smart option with encryptTo")
 			return errInvalidInput
-		} else if jobInfo.Resume && secretKeyRingPath == "" {
+		case jobInfo.Resume && secretKeyRingPath == "":
 			// The cached partial manifest is encrypted: without the secret ring a resume could
 			// never read it, and would start over every time.
 			log.AppLogger.Errorf("You must specify a secret keyring path if you use --resume with encryptTo")
 			return errInvalidInput
-		} else if publicKeyRingPath == "" {
+		case publicKeyRingPath == "":
 			log.AppLogger.Errorf("You must specify a public keyring path if you provide an encryptTo option")
 			return errInvalidInput
 		}
@@ -426,7 +426,7 @@ func setupGlobalVars() error {
 		}
 	}
 
-	tempdir, err := ioutil.TempDir(dirPath, config.ProgramName)
+	tempdir, err := os.MkdirTemp(dirPath, config.ProgramName)
 	if err != nil {
 		log.AppLogger.Errorf("Could not create temp directory due to error - %v", err)
 		return err
@@ -461,7 +461,7 @@ func validatePassphrase() {
 	var err error
 	if len(passphrase) == 0 {
 		fmt.Fprint(config.Stdout, "Enter passphrase to decrypt encryption key: ")
-		passphrase, err = terminal.ReadPassword(0)
+		passphrase, err = term.ReadPassword(0)
 		if err != nil {
 			log.AppLogger.Errorf("Error reading user input for encryption key passphrase: %v", err)
 			panic(err)

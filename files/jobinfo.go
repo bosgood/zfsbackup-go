@@ -134,7 +134,7 @@ func (s *SnapshotInfo) Equal(t *SnapshotInfo) bool {
 	if s == nil || t == nil {
 		return s == t
 	}
-	return strings.Compare(s.Name, t.Name) == 0 && s.CreationTime.Equal(t.CreationTime)
+	return s.Name == t.Name && s.CreationTime.Equal(t.CreationTime)
 }
 
 // RecordKeyFingerprints records the fingerprints of EncryptKey and SignKey, so that a manifest
@@ -210,7 +210,8 @@ func (j *JobInfo) TotalBytesStreamedAndVols() (total uint64, volnum int64) {
 
 // ValidateSendFlags will check if the options assigned to this JobInfo object is
 // properly within the bounds for a send backup operation.
-// nolint:golint,stylecheck // Error strings used as log messages for user
+//
+//nolint:staticcheck // ST1005: Error strings used as log messages for user
 func (j *JobInfo) ValidateSendFlags() error {
 	if j.MaxFileBuffer < 0 {
 		return fmt.Errorf("The number of active files must be set to a value greater than or equal to 0. Was given %d", j.MaxFileBuffer)

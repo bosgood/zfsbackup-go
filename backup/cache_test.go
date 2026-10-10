@@ -25,7 +25,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -72,9 +71,9 @@ func (c *cacheBackend) Download(ctx context.Context, name string) (io.ReadCloser
 	}
 	if c.failures > 0 {
 		c.failures--
-		return ioutil.NopCloser(&brokenReader{bytes.NewReader(data[:len(data)/2])}), nil
+		return io.NopCloser(&brokenReader{bytes.NewReader(data[:len(data)/2])}), nil
 	}
-	return ioutil.NopCloser(bytes.NewReader(data)), nil
+	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
 var _ backends.Backend = (*cacheBackend)(nil)
@@ -118,7 +117,7 @@ func TestSyncCacheRetriesTruncatedDownload(t *testing.T) {
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("want one cached manifest, got %v (%v)", entries, err)
 	}
-	if data, _ := ioutil.ReadFile(filepath.Join(cache, entries[0].Name())); !bytes.Equal(data, manifest) {
+	if data, _ := os.ReadFile(filepath.Join(cache, entries[0].Name())); !bytes.Equal(data, manifest) {
 		t.Errorf("cached %d bytes, want the %d-byte manifest", len(data), len(manifest))
 	}
 }

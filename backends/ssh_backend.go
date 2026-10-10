@@ -13,11 +13,12 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
-	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/log"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 	"golang.org/x/crypto/ssh/knownhosts"
+
+	"github.com/someone1/zfsbackup-go/files"
+	"github.com/someone1/zfsbackup-go/log"
 )
 
 // SSHBackendPrefix is the URI prefix used for the SSHBackend.
@@ -111,7 +112,7 @@ func buildHostKeyCallback(userHomeDir string) (callback ssh.HostKeyCallback, err
 		knownHostsFile = filepath.Join(userHomeDir, ".ssh/known_hosts")
 	}
 	if knownHostsFile == "ignore" {
-		callback = ssh.InsecureIgnoreHostKey()
+		callback = ssh.InsecureIgnoreHostKey() //nolint:gosec // the user asked for it with SSH_KNOWN_HOSTS=ignore
 	} else {
 		callback, err = knownhosts.New(knownHostsFile)
 	}
@@ -183,7 +184,7 @@ func (s *SSHBackend) Init(ctx context.Context, conf *BackendConfig, opts ...Opti
 
 	hostname := targetUrl.Host
 	if !strings.Contains(hostname, ":") {
-		hostname = hostname + ":22"
+		hostname += ":22"
 	}
 	s.sshClient, err = ssh.Dial("tcp", hostname, sshConfig)
 	if err != nil {

@@ -24,7 +24,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,7 +142,7 @@ func TestE2ESignKeyRotationWithTrustSigner(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("receive --trustSigner <old> of a chain spanning the rotation: %v\n%s", err, logs)
 	}
-	got, _ := ioutil.ReadFile(receiveLog)
+	got, _ := os.ReadFile(receiveLog)
 	if n := strings.Count(string(got), "\n"); n != 2 {
 		t.Errorf("want 2 zfs receives (the full of a, then a to b), got %d\n%s", n, logs)
 	}

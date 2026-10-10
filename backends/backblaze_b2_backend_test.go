@@ -63,11 +63,7 @@ func TestB2Backend(t *testing.T) {
 
 	defer func() {
 		it := bucketCli.List(ctx)
-		for {
-			if !it.Next() {
-				break
-			}
-
+		for it.Next() {
 			if err = it.Object().Delete(ctx); err != nil {
 				t.Errorf("could not delete object: %v", err)
 			}

@@ -55,7 +55,7 @@ func TestVolumeCloseReportsFlushError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer v.DeleteVolume()
+	defer func() { _ = v.DeleteVolume() }()
 	SetVolumeSink(v, &failingWriter{n: 10 << 10})
 	if _, err = v.Write(bytes.Repeat([]byte{'x'}, 100<<10)); err != nil {
 		t.Fatal(err) // still in the buffer
@@ -82,7 +82,7 @@ func TestVolumeCloseChecksFileSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer v.DeleteVolume()
+	defer func() { _ = v.DeleteVolume() }()
 	SetVolumeSink(v, &bytes.Buffer{}) // accepts everything, writes nothing to the file
 	if _, err = v.Write(bytes.Repeat([]byte{'x'}, 100<<10)); err != nil {
 		t.Fatal(err)

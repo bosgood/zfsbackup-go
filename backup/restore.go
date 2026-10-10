@@ -369,8 +369,8 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 					if !ok {
 						return nil
 					}
-					if err := downloadSequenceVolume(ctx, jobInfo, sequence, backend, bufferChannel, usePipe); err != nil {
-						return err
+					if derr := downloadSequenceVolume(ctx, jobInfo, sequence, backend, bufferChannel, usePipe); derr != nil {
+						return derr
 					}
 				}
 			}

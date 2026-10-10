@@ -242,6 +242,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 				continue
 			}
 			locked[dataset] = true
+			//nolint:gocritic // deferInLoop: hold every lock until Clean returns
 			defer func() {
 				if uerr := lock.Unlock(); uerr != nil {
 					log.AppLogger.Warningf("Could not release lock %s: %v", lockPath, uerr)

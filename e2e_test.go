@@ -25,7 +25,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -101,7 +101,7 @@ func (env *e2eEnv) writeSnapshots(t *testing.T, volume string, snaps []files.Sna
 		}
 		fmt.Fprintf(&b, "%s%s%s\t%d\t%s\n", volume, sep, s.Name, s.CreationTime.Unix(), kind)
 	}
-	if err := ioutil.WriteFile(env.snapshots, []byte(b.String()), 0600); err != nil {
+	if err := os.WriteFile(env.snapshots, []byte(b.String()), 0600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -112,7 +112,7 @@ func (env *e2eEnv) send(args ...string) (string, error) {
 	var logs bytes.Buffer
 	log.AppLogger.SetBackend(logging.AddModuleLevel(logging.NewLogBackend(&logs, "", 0)))
 	oldStdout := config.Stdout
-	config.Stdout = ioutil.Discard
+	config.Stdout = io.Discard
 	defer func() { config.Stdout = oldStdout }()
 
 	base := []string{"send", "--zfsPath", env.self, "--workingDirectory", env.work, "--maxParallelUploads", "1"}
@@ -148,7 +148,7 @@ func (env *e2eEnv) plan(args ...string) (out, logs string, err error) {
 // scenarioFlags reads a scenario's send flags.
 func scenarioFlags(t *testing.T, dir string) []string {
 	t.Helper()
-	sc, err := ioutil.ReadFile(filepath.Join(dir, "flags"))
+	sc, err := os.ReadFile(filepath.Join(dir, "flags"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,10 +203,10 @@ func TestE2EDryRunSendsNothing(t *testing.T) {
 	if want := "Dry-run: would perform a full backup of tank/data@autosnap_2026-09-01_00:00:00_monthly"; !strings.Contains(logs, want) {
 		t.Errorf("want %q in the log:\n%s", want, logs)
 	}
-	if entries, _ := ioutil.ReadDir(env.dest); len(entries) != 0 {
+	if entries, _ := os.ReadDir(env.dest); len(entries) != 0 {
 		t.Errorf("dry run wrote %d objects to the destination", len(entries))
 	}
-	zfsLog, err := ioutil.ReadFile(env.zfsLog)
+	zfsLog, err := os.ReadFile(env.zfsLog)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,9 +226,9 @@ func TestE2EDryRunSendsNothing(t *testing.T) {
 // reads back must be exactly the simulator's destination.
 func TestE2ESequenceMatchesPlanner(t *testing.T) {
 	env := newE2EEnv(t)
-	sc, err := backup.LoadScenario(monthlyOnlyScenario)
-	if err != nil {
-		t.Fatal(err)
+	sc, lerr := backup.LoadScenario(monthlyOnlyScenario)
+	if lerr != nil {
+		t.Fatal(lerr)
 	}
 	sim := sc.Run()
 	flags := scenarioFlags(t, monthlyOnlyScenario)
@@ -370,9 +370,9 @@ func TestE2EExitCodes(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
-	sc, err := backup.LoadScenario(monthlyOnlyScenario)
-	if err != nil {
-		t.Fatal(err)
+	sc, lerr := backup.LoadScenario(monthlyOnlyScenario)
+	if lerr != nil {
+		t.Fatal(lerr)
 	}
 	env.writeSnapshots(t, "tank/data", sc.Snapshots)
 
@@ -402,7 +402,7 @@ func TestE2EExitCodes(t *testing.T) {
 	}
 
 	broken := filepath.Join(t.TempDir(), "manifests.txt")
-	if err = ioutil.WriteFile(broken, []byte("autosnap_2026-06-01_00:00:00_monthly to autosnap_2026-07-01_00:00:00_monthly\n"), 0600); err != nil {
+	if err := os.WriteFile(broken, []byte("autosnap_2026-06-01_00:00:00_monthly to autosnap_2026-07-01_00:00:00_monthly\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	code, out = run("plan", "--workingDirectory", env.work, "--increment", "--snapshots", env.snapshots, "--manifests", broken, "tank/data")
@@ -411,7 +411,7 @@ func TestE2EExitCodes(t *testing.T) {
 	}
 
 	// Every run removed its temporary directory, the failed ones included.
-	if left, err := ioutil.ReadDir(filepath.Join(env.work, "temp")); err != nil || len(left) != 0 {
+	if left, err := os.ReadDir(filepath.Join(env.work, "temp")); err != nil || len(left) != 0 {
 		t.Errorf("runs left %d temporary directories behind (%v)", len(left), err)
 	}
 }

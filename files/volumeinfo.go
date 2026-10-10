@@ -32,7 +32,6 @@ import (
 	"hash"
 	"hash/crc32"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -591,11 +590,11 @@ func LoadVolume(ctx context.Context, path, objectName string, isManifest bool) (
 	}
 	if _, err = io.Copy(v, in); err != nil {
 		v.Close()
-		v.DeleteVolume()
+		_ = v.DeleteVolume()
 		return nil, err
 	}
 	if err = v.Close(); err != nil {
-		v.DeleteVolume()
+		_ = v.DeleteVolume()
 		return nil, err
 	}
 	v.ObjectName = objectName
@@ -703,10 +702,7 @@ func CreateManifestVolume(ctx context.Context, j *JobInfo) (*VolumeInfo, error) 
 // encrypt, and/or sign the file as it is written depending on the provided options.
 // It will also name the file accordingly as a volume as part of backup set.
 func CreateBackupVolume(ctx context.Context, j *JobInfo, volnum int64) (*VolumeInfo, error) {
-	pipe := false
-	if j.MaxFileBuffer == 0 {
-		pipe = true
-	}
+	pipe := j.MaxFileBuffer == 0
 
 	v, err := prepareVolume(ctx, j, pipe, false)
 	if err != nil {
@@ -746,7 +742,7 @@ func CreateSimpleVolume(ctx context.Context, pipe bool) (*VolumeInfo, error) {
 			v.r = ratelimit.Reader(v.r, config.BackupUploadBucket)
 		}
 	} else {
-		tempFile, err := ioutil.TempFile(config.BackupTempdir, config.ProgramName)
+		tempFile, err := os.CreateTemp(config.BackupTempdir, config.ProgramName)
 		if err != nil {
 			return nil, err
 		}

@@ -23,7 +23,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,7 +60,7 @@ func TestE2EPlanNamesOnlyCaptureMatchesLivePool(t *testing.T) {
 	for _, s := range pool {
 		b.WriteString("tank/data@" + s.Name + "\n")
 	}
-	if err := ioutil.WriteFile(capture, []byte(b.String()), 0600); err != nil {
+	if err := os.WriteFile(capture, []byte(b.String()), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -91,7 +90,7 @@ func TestE2EPlanNamesOnlyCaptureMatchesLivePool(t *testing.T) {
 func TestE2EPlanRejectsOtherDataset(t *testing.T) {
 	env := newE2EEnv(t)
 	capture := filepath.Join(t.TempDir(), "capture.txt")
-	if err := ioutil.WriteFile(capture, []byte("tank/OTHER@autosnap_2026-09-01_00:00:00_monthly\n"), 0600); err != nil {
+	if err := os.WriteFile(capture, []byte("tank/OTHER@autosnap_2026-09-01_00:00:00_monthly\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	out, logs, err := env.plan("--fullIfOlderThan", "4320h", "--fullSnapshotSuffix", "_monthly", "--incrementalSnapshotSuffix", "_monthly",
@@ -150,7 +149,7 @@ func TestE2EPlanResumeWithManifestsFile(t *testing.T) {
 	env := newE2EEnv(t)
 	dests := planOneFullAtTwoDests(t, env)
 	man := filepath.Join(t.TempDir(), "manifests.txt")
-	if err := ioutil.WriteFile(man, []byte(fmt.Sprintf("a_monthly %d\n---\n", time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).Unix())), 0600); err != nil {
+	if err := os.WriteFile(man, []byte(fmt.Sprintf("a_monthly %d\n---\n", time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).Unix())), 0600); err != nil {
 		t.Fatal(err)
 	}
 	flags := []string{"--fullIfOlderThan", "4320h", "--fullSnapshotSuffix", "_monthly", "--incrementalSnapshotSuffix", "_monthly", "--resume"}
@@ -195,10 +194,10 @@ func TestE2EPlanManifestsFileAdoptsCreationTimes(t *testing.T) {
 	for _, s := range pool {
 		b.WriteString("tank/data@" + s.Name + "\n")
 	}
-	if err := ioutil.WriteFile(capture, []byte(b.String()), 0600); err != nil {
+	if err := os.WriteFile(capture, []byte(b.String()), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := ioutil.WriteFile(man, []byte(fmt.Sprintf("%s %d\n", pool[1].Name, pool[1].CreationTime.Unix())), 0600); err != nil {
+	if err := os.WriteFile(man, []byte(fmt.Sprintf("%s %d\n", pool[1].Name, pool[1].CreationTime.Unix())), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -260,7 +259,7 @@ func TestE2EPlanNamesOnlyCaptureInHostZone(t *testing.T) {
 	for _, s := range pool {
 		b.WriteString("tank/data@" + s.Name + "\n")
 	}
-	if err := ioutil.WriteFile(capture, []byte(b.String()), 0600); err != nil {
+	if err := os.WriteFile(capture, []byte(b.String()), 0600); err != nil {
 		t.Fatal(err)
 	}
 

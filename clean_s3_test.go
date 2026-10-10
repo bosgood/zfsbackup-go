@@ -27,7 +27,7 @@ import (
 	"crypto/md5" // nolint:gosec // MD5 not used for cryptographic purposes here
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -109,7 +109,7 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	data, ok := f.objects[key]
 	switch {
 	case r.Method == http.MethodPut:
-		body, err := ioutil.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -126,7 +126,7 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case !ok:
 		w.WriteHeader(http.StatusNotFound)
 	case r.Method == http.MethodPost && r.URL.Query().Has("restore"):
-		body, err := ioutil.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -229,7 +229,7 @@ func backupSetAt(t *testing.T, prefix, volume, snapshot string) map[string][]byt
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manifest.DeleteVolume()
+	defer func() { _ = manifest.DeleteVolume() }()
 	if err = json.NewEncoder(manifest).Encode(j); err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func backupSetAt(t *testing.T, prefix, volume, snapshot string) map[string][]byt
 	if err = manifest.CopyTo(path); err != nil {
 		t.Fatal(err)
 	}
-	data, err := ioutil.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +444,7 @@ func TestCleanS3KeepsCacheAcrossCanonicalization(t *testing.T) {
 		}
 		// nolint:gosec // MD5 not used for cryptographic purposes here
 		cached := filepath.Join(cacheDir, fmt.Sprintf("%x", md5.Sum([]byte(name))))
-		if err := ioutil.WriteFile(cached, data, 0600); err != nil {
+		if err := os.WriteFile(cached, data, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -484,7 +484,7 @@ func holdSendLock(t *testing.T, work, dataset string) string {
 	}
 	// nolint:gosec // MD5 not used for cryptographic purposes here
 	p := filepath.Join(dir, fmt.Sprintf("%x.lck", md5.Sum([]byte(dataset))))
-	if err := ioutil.WriteFile(p, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
+	if err := os.WriteFile(p, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0600); err != nil {
 		t.Fatal(err)
 	}
 	return p
@@ -518,7 +518,7 @@ func TestCleanS3SparesSendFinishingDuringClean(t *testing.T) {
 			if cleanLocal {
 				// The send has finished volume 1: its partial manifest is cached, the volume is up.
 				objects[newVol] = newSet[newVol]
-				if err := ioutil.WriteFile(cached, newSet[newManifest], 0600); err != nil {
+				if err := os.WriteFile(cached, newSet[newManifest], 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -532,7 +532,7 @@ func TestCleanS3SparesSendFinishingDuringClean(t *testing.T) {
 				finished = true
 				fake.objects[newVol] = newSet[newVol]
 				fake.objects[newManifest] = newSet[newManifest]
-				if err := ioutil.WriteFile(cached, newSet[newManifest], 0600); err != nil {
+				if err := os.WriteFile(cached, newSet[newManifest], 0600); err != nil {
 					t.Error(err)
 				}
 				if err := os.Remove(lock); err != nil {
@@ -567,7 +567,7 @@ func TestCleanLocalKeepsManifestWhenDeleteFails(t *testing.T) {
 	partialManifest, partialVol := splitSet(partial)
 	objects[partialVol] = partial[partialVol]
 	cached := cachePathIn(t, work, "s3://bucket", partialManifest)
-	if err := ioutil.WriteFile(cached, partial[partialManifest], 0600); err != nil {
+	if err := os.WriteFile(cached, partial[partialManifest], 0600); err != nil {
 		t.Fatal(err)
 	}
 	fake := newFakeS3(t, objects)
@@ -641,7 +641,7 @@ func TestE2ECleanForceDeletesTheManifestItRead(t *testing.T) {
 	})
 	env.sendOK(t, "--compressor", "", "tank/data@a", "file://"+env.dest)
 	victim := filepath.Join(filepath.Dir(env.dest), "victim|x.manifest.gz")
-	if err := ioutil.WriteFile(victim, []byte("another destination's manifest"), 0600); err != nil {
+	if err := os.WriteFile(victim, []byte("another destination's manifest"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	// A set missing its volume, whose name computes to ../victim|x.manifest.gz.
@@ -660,7 +660,7 @@ func TestE2ECleanForceDeletesTheManifestItRead(t *testing.T) {
 	if err := gz.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := ioutil.WriteFile(filepath.Join(env.dest, "manifests|zz.manifest.gz"), buf.Bytes(), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(env.dest, "manifests|zz.manifest.gz"), buf.Bytes(), 0600); err != nil {
 		t.Fatal(err)
 	}
 	logs, err := guarded(t, func() (string, error) {

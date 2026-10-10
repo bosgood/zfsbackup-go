@@ -28,7 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -54,7 +54,7 @@ func newTestKey(t *testing.T, email string) *openpgp.Entity {
 		id.SelfSignature.PreferredSymmetric = []uint8{9} // AES256
 	}
 	// Sign the identities, so that Serialize writes self-signatures.
-	if err = e.SerializePrivate(ioutil.Discard, nil); err != nil {
+	if err = e.SerializePrivate(io.Discard, nil); err != nil {
 		t.Fatal(err)
 	}
 	return e
@@ -91,7 +91,7 @@ func loadRings(t *testing.T, pub, sec []*openpgp.Entity) {
 		}
 		w.Close()
 		path := filepath.Join(dir, ring.kind)
-		if err = ioutil.WriteFile(path, buf.Bytes(), 0600); err != nil {
+		if err = os.WriteFile(path, buf.Bytes(), 0600); err != nil {
 			t.Fatal(err)
 		}
 		if err = ring.load(path); err != nil {
@@ -283,7 +283,7 @@ func TestExtractSymmetricMessageIsKeyError(t *testing.T) {
 		fmt.Fprint(w, "not a manifest")
 		w.Close()
 		path := filepath.Join(t.TempDir(), "m")
-		if err = ioutil.WriteFile(path, buf.Bytes(), 0600); err != nil {
+		if err = os.WriteFile(path, buf.Bytes(), 0600); err != nil {
 			t.Fatal(err)
 		}
 		check(t, path, manifestJob(key, key))
@@ -331,7 +331,7 @@ func TestExtractExternalDecompressorReadsWholeMessage(t *testing.T) {
 	}
 	msg[i+len("stream zfs stream ")-1] ^= 0xff
 	path := filepath.Join(t.TempDir(), "vol")
-	if err = ioutil.WriteFile(path, msg, 0600); err != nil {
+	if err = os.WriteFile(path, msg, 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -342,7 +342,7 @@ func TestExtractExternalDecompressorReadsWholeMessage(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			script := filepath.Join(dir, name)
-			if err := ioutil.WriteFile(script, []byte(body), 0755); err != nil {
+			if err := os.WriteFile(script, []byte(body), 0755); err != nil {
 				t.Fatal(err)
 			}
 			j := manifestJob(nil, key)

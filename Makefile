@@ -14,10 +14,10 @@ fmt:
 		fi \
 	done
 
+# golangci-lint in Docker, pinned so new linters do not appear by surprise. .golangci.yml is v2 format.
+GOLANGCI_LINT_IMAGE=golangci/golangci-lint:v2.12.2
 lint:
-	@if [ "`golangci-lint run | tee /dev/stderr`" ]; then \
-		echo "^ golangci-lint errors!" && echo && exit 1; \
-	fi
+	docker run --rm -v "$(CURDIR)":/src -w /src $(GOLANGCI_LINT_IMAGE) golangci-lint run
 
 get:
 	go get -v -d -t ./...
