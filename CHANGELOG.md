@@ -1,104 +1,171 @@
-# Changelog
+# CHANGELOG
 
-## Unreleased
-
-### clean
-
-- `clean` refuses a destination that has objects but no manifests under
-  `--manifestPrefix`. Cached manifests do not count now. Before, with a wrong
-  prefix, every cached manifest was "local-only", and `--cleanLocal` could
-  delete all of their volumes. The error now shows the prefix it looked for
-  and tells you to check `--manifestPrefix` and `--separator`.
-- `clean` never deletes a cached manifest of another `--manifestPrefix`. It
-  keeps the volumes of that manifest too, and logs how many it found.
-- `clean --force` deletes only broken sets at the destination. It does not
-  delete a local-only cached manifest (the state of an interrupted send). Only
-  `--cleanLocal` deletes that.
-
-### send
-
-- `--resume` keeps a volume only when the cache of every destination records
-  it with the same number, name, size and SHA-256. Before, a send to some of
-  the destinations could rewrite volumes with other bytes of the same size,
-  and the resume did not see it.
-- `--dry-run` redacts credentials in the destination URIs it logs.
-- Smart sends read only the manifests of their own dataset. An object at the
-  destination under the name of another dataset cannot stop them.
-- When `send` copies a manifest between destinations, it restores the manifest
-  from an archive storage class first.
-- After `send` discards the cached manifests of an earlier attempt, it syncs
-  the directory, so a crash cannot bring them back.
-
-### receive and restore
-
-- `receive --auto` reads only the manifests of the dataset it restores.
-- `receive --auto` stops with an error when the manifests at the destination
-  form a loop. Before, it did not stop.
-- `receive --auto` applies an incremental backup when its source snapshot is
-  on the local pool, also when the backup of that source is gone from the
-  destination.
-- A volume that is larger than its manifest records fails quickly. `receive`
-  downloads at most one byte more than the recorded size.
-- `--maxFileBuffer` must be 0 or more.
-- The help for `--maxFileBuffer` now says correctly when the size, SHA-256 and
-  signature of a volume are checked.
-
-### Manifests and the cache
-
-- A manifest object larger than 64 MiB is not downloaded in full and is not
-  cached. Only a reader that needs that object fails.
-- A manifest that lists more than `MaxManifestVolumes` volumes, or that has a
-  `null` volume, is rejected before it is decoded.
-- Reading a manifest uses less memory: about 2 times its size, not 5 times.
-- A manifest that cannot be read is removed from the cache. The error names the
-  object and tells you to delete it from the destination if it is not yours.
-- `WriteFileAtomic` syncs the directory after the rename. A file system that
-  cannot sync a directory is not an error.
-- `syncCache` removes temporary files that an interrupted write left in the
-  cache, when they are older than 24 hours.
-
-### Signatures
-
-- An error for a volume signed by an unknown key no longer tells you to pass
-  `--trustSigner` with that key. It tells you that anyone who can write the
-  destination can sign an object. Compare the full fingerprint with your own
-  records first.
-
-### S3
-
-- `PreDownload` restores again a restored copy that expires in less than 24
-  hours. S3 then extends its expiry. If the extension fails, it logs a
-  warning and continues.
-
-### plan
-
-- `plan` adopts the creation time from a manifest only when that time is 0 to
-  10 minutes after the time in the snapshot name, and all destinations record
-  the same time. Otherwise it keeps the name time and logs a warning.
-- Daily runs keep the wall-clock time of the first run across DST changes. A
-  time in the spring-forward gap is read as after the jump, as cron does.
-- In the hour when the clocks fall back, sanoid names repeat. The schedule
-  makes only the first snapshot of such a name.
-- `skip=` dates that end on a DST change now end at local midnight.
-- `coverage` starts at the first scheduled run, also when that run is in a
-  `skip=` range.
-- A `from=` earlier than the last backup at a destination no longer causes a
-  false "last backup newer than the pool" error. The error message now also
-  names a `zfs rollback` or a stale `--snapshots` capture as possible causes.
-
-### Development
-
-- `make test-race` uses a 45-minute timeout.
-- `make fmt-check` fails when `gofmt` fails, for example on a file that does
-  not parse.
-- `.devcontainer/firewall-check.sh` checks that a killed firewall re-run
-  closes the network: exit code 1, the "interrupted" message, and
-  loopback-only rules for IPv4 and IPv6.
-- New tests for each fix above.
-
-### Docs
-
-- `docs/runbook-first-backup.md` explains the new `plan` adoption rules, the
-  fall-back hour, the "last backup newer than the pool" error, the `clean`
-  rules for cached manifests, and how to check a key before you pass
-  `--trustSigner`.
+* [FIX] clean: refuse a destination with objects but no manifests under `--manifestPrefix`; never delete cached manifests of another prefix; `--force` skips local-only cached manifests (d76ef3a)
+* [FIX] send: `--resume` keeps a volume only if every destination's cache records the same number, name, size and SHA-256 (d76ef3a)
+* [FIX] security: `send --dry-run` redacts credentials in logged destination URIs (d76ef3a)
+* [FIX] send: smart sends read only the manifests of their own dataset; manifest copies between destinations restore from an archive class first (d76ef3a)
+* [FIX] receive: `--auto` reads only its dataset's manifests, stops on manifest loops, and applies an incremental when its source is on the local pool (d76ef3a)
+* [FIX] receive: a volume larger than its manifest records fails fast; `--maxFileBuffer` must be 0 or more (d76ef3a)
+* [FIX] files: manifests over 64 MiB are not cached; manifests with too many volumes or a `null` volume are rejected; unreadable cached manifests are removed; manifest reads use less memory (d76ef3a)
+* [FIX] files: `WriteFileAtomic` syncs the directory; the manifest cache removes stale temp files older than 24 hours (d76ef3a)
+* [CHANGE] security: unknown-signer errors no longer suggest `--trustSigner`; they tell you to verify the fingerprint first (d76ef3a)
+* [FIX] s3: `PreDownload` restores again a restored copy that expires in under 24 hours (d76ef3a)
+* [FIX] plan: adopt a manifest's creation time only within 0 to 10 minutes of the name time and when all destinations agree (d76ef3a)
+* [FIX] plan: handle DST in daily runs, repeated sanoid names in the fall-back hour, `skip=` ends and `coverage` start; no false "last backup newer than the pool" with an earlier `from=` (d76ef3a)
+* [CHANGE] dev: `make test-race` uses a 45-minute timeout; `make fmt-check` fails when `gofmt` fails; firewall check covers killed re-runs (d76ef3a)
+* [FIX] plan: `skip=..X` and `skip=X..` with an empty side are errors (8f9bfdc)
+* [FIX] plan: `coverage` counts monthlies taken and pruned between widely spaced runs (8f9bfdc)
+* [FIX] send: refuse a last backup newer than the pool instead of reporting "Nothing new to back up"; `send` and `plan` exit 2 (a884b54)
+* [CHANGE] plan: date sanoid snapshot names in the host's time zone unless `location=` is set (b3d9da0)
+* [FIX] plan: `--resume` and creation-time adoption work on every input path (`--manifests`, no destinations), as in `send` (fcdb76c)
+* [FIX] plan: a complete-partial full is no longer judged against the full it completes in `full-cadence` (fcdb76c)
+* [FIX] receive: `--auto` applies the incremental when its parent is already on the local dataset instead of a full (7c2a6d1)
+* [FIX] security: `list` reads at most 64 MiB of a manifest, and checks its signature before decoding (8dd2de3)
+* [FIX] security: reject a manifest stored under another set's name; download a mismatching cached copy again once (3e5f1a7)
+* [ADD] cli: repeatable `--trustSigner` accepts manifests signed by a rotated key (`send`, `plan`, `receive`, `list`, `clean`); needs `--signFrom` (0584253)
+* [FIX] build: `make fmt-check` fails when it lists no files (39175ad)
+* [CHANGE] docs: first-backup runbook encrypts and signs the first backup, with gpg key steps and corrected full-backup timing (7c458e3)
+* [FIX] list: reject more than one destination (0220bf8)
+* [FIX] s3: restore Intelligent-Tiering objects in archive tiers; `PreDownload` fails on any `RestoreObject` error except already-in-progress (e00d104)
+* [CHANGE] clean: clearer help text; the lock message says a send or a clean holds it (8d09776)
+* [FIX] security: `RedactURI` hides a password that looks like a port (fc7d5bd)
+* [CHANGE] receive: `--maxFileBuffer 0` cannot be combined with `--signFrom` (faa7bcd)
+* [FIX] security: `receive` runs only known decompressors named by a manifest, or the one given with the new `receive --compressor` (c0d9cb7)
+* [FIX] files: a message that no decrypted key opens is a KeyError, not a panic, in `list`, `send`, `clean` and `receive` (9828dd5)
+* [FIX] files: with an external decompressor, wait for it at EOF so the signature is always checked (9828dd5)
+* [FIX] dev: devcontainer firewall closes the network first on re-run and on TERM/INT/HUP; the self-check no longer passes for unreachable hosts (a368bfa)
+* [CHANGE] dev: `make devcontainer-firewall-check` runs `.devcontainer/firewall-check.sh`; the devcontainer no longer overrides the Claude Code pin (a368bfa)
+* [FIX] send: `--resume` discards or rewrites the cached manifest at every destination before it sends anything (641847a)
+* [CHANGE] send: `--resume` with `--encryptTo` requires `--secretKeyRingPath` (641847a)
+* [FIX] clean: nested destinations no longer make a root's set look incomplete, so `--force` does not delete its valid manifest (cd7b97e)
+* [FIX] clean: ignore sibling `manifests-*` prefixes when syncing the manifest cache (cd7b97e)
+* [FIX] clean: `--force` deletes the object it read, not a name computed from the manifest content (cd7b97e)
+* [FIX] clean: take the send locks before reading the destination, so a finishing send's volumes are not deleted as orphans (231559b)
+* [FIX] clean: `--cleanLocal` removes local manifests only after every remote delete succeeds (231559b)
+* [CHANGE] docs: runbook uses `location=<your zone>` placeholders and notes the out-of-sync case for `--full` with a partial set (0b50855)
+* [CHANGE] dev: fix `dev.nix` usage notes; pin Claude Code in the devcontainer (0b50855)
+* [FIX] clean: a comma-separated list of destinations is an input error instead of silently cleaning only the first (89e8fa0)
+* [CHANGE] dev: restore misplaced doc comments; `receive` names `zfs receive` in its kill-failure log (fb31dec)
+* [FIX] plan: `formatDays` rounds to the hour first, so 29d23h30m no longer prints as "29d24h" (686177b)
+* [ADD] plan: `--resume` previews completing a partial set (686177b)
+* [FIX] dev: devcontainer firewall resets policies before the flush and fails closed on error; DNS limited to the configured resolvers (3cedf74)
+* [ADD] build: `make devcontainer-firewall-check` runs the firewall script twice in a throwaway container (3cedf74)
+* [FIX] s3: restore DEEP_ARCHIVE as well as GLACIER objects, handle a missing restore header, and skip objects already restored (79783ca)
+* [ADD] s3: `AWS_S3_RESTORE_POLL_INTERVAL` sets the restore poll interval (default 1m) (79783ca)
+* [FIX] send: thaw archived volumes before verifying a partial set at a lagging destination (79783ca)
+* [FIX] security: `--signFrom` requires a verified signature from the named key, and `--encryptTo` requires encryption, so forged manifests are rejected (2e75bd2)
+* [FIX] files: manifest signatures are verified at end of stream; a cached manifest written with another key is refused as an option mismatch (2e75bd2)
+* [FIX] clean: `--cleanLocal` leaves a running send's cached manifest alone (8e44710)
+* [FIX] security: one `RedactURI` that never returns a password, used in every log of `plan`, `send`, `receive` and `clean` (94a1516)
+* [DELETE] send: stop honouring the old lock file in /tmp, which could block `send` and `clean` for good (ffacbb4)
+* [FIX] send: a run without `--resume` discards the cached partial manifest of an earlier attempt, so a later `--resume` cannot publish a manifest with wrong checksums (e10bfe6)
+* [CHANGE] send: `--resume` continues only the most recent attempt; a plain run in between abandons the earlier one (e10bfe6)
+* [FIX] receive: `--auto` restores a snapshot from its full backup when one exists, instead of walking an old incremental chain (2a54b31)
+* [FIX] plan: coverage judges every snapshot the schedule took, also ones taken and pruned during a `skip=` outage (46537b1)
+* [FIX] plan: `skip=` ranges are parsed after `location=`, in any order (2c70876)
+* [FIX] plan: a date-only `skip=` end covers its whole day (2c70876)
+* [FIX] plan: refuse a `--snapshots` listing of another dataset (1119fb1)
+* [FIX] plan: date name-only snapshots from the destination manifests, so a listing without creation times no longer reports a false "FULL source-pruned" (1119fb1)
+* [ADD] plan: warn once, with the capture command that records creation times, when snapshots were dated from their names (1119fb1)
+* [CHANGE] build: one `make fmt-check` over tracked files, with `gofmt -s` in the pinned image (1ec07ef)
+* [CHANGE] docs: runbook covers cron timing, lifecycle rules, outages and restarts; use cases added (6bbcdb7)
+* [ADD] test: e2e test for `plan` projecting a schedule from the backups at a destination (43c1a27)
+* [CHANGE] send: when a live process holds the lock, the message names the running send and no longer suggests removing the lock (176ab0e)
+* [FIX] send: a full sorts before an incremental of the same snapshot, so the newest backup no longer depends on listing order (6f96362)
+* [FIX] plan: an explicit `--full` of an already backed-up snapshot is not flagged as a duplicate send (cd7465b)
+* [FIX] plan: the due-but-no-candidate error names the last full's creation time in one zone, so `send` and `plan` print the same message (cbed7b5)
+* [FIX] plan: a set whose manifest is missing at one destination plans as complete-partial, as `send` does (5d0f94b)
+* [ADD] plan: `only:<suffix>` check flags a forgotten incremental suffix (46798d0)
+* [ADD] plan: `skip=` leaves an outage inside a simulated schedule (bf26d5a)
+* [ADD] plan: `snapshot-delay=` models sanoid taking snapshots after the boundary (6809bd6)
+* [ADD] test: plan scenarios for the year after a three-month outage, a switch to monthly-only, the retention floor, monthly-only pools, and three years across a leap year (3b831c3, 87def9a, a41347e, 0ab1da6, de29089)
+* [CHANGE] plan: text output marks runs with a due full as `full-due` (c60498d)
+* [ADD] test: plan scenarios for a due full waiting for a newer monthly, and for a full-suffix typo (c60498d)
+* [FIX] plan: a full that is due but has no full candidate at all is an error instead of extending the incremental chain forever (72ae55a)
+* [FIX] send: an explicit `--full` reads the destinations again: a no-op when that full exists everywhere, refused when only some have it (21cc872)
+* [FIX] send: no empty trailing volume when a stream ends exactly at a volume cut (aa0a689)
+* [FIX] send: `--resume` of a finished set whose final manifest upload failed uploads only the manifest (aa0a689)
+* [FIX] send: smart mode completes a partial set without `--resume` when every lagging destination holds all its volumes (aea7386)
+* [CHANGE] send: the "destinations are out of sync" error names each destination's last backup (aea7386)
+* [FIX] files: cache writes are atomic; a truncated cached manifest is downloaded again instead of failing `list`, `clean`, `receive` and smart send (ed46293)
+* [FIX] send: an unreadable partial manifest makes `--resume` start over; `clean` explains how to get past an unreadable local-only manifest (ed46293)
+* [FIX] send: completing a set at lagging destinations checks the manifest options and each volume's size and SHA-256 before upload (5e98e63)
+* [FIX] send: `--resume` verifies the skipped stream (cumulative SHA-256 per volume), snapshot guids and key fingerprints, and refuses on a mismatch (163cb60)
+* [CHANGE] files: manifests record a cumulative stream SHA-256 per volume, snapshot guids and key fingerprints (163cb60)
+* [FIX] receive: fail instead of hanging on a failed download or an undecryptable volume; size and hash mismatches are not retried (b484c7d)
+* [FIX] send: the lock lives in `<workingDirectory>/locks/` instead of `os.TempDir()`, so `send` and `clean` with different TMPDIRs see each other (c14746e)
+* [FIX] send: a stream that fails in the splitter is never finalized as a complete set (76b1b5e)
+* [FIX] files: a volume whose final flush fails (for example ENOSPC) is an error, not a short upload with exit 0 (04a2ffb)
+* [ADD] test: `make test-enospc` runs a tmpfs-backed end-to-end ENOSPC test (04a2ffb)
+* [CHANGE] docs: runbook covers the canonical cache, the new `clean` guards and `list` behaviour (4a49acb)
+* [FIX] send: a failed send leaves no goroutine waiting on the volume counter (3549109)
+* [FIX] clean: take each dataset's send lock and skip datasets a send is working on (8a8c75e)
+* [FIX] clean: a subtree with its own manifests is another destination and is not cleaned (d1d2022)
+* [ADD] clean: warn about old-layout volumes that no manifest lists (cb84db4)
+* [FIX] backends: the legacy-layout check probes the key prefix as typed (2c37791)
+* [FIX] files: adopt manifests cached under a pre-canonical spelling of the destination (0d23555)
+* [CHANGE] cli: keep the typed spelling of each destination next to the canonical one (2d71af7)
+* [FIX] security: redact URI credentials in logs; one destination value per backend; fix swapped names in the resume-mismatch message (db5bb59)
+* [CHANGE] files: `BackupVolumeObjectPrefix` and `DefaultSeparator` replace string surgery (cc32931)
+* [CHANGE] build: gofmt fixes; add `make fmt-check` (65f0738)
+* [FIX] send: `--resume` completes a set whose manifest is missing at some destinations by copying the manifest (677a9c4)
+* [FIX] send: a failed streaming send (`--maxFileBuffer 0`) exits instead of hanging with the lock held (9293b16)
+* [FIX] send: `--resume` re-sends volumes whose stored size differs from the manifest (2344b4c)
+* [FIX] send: check for an existing set only while holding the lock (763531e)
+* [CHANGE] docs: runbook describes failed-send leftovers, `--resume` verification and send refusals (42c9303)
+* [FIX] send: `--resume` verifies skipped volumes at every destination and re-sends missing ones (8072b95)
+* [FIX] send: refuse to overwrite a backup set that already exists at a destination (09003aa)
+* [FIX] plan: an explicit `--full` of a snapshot already backed up as a full is a no-op (2333024)
+* [FIX] send: a failed upload or `zfs send` error exits instead of hanging with the lock held; no truncated last volume is shipped (3f5ac6c)
+* [FIX] clean: delete only volumes it can attribute to this destination; a wrong or slash-less URI no longer deletes manifests or nested destinations' volumes (29a85fa)
+* [CHANGE] clean: refuse a destination that holds objects but no manifests (29a85fa)
+* [FIX] backends: S3, GCS, Azure and B2 URI paths are directories (`s3://b/p` equals `s3://b/p/`; `s3://b/media` no longer matches `media-photos/`) (5f9ed0b)
+* [CHANGE] backends: a destination used before without a trailing slash fails at Init with a message to move its objects under `<prefix>/` (5f9ed0b)
+* [CHANGE] cli: object-store URIs are canonicalized in `send`, `receive`, `clean`, `list` and `plan`, so both spellings share one manifest cache (5f9ed0b)
+* [ADD] dev: devcontainer, Dockerfile updates and more plan scenarios (d283561)
+* [ADD] plan: `--snapshots` accepts JSON `zfs list` output; the rows must name one dataset (0ec0db7)
+* [ADD] test: production snapshot capture as test data (f79499d)
+* [CHANGE] docs: document the `no-errors` check, the `source-pruned` no-op and the full-due notice (ca38726)
+* [ADD] test: end-to-end replay of all next-run scenarios, and checks for leftover temporary directories (99f0db3)
+* [FIX] cli: remove the command's temporary directory when a command fails or a smart send is a no-op (03d8943)
+* [FIX] plan: load PGP keys as `send` does; reject `--snapshots -` with `--manifests -`, and a `--schedule` that ends before it starts (03d8943)
+* [FIX] zfs: parse `zfs list -H` output strictly (three tab-separated fields, names verbatim) (03d8943)
+* [FIX] plan: with diverged destinations, the one furthest behind decides on a full; simulated runs no longer see future snapshots (259325e)
+* [ADD] send: log a notice when a full is due but no newer candidate exists yet; `--jsonOutput` reports `fullDue` (259325e)
+* [ADD] plan: default `no-errors` check; stricter `no-duplicate-send` and `full-cadence`; faster `restore-depth` (e0cc39f)
+* [ADD] docs: first-backup runbook and `plan` implementation notes (501cab9)
+* [ADD] test: end-to-end tests of `send`, `plan` and exit codes through the fake zfs; `make e2e` is part of `check` (47faabd)
+* [ADD] test: zfs package tests run against the fake zfs (65efd5f)
+* [ADD] test: pure-Go fake zfs (`internal/fakezfs`) (7ec16dd)
+* [CHANGE] cli: a smart `send` with nothing new to back up exits 0 with a notice instead of exiting 255 (d6a7a0c)
+* [FIX] send: do not re-send an old full when the incremental source snapshot was pruned; no-op with reason `source-pruned` (0e7c759)
+* [FIX] send: a full backup rolls only onto a snapshot newer than the last backup; stops duplicate fulls and ever-growing restore chains (c40df09)
+* [ADD] docs: README section "Planning a smart backup"; `make plan` (682d95e)
+* [ADD] cli: new `plan` command shows what the next smart send would do and why, or projects runs with `--schedule`; exits 0 when checks pass, 2 when one fails (8c5bd56)
+* [ADD] test: prove plans do not depend on the order of coincident snapshots (14bf823)
+* [ADD] plan: invariant checks over simulations (`chain-links`, `source-present`, `no-duplicate-send`, `no-orphan-full`, `full-cadence`, `restore-depth`, `coverage:<suffix>`) (5d4515c)
+* [ADD] plan: simulate runs over time and check golden scenarios; `make scenarios` and `make scenarios-update` (c5f9081)
+* [ADD] plan: load scenarios from fixture directories (40436a6)
+* [CHANGE] send: the smart send flags live in one shared definition for `send`, `plan` and fixtures (40436a6)
+* [ADD] plan: simulate sanoid snapshot schedules (hourly to yearly) with sanoid's pruning rule (c3db836)
+* [CHANGE] send: the smart backup decision returns a Plan (full, incremental or no-op) with no side effects (4e050f6)
+* [ADD] build: `make test-run PKG=... RUN=...` (9960c57)
+* [CHANGE] zfs: one `ParseSnapshotList` for snapshot listings; it also accepts bare sanoid names and names with spaces (9960c57)
+* [ADD] build: `make fmt-check` (fc026ed)
+* [FIX] send: with `--fullIfOlderThan`, an error when no snapshot matches the full backup criteria (ddb9480)
+* [CHANGE] send: log a notice when a due full falls back to an incremental because no newer full candidate exists (ddb9480)
+* [FIX] receive: return the extract error, so a failed decompress or decrypt no longer reports a successful restore (53eb732)
+* [FIX] send: validate `--separator` correctly and reject an empty separator, which caused silent object-name collisions (53eb732)
+* [ADD] test: cover `send --dry-run`, `clean --cleanLocal` dry runs and error paths with a fake zfs (2825010)
+* [CHANGE] send: warn when the dry-run size estimate fails (a7d868c)
+* [FIX] security: redact passwords from destination URIs in dry-run logs (89389b2)
+* [FIX] clean: stop mangling URI schemes in displayed paths (`s3://bucket` no longer becomes `s3:/bucket`) (89389b2)
+* [FIX] send: anchor the recovery full on a snapshot the destination lacks, so a full no longer overwrites the existing backup when the incremental source was pruned (36c4c51)
+* [CHANGE] send: skip the destination manifest fetch for explicit full backups (cbbf0e8)
+* [FIX] build: pin the test Docker image to golang:1.25 to match go.mod; add `make test-one` (c800367)
+* [FIX] clean: dry run reports the correct objects for processed manifest volumes (5702819)
+* [CHANGE] build: use Go 1.25 (463adda, 0bb9bff)
+* [ADD] dev: nix dev environment (5fb3cd7, df5f5f0)
+* [ADD] send: `--fullSnapshotSuffix` and `--incrementalSnapshotSuffix` anchor full and incremental backups on snapshots with a name suffix (30aede9)
+* [ADD] send: `--dry-run`/`-n` validates and logs what would be backed up, with a `zfs send -n -P` size estimate, without uploading (30aede9)
+* [ADD] cli: new `clean --dry-run` flag logs which objects and local manifests would be deleted, without deleting them (f0be0cc)
