@@ -32,6 +32,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/someone1/zfsbackup-go/config"
 	"github.com/someone1/zfsbackup-go/files"
 )
 
@@ -88,6 +89,11 @@ func TestReadCachedManifestKeepsTooLongManifest(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "--volsize") {
 			t.Errorf("round %d: the error does not say how to avoid the limit: %v", round, err)
+		}
+		// The cached copy wins over the object until it is deleted, so the advice must name it
+		// (the error ReadManifest wraps names it too, so look for the advice).
+		if !strings.Contains(err.Error(), "delete its copy in the cache, "+filepath.Join(cache, cachedManifestName(name))) {
+			t.Errorf("round %d: the error does not name the cached copy: %v", round, err)
 		}
 		if _, serr := os.Stat(filepath.Join(cache, cachedManifestName(name))); serr != nil {
 			t.Errorf("round %d: the cached copy is gone: %v", round, serr)
@@ -151,4 +157,59 @@ func TestManifestCostCountsHigh(t *testing.T) {
 	if estimate < actual || estimate > actual+actual/20 {
 		t.Errorf("estimated %d bytes of manifest for %d volumes, a send writes %d", estimate, volumes, actual)
 	}
+}
+
+// A manifest over the limit that is no longer at the destination is cached, local-only, and
+// still may be a real backup's: clean stops, deletes nothing, and says not to delete it, as the
+// error said while the object was at the destination. --cleanLocal changes none of that.
+func TestCleanKeepsLocalOnlyTooLongManifest(t *testing.T) {
+	targetDir, jobInfo := setupCleanTest(t)
+	set, data := manifestObjectOf(t, "tank/data", "a", 20)
+	manifestPath := filepath.Join(targetDir, set.ManifestObjectName())
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	vol := writeTestObject(t, targetDir, set.Volumes[0].ObjectName)
+	setManifestLimit(t, 2048)
+	if err := Clean(context.Background(), jobInfo, false, false); !errors.Is(err, files.ErrManifestTooLong) {
+		t.Fatalf("clean with the manifest at the destination: got %v, want ErrManifestTooLong", err)
+	}
+	if err := os.Remove(manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	cached := filepath.Join(config.WorkingDir, "cache")
+	for _, cleanLocal := range []bool{false, true} {
+		err := Clean(context.Background(), jobInfo, cleanLocal, false)
+		if !errors.Is(err, files.ErrManifestTooLong) {
+			t.Fatalf("cleanLocal=%v: got %v, want ErrManifestTooLong", cleanLocal, err)
+		}
+		if !strings.Contains(err.Error(), "do not delete") || !strings.Contains(err.Error(), "not at the destination") {
+			t.Errorf("cleanLocal=%v: the error does not say to keep a backup's manifest: %v", cleanLocal, err)
+		}
+		if !exists(t, vol) {
+			t.Fatalf("cleanLocal=%v deleted the volume %s", cleanLocal, vol)
+		}
+		if objects := filesUnder(t, cached); len(objects) != 1 {
+			t.Errorf("cleanLocal=%v: the cache holds %d files, want the one manifest", cleanLocal, len(objects))
+		}
+	}
+}
+
+// filesUnder returns the paths of the files below dir.
+func filesUnder(t *testing.T, dir string) []string {
+	t.Helper()
+	var paths []string
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			paths = append(paths, path)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return paths
 }

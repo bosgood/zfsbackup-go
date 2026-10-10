@@ -285,7 +285,7 @@ func readCachedManifest(
 	}
 	if errors.Is(err, files.ErrManifestTooLong) {
 		// The copy is whole; downloading the object again would only cost the same egress.
-		return nil, unreadableManifestError(objectName, err)
+		return nil, unreadableManifestError(objectName, path, err)
 	}
 	if !os.IsNotExist(err) {
 		log.AppLogger.Warningf("Cached manifest %s (%s) is unreadable (%v); downloading it again.", path, objectName, err)
@@ -299,7 +299,7 @@ func readCachedManifest(
 	}
 	if err = downloadTo(ctx, backend, objectName, path); err != nil {
 		if errors.Is(err, errObjectTooLarge) {
-			return nil, unreadableManifestError(objectName, err)
+			return nil, unreadableManifestError(objectName, path, err)
 		}
 		return nil, err
 	}
@@ -313,7 +313,7 @@ func readCachedManifest(
 		}
 	}
 	if err != nil {
-		return nil, unreadableManifestError(objectName, err)
+		return nil, unreadableManifestError(objectName, path, err)
 	}
 	return manifest, nil
 }
@@ -321,14 +321,18 @@ func readCachedManifest(
 // unreadableManifestError is the error for the object objectName under the manifest prefix that
 // is not a manifest this run can accept. It names the object, and says what to do: a manifest
 // over the limit may be a real backup of more volumes than this version reads, so it must not
-// be deleted; anything else is not a manifest, and deleting it is the way out.
-func unreadableManifestError(objectName string, err error) error {
+// be deleted; anything else is not a manifest, and deleting it is the way out. A manifest over
+// the limit stays at cachePath, and readCachedManifest reads that copy, not the object, until
+// it is deleted: the error says so, or replacing the object would change nothing.
+func unreadableManifestError(objectName, cachePath string, err error) error {
 	if errors.Is(err, files.ErrManifestTooLong) {
 		err = fmt.Errorf(
-			"could not read the manifest %s at the destination: %w. If you wrote it, it is a backup of more "+
-				"volumes than this version reads: do not delete it or its volumes, and send with a larger --volsize "+
-				"so later backups fit. If you did not write it, it is not a manifest; move it out of the destination",
-			objectName, err,
+			"could not read the manifest %s at the destination: %w. If you wrote it, it is the manifest of a backup "+
+				"with more volumes than this version reads: do not delete it, its volumes or its copy in the cache, and "+
+				"send later backups with a larger --volsize. If you did not write it, it is not a manifest: remove it "+
+				"from the destination and delete its copy in the cache, %s. Until that copy is deleted, every run "+
+				"reads it, not the object at the destination",
+			objectName, err, cachePath,
 		)
 	} else {
 		err = fmt.Errorf(

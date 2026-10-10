@@ -17,6 +17,9 @@ Diagram 9 in [../architecture.md](../architecture.md).
 5. Objects but no manifests → refuse. Tell the user to check `--manifestPrefix`.
 6. Local-only cached manifests: `--cleanLocal` deletes them later. Else keep their volumes. One cached under another `--manifestPrefix` (`foreign`) is never deleted. One that does not decode stops the run in both modes (`unreadableLocalManifestError`): the cache holds every prefix's and key's manifests, so it may be another job's.
 7. Candidates = objects that are not manifests, not in a nested destination, parse as a volume name, belong to a known non-busy dataset, and are not of a backup set that a manifest under another `--manifestPrefix` at the destination names (`otherPrefixSets`: by name only, those manifests are never read).
+   - The name is cut at its LAST `.manifest`: a prefix or snapshot name may hold `.manifest`.
+   - A name cannot be split for sure (a prefix may hold the separator; a pool may be named `to`). So `otherPrefixSets` indexes every reading: the last 2 parts as a full set, and the last 4 as an incremental when the 2nd to last part is `to`. `p2|tank|a|to|b.manifest.gz` gives `|tank|a|to|b` AND `|to|b`. The extra key is on purpose. It can only spare more volumes, never delete more.
+   - A manifest of OUR prefix written with another `--separator` does not start with `<prefix><separator>`, so it counts as another prefix's: its sets are spared, and the log says "under another --manifestPrefix".
 8. For each manifest: all volumes present, or no `--force` → keep its volumes (warn if broken). Missing volumes with `--force` → delete the manifest and its volumes.
 9. `--dry-run` → log the deletes. Else 5 workers call `backend.Delete` with backoff, then remove local cache files.
 

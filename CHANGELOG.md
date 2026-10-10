@@ -11,6 +11,7 @@
 * [FIX] clean: volumes of a backup set that a manifest under another `--manifestPrefix` names at the destination are never deleted; before, a plain `clean` under one prefix deleted the other prefix's volumes of the same dataset
 * [FIX] files: the manifest limit is 1 GiB of JSON (about 2 million volumes), was 64 MiB (128,558 volumes, 24.5 TiB in one send at the default `--volsize`); a manifest over the limit is kept in the cache, downloaded once, and the error no longer advises deleting it
 * [FIX] send: refuses, before it uploads anything, a send whose manifest `zfs send -n -P` estimates over the limit, and names the smallest `--volsize` that fits; it still refuses to write a manifest over the limit if the estimate was low or failed. A send of very many volumes is slow: it rewrites the whole manifest in the cache after each volume, so use a larger `--volsize` for a pool of hundreds of TiB
+* [FIX] errors: a manifest over the limit gets the same advice at the destination and in the cache: keep it if you wrote it; if you did not, remove the object AND its cached copy, which the error names (the cached copy is read instead of the object until it is deleted)
 * [ADD] receive: `--auto` logs when a local snapshot has the name of a backed-up one but another creation time, instead of leaving zfs's "destination has snapshots" as the only clue
 
 * [FIX] clean: refuse a destination with objects but no manifests under `--manifestPrefix`; never delete cached manifests of another prefix; `--force` skips local-only cached manifests (d76ef3a)

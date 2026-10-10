@@ -72,6 +72,11 @@ func otherPrefixSets(allObjects []string, manifestPrefix string, separators []st
 		if _, _, ok := parseBackupVolume(obj, separators); ok {
 			continue // a volume of a snapshot with ".manifest" in its name
 		}
+		// A name does not say surely where the prefix ends: a prefix may hold the separator, and
+		// "<prefix>|to|b" is a full of pool "to" as much as the end of an incremental "...|to|b".
+		// So every reading is indexed: the last two parts as a full, and, when the second to last
+		// is "to", the last four as an incremental. A wrong reading only names a set that is not
+		// there, or spares volumes that are not ours to judge; it never makes a volume a candidate.
 		head := obj[:idx]
 		for _, sep := range separators {
 			parts := strings.Split(head, sep)
@@ -190,7 +195,18 @@ func readForClean(
 // unreadableLocalManifestError is the error for the cached manifest at path, not at the
 // destination, that this run cannot decode. It says whose the file may be and what to do.
 func unreadableLocalManifestError(path string, err error) error {
-	if errors.As(err, new(*files.KeyError)) {
+	switch {
+	case errors.Is(err, files.ErrManifestTooLong):
+		// The same advice as unreadableManifestError gave while the object was at the destination.
+		err = fmt.Errorf(
+			"the local manifest %s is not at the destination, and this version cannot read it: %w. If you "+
+				"wrote it, it is the manifest of a backup with more volumes than this version reads: do not delete "+
+				"it; its volumes may still be at the destination, and clean cannot tell which they are, so nothing "+
+				"is deleted. If you removed the object it is a copy of because it was not a manifest, delete this "+
+				"file too and run clean again",
+			path, err,
+		)
+	case errors.As(err, new(*files.KeyError)):
 		// Not a damaged file: this run lacks the key. The file may be another job's state.
 		err = fmt.Errorf(
 			"the local manifest %s %w. It is not at the destination, so it cannot be downloaded again, and clean "+
@@ -199,7 +215,7 @@ func unreadableLocalManifestError(path string, err error) error {
 				"of a backup",
 			path, err,
 		)
-	} else {
+	default:
 		err = fmt.Errorf(
 			"could not read the local manifest %s: %w. It is not at the destination, so it cannot be downloaded "+
 				"again, and clean cannot tell which volumes it lists, so nothing is deleted. If it is the state of "+
