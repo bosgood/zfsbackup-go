@@ -1,0 +1,71 @@
+package main
+
+import (
+	"fmt"
+	"time"
+)
+
+func wallClock(year int, month time.Month, day, hour, minute, sec, nsec int, loc *time.Location) time.Time {
+	t := time.Date(year, month, day, hour, minute, sec, nsec, loc)
+	want := time.Date(year, month, day, hour, minute, sec, nsec, time.UTC)
+	got := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.UTC)
+	if got.Before(want) {
+		t = t.Add(want.Sub(got))
+	}
+	return t
+}
+
+func nextRun(first, at time.Time, every time.Duration, loc *time.Location) time.Time {
+	if every%(24*time.Hour) != 0 {
+		return at.Add(every)
+	}
+	first = first.In(loc)
+	days := int((at.Sub(first)+12*time.Hour)/(24*time.Hour)) + int(every/(24*time.Hour))
+	return wallClock(first.Year(), first.Month(), first.Day()+days,
+		first.Hour(), first.Minute(), first.Second(), first.Nanosecond(), loc)
+}
+
+func main() {
+	ny, _ := time.LoadLocation("America/New_York")
+	const f = "2006-01-02 15:04:05 MST (-0700)"
+	// Case 1: Every=48h over spring-forward (2026-03-08 in NY). Start 2026-03-05 02:30, then 03-07, 03-09, 03-11.
+	first := time.Date(2026, 3, 5, 2, 30, 0, 0, ny)
+	at := first
+	fmt.Println("CASE 1: 48h steps across spring forward 2026-03-08")
+	for i := 0; i < 5; i++ {
+		fmt.Printf("  run %d: %s  (elapsed since first %v)\n", i, at.Format(f), at.Sub(first))
+		at = nextRun(first, at, 48*time.Hour, ny)
+	}
+	// Case 1b: Every=48h across fall-back (2026-11-01). Start 10-29 01:30.
+	first = time.Date(2026, 10, 29, 1, 30, 0, 0, ny)
+	at = first
+	fmt.Println("CASE 1b: 48h steps across fall back 2026-11-01")
+	for i := 0; i < 4; i++ {
+		fmt.Printf("  run %d: %s\n", i, at.Format(f))
+		at = nextRun(first, at, 48*time.Hour, ny)
+	}
+	// Case 1c: 24h daily at 02:30 across spring forward: 03-07, 03-08 (gap), 03-09
+	first = time.Date(2026, 3, 7, 2, 30, 0, 0, ny)
+	at = first
+	fmt.Println("CASE 1c: 24h steps at 02:30 across spring forward")
+	for i := 0; i < 3; i++ {
+		fmt.Printf("  run %d: %s\n", i, at.Format(f))
+		at = nextRun(first, at, 24*time.Hour, ny)
+	}
+	// Case 2: wallClock on fall-back day at 01:30 -> first instance (EDT, -0400)?
+	fmt.Println("CASE 2: wallClock fall-back 2026-11-01 01:30 NY")
+	w := wallClock(2026, 11, 1, 1, 30, 0, 0, ny)
+	fmt.Printf("  wallClock: %s   time.Date: %s\n", w.Format(f), time.Date(2026, 11, 1, 1, 30, 0, 0, ny).Format(f))
+	// spring gap 02:30 -> 03:30 EDT?
+	w = wallClock(2026, 3, 8, 2, 30, 0, 0, ny)
+	fmt.Printf("  wallClock spring gap 02:30: %s   time.Date: %s\n", w.Format(f), time.Date(2026, 3, 8, 2, 30, 0, 0, ny).Format(f))
+	// Case 3: monthly boundaries from Jan 31
+	fmt.Println("CASE 3: monthly from the 31st")
+	fr := time.Date(2026, 1, 31, 12, 0, 0, 0, ny)
+	t := time.Date(fr.Year(), fr.Month(), 1, 0, 0, 0, 0, ny)
+	for i := 0; i < 4; i++ {
+		fmt.Printf("  %s\n", t.Format(f))
+		t = t.AddDate(0, 1, 0)
+	}
+	fmt.Printf("  (naive Jan31.AddDate(0,1,0) = %s)\n", fr.AddDate(0, 1, 0).Format(f))
+}

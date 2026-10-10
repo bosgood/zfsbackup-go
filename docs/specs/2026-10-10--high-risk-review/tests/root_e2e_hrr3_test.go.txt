@@ -1,0 +1,273 @@
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/files"
+)
+
+// High-risk review item 3: does --resume trust the cache of destination 0 alone?
+
+const hrr3StreamBytes = 3 << 20
+
+var hrr3Args = []string{"--volsize", "1", "--compressor", "", "--maxRetryTime", "2s", "--maxBackoffTime", "1s"}
+
+// hrr3Interrupted sends tank/data@a to dests (3 volumes, no encryption) and makes it look
+// interrupted after volume 2 at every destination: no manifest, no volume 3, a cache of all 3.
+func hrr3Interrupted(t *testing.T, env *e2eEnv, dirs []string) {
+	t.Helper()
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(hrr3StreamBytes))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	uris := make([]string, len(dirs))
+	for i, d := range dirs {
+		uris[i] = "file://" + d
+	}
+	env.sendOK(t, append(append([]string{}, hrr3Args...), "tank/data@a", strings.Join(uris, ","))...)
+	for _, d := range dirs {
+		names := manifestNames(destObjects(t, d))
+		if len(names) != 1 {
+			t.Fatalf("want one manifest at %s, got %q", d, names)
+		}
+		if err := os.Remove(filepath.Join(d, names[0])); err != nil {
+			t.Fatal(err)
+		}
+		dropVolumesFrom(t, d, 3)
+	}
+}
+
+// hrr3BlockVolume puts a directory where volume n of the set would be written at dir, so an
+// upload of it fails. It returns a function that removes the directory again.
+func hrr3BlockVolume(t *testing.T, dir string, n int64) func() {
+	t.Helper()
+	blocked := strings.TrimSuffix(volumeNamed(t, dir, 2), "2") + fmt.Sprint(n)
+	if n == 1 || n == 2 {
+		blocked = volumeNamed(t, dir, n)
+		if err := os.Remove(blocked); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(blocked, 0700); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if err := os.Remove(blocked); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func hrr3Changed(before, after map[string][]byte) int {
+	changed := 0
+	for name, data := range before {
+		if got, ok := after[name]; ok && !bytes.Equal(got, data) {
+			changed++
+		}
+	}
+	return changed
+}
+
+func hrr3Want(t *testing.T, logs string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(logs, want) {
+			t.Errorf("log lacks %q:\n%s", want, logs)
+		}
+	}
+}
+
+// Hypothesis A. Attempt 1 to (a,b) is interrupted after volume 2. A plain send to ONE of them
+// rewrites volumes 1-2 there with other bytes of the same size (FAKEZFS_STREAM_SALT, no
+// encryption) and fails at volume 3, so that destination's cache records the new SHA-256s. A
+// --resume to (a,b) must see the caches differ and start over, whichever destination is first.
+func TestE2EHrr3ACacheOfOtherDestinationCuts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		target int // index into (a,b) of the destination the plain send goes to
+	}{
+		{"rewritten destination is first", 0},
+		{"rewritten destination is second", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newE2EEnv(t)
+			dirs := []string{env.dest, newDest(t)}
+			hrr3Interrupted(t, env, dirs)
+			target, other := dirs[tc.target], dirs[1-tc.target]
+
+			t.Setenv("FAKEZFS_STREAM_SALT", "hrr3")
+			unblock := hrr3BlockVolume(t, target, 3)
+			before := destObjects(t, target)
+			logs, err := guarded(t, func() (string, error) {
+				return env.send(append(append([]string{}, hrr3Args...), "tank/data@a", "file://"+target)...)
+			})
+			if err == nil {
+				t.Fatalf("the plain send to %s succeeded:\n%s", target, logs)
+			}
+			hrr3Want(t, logs, "Discarding the cached state of an earlier attempt")
+			if hrr3Changed(before, destObjects(t, target)) != 2 {
+				t.Fatalf("the plain send did not rewrite volumes 1-2 at %s; the scenario needs it to", target)
+			}
+			unblock()
+			t.Setenv("FAKEZFS_STREAM_SALT", "")
+
+			dests := "file://" + dirs[0] + ",file://" + dirs[1]
+			logs, err = guarded(t, func() (string, error) {
+				return env.send(append(append([]string{}, hrr3Args...), "--resume", "tank/data@a", dests)...)
+			})
+			if err != nil {
+				t.Fatalf("resume: %v\n%s", err, logs)
+			}
+			hrr3Want(t, logs,
+				fmt.Sprintf("The cached state for file://%s differs from the one for file://%s at volume ", dirs[1], dirs[0]),
+				"Nothing verifiable to resume; starting over.",
+			)
+			_ = other
+			for _, d := range dirs {
+				env.checkRestores(t, "file://"+d, "a", hrr3StreamBytes)
+			}
+		})
+	}
+}
+
+// Hypothesis B. The plain send to a alone fails before any volume is cached (volume 1's upload
+// fails). discardPartialManifests already removed a's cache, so a later --resume starts over:
+// with a first, "No previous manifest file exists" (and b's cache is discarded too); with b
+// first, b's cache is the old one but a has none, and cachedAtEveryDestination keeps nothing.
+func TestE2EHrr3BUncachedPlainSendStartsOver(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		order []int
+		wants []string
+	}{
+		{"resume lists a first", []int{0, 1}, []string{
+			"No previous manifest file exists, nothing to resume; starting over.",
+			"Discarding the cached state of an earlier attempt",
+		}},
+		{"resume lists b first", []int{1, 0}, []string{
+			"No cached state of the interrupted attempt for file://%[1]s; every volume will be re-sent.",
+			"Nothing verifiable to resume; starting over.",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newE2EEnv(t)
+			dirs := []string{env.dest, newDest(t)}
+			hrr3Interrupted(t, env, dirs)
+			a, b := dirs[0], dirs[1]
+			if n := len(env.cachedManifests(t)); n != 2 {
+				t.Fatalf("want a cache for both destinations, got %d", n)
+			}
+
+			t.Setenv("FAKEZFS_STREAM_SALT", "hrr3")
+			vol1 := volumeNamed(t, a, 1)
+			orig, err := os.ReadFile(vol1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			unblock := hrr3BlockVolume(t, a, 1)
+			logs, err := guarded(t, func() (string, error) {
+				return env.send(append(append([]string{}, hrr3Args...), "tank/data@a", "file://"+a)...)
+			})
+			if err == nil {
+				t.Fatalf("the plain send to a succeeded:\n%s", logs)
+			}
+			hrr3Want(t, logs, "Discarding the cached state of an earlier attempt")
+			if n := len(env.cachedManifests(t)); n != 1 {
+				t.Fatalf("after the failed plain send want only b's cache, got %d caches", n)
+			}
+			unblock()
+			// Put attempt 1's volume 1 back: a now holds the old bytes but has no cache.
+			if err = os.WriteFile(vol1, orig, 0600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("FAKEZFS_STREAM_SALT", "")
+
+			dests := "file://" + dirs[tc.order[0]] + ",file://" + dirs[tc.order[1]]
+			logs, err = guarded(t, func() (string, error) {
+				return env.send(append(append([]string{}, hrr3Args...), "--resume", "tank/data@a", dests)...)
+			})
+			if err != nil {
+				t.Fatalf("resume: %v\n%s", err, logs)
+			}
+			for _, w := range tc.wants {
+				if strings.Contains(w, "%") {
+					w = fmt.Sprintf(w, a)
+				}
+				hrr3Want(t, logs, w)
+			}
+			if strings.Contains(logs, "Resuming from volume 2") || strings.Contains(logs, "Resuming from volume 3") {
+				t.Errorf("the resume kept volumes:\n%s", logs)
+			}
+			_ = b
+			for _, d := range dirs {
+				env.checkRestores(t, "file://"+d, "a", hrr3StreamBytes)
+			}
+		})
+	}
+}
+
+// Hypothesis C. A plain send from ANOTHER working directory (W2) to (a,b) rewrites volumes 1-2
+// at both with other bytes of the same size and fails at volume 3. W1's --resume sees the
+// volumes present with the right sizes and W1's own caches agree, so it keeps volumes 1-2 and
+// publishes a manifest whose SHA-256s are of bytes that are gone. The restore then fails its
+// checksum. The code comment at cachedAtEveryDestination documents this as out of scope.
+func TestE2EHrr3COtherWorkingDirectoryIsInvisible(t *testing.T) {
+	env := newE2EEnv(t)
+	dirs := []string{env.dest, newDest(t)}
+	hrr3Interrupted(t, env, dirs)
+	dests := "file://" + dirs[0] + ",file://" + dirs[1]
+
+	w2 := *env
+	w2.work = filepath.Join(t.TempDir(), "work2")
+	if err := os.Mkdir(w2.work, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKEZFS_STREAM_SALT", "hrr3")
+	unblock := hrr3BlockVolume(t, dirs[0], 3)
+	before := []map[string][]byte{destObjects(t, dirs[0]), destObjects(t, dirs[1])}
+	logs, err := guarded(t, func() (string, error) {
+		return w2.send(append(append([]string{}, hrr3Args...), "tank/data@a", dests)...)
+	})
+	if err == nil {
+		t.Fatalf("the plain send from W2 succeeded:\n%s", logs)
+	}
+	for i, d := range dirs {
+		if hrr3Changed(before[i], destObjects(t, d)) != 2 {
+			t.Fatalf("the send from W2 did not rewrite volumes 1-2 at %s; the scenario needs it to", d)
+		}
+	}
+	unblock()
+	t.Setenv("FAKEZFS_STREAM_SALT", "")
+
+	logs, err = guarded(t, func() (string, error) {
+		return env.send(append(append([]string{}, hrr3Args...), "--resume", "tank/data@a", dests)...)
+	})
+	if err != nil {
+		t.Fatalf("resume from W1: %v\n%s", err, logs)
+	}
+	hrr3Want(t, logs, "Resuming from volume 3: 2 of 3 cached volumes verified at all destinations.")
+	for _, d := range dirs {
+		if len(manifestNames(destObjects(t, d))) != 1 {
+			t.Fatalf("the resume published no manifest at %s", d)
+		}
+	}
+
+	for _, d := range dirs {
+		t.Setenv("FAKEZFS_RECEIVE_LOG", filepath.Join(t.TempDir(), "receive.log"))
+		rlogs, rerr := guarded(t, func() (string, error) {
+			return env.receive("--maxRetryTime", "2s", "tank/data@a", "file://"+d, "restored/data")
+		})
+		if rerr == nil {
+			t.Errorf("restore from %s succeeded; expected a checksum failure on volume 1:\n%s", d, rlogs)
+			continue
+		}
+		if !strings.Contains(rlogs+rerr.Error(), "does not match its manifest") {
+			t.Errorf("restore from %s failed for another reason: %v\n%s", d, rerr, rlogs)
+		}
+		t.Logf("restore from %s: %v", d, rerr)
+	}
+}

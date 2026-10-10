@@ -1,0 +1,166 @@
+package files
+
+import (
+	"context"
+	"crypto/md5" // nolint:gosec // test data only
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/config"
+)
+
+// hrr2Job is a JobInfo of a full send of tank/data with n volumes of realistic field values: the
+// fields a send records (64-hex SHA256Sum and StreamSHA256, 32-hex MD5Sum, a CRC, ~200 MiB sizes,
+// nanosecond times in a zone with an offset, the object names BackupVolumeObjectName gives).
+func hrr2Job(n int) *JobInfo {
+	zone := time.FixedZone("PDT", -7*3600)
+	base := time.Date(2026, 9, 1, 0, 0, 3, 0, zone)
+	j := &JobInfo{
+		StartTime:        base.Add(time.Minute),
+		VolumeName:       "tank/data",
+		BaseSnapshot:     SnapshotInfo{Name: "autosnap_2026-09-01_00:00:03_monthly", CreationTime: base, GUID: "1234567890123456789"},
+		ManifestPrefix:   "manifests",
+		Separator:        "|",
+		Compressor:       InternalCompressor,
+		CompressionLevel: 6,
+		VolumeSize:       200,
+		ZFSCommandLine:   "zfs send -p tank/data@autosnap_2026-09-01_00:00:03_monthly",
+		Version:          1.0,
+	}
+	j.Volumes = make([]*VolumeInfo, 0, n)
+	for i := 1; i <= n; i++ {
+		h := sha256.Sum256([]byte(fmt.Sprintf("vol%d", i)))
+		stream := sha256.Sum256(h[:])
+		m := md5.Sum(h[:]) // nolint:gosec // test data only
+		start := base.Add(time.Duration(i)*7*time.Second + time.Duration(i%1000)*time.Microsecond + 987654321*time.Nanosecond)
+		size := uint64(200<<20) + uint64(i%4096)
+		j.Volumes = append(j.Volumes, &VolumeInfo{
+			ObjectName:     j.BackupVolumeObjectName(int64(i)),
+			VolumeNumber:   int64(i),
+			SHA256Sum:      hex.EncodeToString(h[:]),
+			MD5Sum:         hex.EncodeToString(m[:]),
+			CRC32CSum32:    binary.BigEndian.Uint32(h[:4]),
+			Size:           size,
+			ZFSStreamBytes: size,
+			StreamSHA256:   hex.EncodeToString(stream[:]),
+			CreateTime:     start,
+			CloseTime:      start.Add(6*time.Second + 123456789*time.Nanosecond),
+		})
+	}
+	j.ZFSStreamBytes = uint64(n) * (200 << 20)
+	j.EndTime = base.Add(time.Duration(n)*7*time.Second + time.Minute)
+	return j
+}
+
+// hrr2EncodedLen is the number of bytes json.Encoder.Encode writes for hrr2Job(n): Marshal plus
+// the newline Encode appends.
+func hrr2EncodedLen(t *testing.T, n int) int {
+	t.Helper()
+	data, err := json.Marshal(hrr2Job(n))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(data) + 1
+}
+
+// hrr2WriteManifest writes hrr2Job(n) the way backup.saveManifest does (CreateManifestVolume +
+// json.Encoder, Close, CopyTo) and returns the path of the object and its compressed size.
+func hrr2WriteManifest(t *testing.T, n int) (string, uint64) {
+	t.Helper()
+	j := hrr2Job(n)
+	manifest, err := CreateManifestVolume(context.Background(), j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = manifest.DeleteVolume() }()
+	if err = json.NewEncoder(manifest).Encode(j); err != nil {
+		t.Fatal(err)
+	}
+	if err = manifest.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "manifest")
+	if err = manifest.CopyTo(path); err != nil {
+		t.Fatal(err)
+	}
+	return path, manifest.Size
+}
+
+// TestHRR2RealisticManifestLimit measures the JSON a send writes per volume, finds the smallest
+// volume count whose manifest ReadManifest rejects, and checks that count and the one before it.
+func TestHRR2RealisticManifestLimit(t *testing.T) {
+	oldTemp := config.BackupTempdir
+	config.BackupTempdir = t.TempDir()
+	defer func() { config.BackupTempdir = oldTemp }()
+
+	// Bytes per volume, from the JSON of 1000 volumes less the JSON of none.
+	header := hrr2EncodedLen(t, 0)
+	perVol := float64(hrr2EncodedLen(t, 1000)-header) / 1000
+	t.Logf("JSON header (no volumes): %d bytes; JSON per volume (vol 1..1000): %.1f bytes", header, perVol)
+	t.Logf("MaxManifestBytes = %d (%d MiB); MaxManifestVolumes = %d", MaxManifestBytes, MaxManifestBytes>>20, MaxManifestVolumes)
+
+	// Find the exact smallest n whose encoded JSON exceeds MaxManifestBytes.
+	n := int(float64(MaxManifestBytes-header)/perVol) + 1
+	for i := 0; i < 30; i++ {
+		l := hrr2EncodedLen(t, n)
+		if l > MaxManifestBytes {
+			if hrr2EncodedLen(t, n-1) <= MaxManifestBytes {
+				break
+			}
+			n -= max(1, int(float64(l-MaxManifestBytes)/perVol))
+		} else {
+			n += max(1, int(float64(MaxManifestBytes-l)/perVol))
+		}
+	}
+	lenAt, lenBefore := hrr2EncodedLen(t, n), hrr2EncodedLen(t, n-1)
+	t.Logf("smallest over-limit N = %d (JSON %d bytes); N-1 = %d (JSON %d bytes); per volume at N: %.1f bytes",
+		n, lenAt, n-1, lenBefore, float64(lenAt-header)/float64(n))
+	t.Logf("dataset at --volsize 200: N*200 MiB = %.2f TiB", float64(n)*200/(1<<20))
+	t.Logf("dataset at --volsize 50: N*50 MiB = %.2f TiB", float64(n)*50/(1<<20))
+
+	// N-1 volumes: the manifest reads back.
+	path, compressed := hrr2WriteManifest(t, n-1)
+	t.Logf("N-1=%d: compressed manifest object is %d bytes (%.1f MiB)", n-1, compressed, float64(compressed)/(1<<20))
+	got, err := ReadManifest(context.Background(), &JobInfo{}, path)
+	if err != nil {
+		t.Fatalf("N-1=%d volumes: ReadManifest failed: %v", n-1, err)
+	}
+	if len(got.Volumes) != n-1 {
+		t.Fatalf("N-1=%d volumes: read back %d", n-1, len(got.Volumes))
+	}
+	t.Logf("N-1=%d: ReadManifest OK, %d volumes read back", n-1, len(got.Volumes))
+
+	// N volumes: the manifest a send writes is rejected.
+	path, compressed = hrr2WriteManifest(t, n)
+	t.Logf("N=%d: compressed manifest object is %d bytes (%.1f MiB); over MaxManifestBytes compressed: %v",
+		n, compressed, float64(compressed)/(1<<20), compressed > MaxManifestBytes)
+	_, err = ReadManifest(context.Background(), &JobInfo{}, path)
+	if err == nil {
+		t.Fatalf("N=%d volumes (JSON %d bytes): ReadManifest succeeded; expected rejection", n, lenAt)
+	}
+	t.Logf("N=%d: ReadManifest error: %v", n, err)
+	if !strings.Contains(err.Error(), "longer than") {
+		t.Errorf("N=%d: error is not the size limit error: %v", n, err)
+	}
+}
+
+// TestHRR2ManifestSteps writes manifests of 100k..135k volumes and logs whether each reads back.
+func TestHRR2ManifestSteps(t *testing.T) {
+	oldTemp := config.BackupTempdir
+	config.BackupTempdir = t.TempDir()
+	defer func() { config.BackupTempdir = oldTemp }()
+	for _, n := range []int{100000, 120000, 125000, 130000, 135000} {
+		l := hrr2EncodedLen(t, n)
+		path, compressed := hrr2WriteManifest(t, n)
+		_, err := ReadManifest(context.Background(), &JobInfo{}, path)
+		t.Logf("N=%d: JSON %d bytes (%.1f MiB), compressed %d bytes (%.1f MiB), %.2f TiB at --volsize 200, ReadManifest err: %v",
+			n, l, float64(l)/(1<<20), compressed, float64(compressed)/(1<<20), float64(n)*200/(1<<20), err)
+	}
+}
