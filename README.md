@@ -1,12 +1,14 @@
-# ZFSBackup [![Build Status](https://travis-ci.org/someone1/zfsbackup-go.svg?branch=master)](https://travis-ci.org/someone1/zfsbackup-go) [![Go Report Card](https://goreportcard.com/badge/github.com/someone1/zfsbackup-go)](https://goreportcard.com/report/github.com/someone1/zfsbackup-go) [![Coverage Status](https://coveralls.io/repos/github/someone1/zfsbackup-go/badge.svg?branch=master)](https://coveralls.io/github/someone1/zfsbackup-go?branch=master)
+# ZFSBackup
 
-DISCLAIMER: This is a work in progress in still considered beta though I personally use this in a production environment and have tested it for my own use cases (looking for feedback on other people's experience before considering this "production ready").
+DISCLAIMER: Backups are a high-sensitivity area. Never trust any backup tool without your own due diligence. If you have not tested restores, you do not know if you have good backups.
 
 ## Overview
 
 This backup software was designed for the secure, long-term storage of ZFS snapshots on remote storage. Backup jobs are resilient to network failures and can be stopped/resumed. It works by splitting the ZFS send stream (the format for which is committed and can be received on future versions of ZFS as per the [man page](<https://www.freebsd.org/cgi/man.cgi?zfs(8)>)) into chunks and then optionally compresses, encrypts, and signs each chunk before uploading it to your remote storage location(s) of choice. Backup chunks are validated using SHA256 and CRC32C checksums (along with the many integrity checks builtin to compression algorithms, SSL/TLS transportation protocols, and the ZFS stream format itself). The software is completely self-contained and has no external dependencies.
 
 This project was inspired by the [duplicity project](http://duplicity.nongnu.org/).
+
+This particular repo is a fork of the original at [someone1/zfsbackup-go](https://github.com/someone1/zfsbackup-go).
 
 ### Highlights
 
@@ -28,20 +30,20 @@ This project was inspired by the [duplicity project](http://duplicity.nongnu.org
   - Auth details: <https://godoc.org/github.com/aws/aws-sdk-go/aws/session#hdr-Environment_Variables>
   - [99.999999999% durability](https://aws.amazon.com/s3/faqs/#data-protection) - Using replication and checksums on the data for integrity validation and repair
 - Any S3 Compatible Storage Provider (e.g. Minio, StorageMadeEasy, Ceph, etc.)
-  - Set the AWS_S3_CUSTOM_ENDPOINT environmental variable to the compatible target API URI
+  - Set the `AWS_S3_CUSTOM_ENDPOINT` environmental variable to the compatible target API URI
 - Azure Blob Storage (azure://)
-  - Auth: Set the AZURE_ACCOUNT_NAME and AZURE_ACCOUNT_KEY environmental variables to the appropiate values or if using SAS set AZURE_SAS_URI to a container authorized SAS URI
-  - Point to a custom endpoint by setting the AZURE_CUSTOM_ENDPOINT envrionmental variable
+  - Auth: Set the `AZURE_ACCOUNT_NAME` and `AZURE_ACCOUNT_KEY` environmental variables to the appropiate values or if using SAS set `AZURE_SAS_URI` to a container authorized SAS URI
+  - Point to a custom endpoint by setting the `AZURE_CUSTOM_ENDPOINT` envrionmental variable
   - Although no durability target is provided, there is an in-depth explanation of their architecture [here](http://sigops.org/sosp/sosp11/current/2011-Cascais/printable/11-calder.pdf) - Using the Reed-Solomon erasure encoding and user-configurable redundancy settings
 - BackBlaze B2 (b2://)
-  - Auth: Set the B2_ACCOUNT_ID and B2_ACCOUNT_KEY environmental variables to the appropiate values
+  - Auth: Set the `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY` environmental variables to the appropiate values
   - [99.999999999% durability](https://help.backblaze.com/hc/en-us/articles/218485257-B2-Resiliency-Durability-and-Availability) - Using the Reed-Solomon erasure encoding
 - Local file path (file://[relative|/absolute]/local/path)
 - SSH/SFTP (ssh://)
   - Auth: username & password, public key or ssh-agent.
-  - For username & password set the SSH_USERNAME and SSH_PASSWORD environment variables or use the url format: `ssh://username:password@example.org/remote/path`.
-  - For public key auth set the SSH_KEY_FILE environment variable. By default zfsbackup tries to use common key names from the users home directory.  
-  - ssh-agent auth is activated when SSH_AUTH_SOCK exists.
+  - For username & password set the `SSH_USERNAME` and SSH_PASSWORD environment variables or use the url format: `ssh://username:password@example.org/remote/path`.
+  - For public key auth set the `SSH_KEY_FILE` environment variable. By default zfsbackup tries to use common key names from the users home directory.
+  - ssh-agent auth is activated when `SSH_AUTH_SOCK` exists.
   - By default zfsbackup also uses the known hosts file from the users home directory. To disable host key checking set SSH_KNOWN_HOSTS to `ignore`. You can also specify the path to your own known hosts file.
 
 ### Compression
@@ -54,10 +56,10 @@ The PGP algorithm is used for encryption/signing. The cipher used is AES-256.
 
 ## Installation
 
-Download the latest binaries from the [releases](https://github.com/someone1/zfsbackup-go/releases) section or compile your own by:
+Download the latest binaries from the [releases](https://github.com/bosgood/zfsbackup-go/releases) section or compile your own by:
 
 ```shell
-go get github.com/someone1/zfsbackup-go
+go get github.com/bosgood/zfsbackup-go
 ```
 
 The compiled binary should be in your $GOPATH/bin directory.
@@ -144,15 +146,15 @@ Full backup example:
 
 Incremental backup example:
 
- ```bash
- ./zfsbackup send --encryptTo user@domain.com --signFrom user@domain.com --publicKeyRingPath pubring.gpg.asc --secretKeyRingPath secring.gpg.asc -i Tank/Dataset@snapshot-20170101 Tank/Dataset@snapshot-20170201 gs://backup-bucket-target,s3://another-backup-target
-  ```
+```bash
+./zfsbackup send --encryptTo user@domain.com --signFrom user@domain.com --publicKeyRingPath pubring.gpg.asc --secretKeyRingPath secring.gpg.asc -i Tank/Dataset@snapshot-20170101 Tank/Dataset@snapshot-20170201 gs://backup-bucket-target,s3://another-backup-target
+```
 
 Full restore example:
 
-  ```bash
-  ./zfsbackup receive --encryptTo user@domain.com --signFrom user@domain.com --publicKeyRingPath pubring.gpg.asc --secretKeyRingPath secring.gpg.asc -d Tank/Dataset@snapshot-20170201 gs://backup-bucket-target Tank
-  ```
+```bash
+./zfsbackup receive --encryptTo user@domain.com --signFrom user@domain.com --publicKeyRingPath pubring.gpg.asc --secretKeyRingPath secring.gpg.asc -d Tank/Dataset@snapshot-20170201 gs://backup-bucket-target Tank
+```
 
 Incremental restore example:
 
@@ -170,12 +172,12 @@ gpg2 --output public.pgp --armor --export test@example.com
 gpg2 --output private.pgp --armor --export-secret-key test@example.com
 ```
 
-- PGP Passphrase will be prompted during execution if it is not found in the PGP_PASSPHRASE environmental variable.
+- PGP Passphrase will be prompted during execution if it is not found in the `PGP_PASSPHRASE` environmental variable.
 - `receive` runs the external decompressor a backup's manifest names only if it is one of gzip, pigz, bzip2, pbzip2, lbzip2, xz, pxz, lzma, zstd, pzstd, lz4 or lzop; for any other, pass the same name to `receive --compressor` if you trust it.
 - `--maxFileBuffer=0` will disable parallel uploading for some backends, multiple destinations, and upload hash verification but will use virtually no disk space.
 - `--trustSigner <email|fingerprint>` (repeatable, with `--signFrom`) also accepts manifests and volumes signed by that key from the public keyring, so backups signed before a signing-key rotation still verify. See [Rotating the signing key](docs/runbook-first-backup.md#7-rotating-the-signing-key).
 - `receive --maxFileBuffer=0` streams each volume into `zfs receive` before its checksum and signature are checked, so it cannot be combined with `--signFrom`.
-- For S3: Specify Standard/Bulk/Expedited in the AWS_S3_GLACIER_RESTORE_TIER environmental variable to change Glacier restore option (default: Bulk)
+- For S3: Specify Standard/Bulk/Expedited in the `AWS_S3_GLACIER_RESTORE_TIER` environmental variable to change Glacier restore option (default: Bulk)
 - A duration string is a possibly signed sequence of decimal numbers, each with optional fraction and a unit suffix, such as "300ms", "-1.5h" or "2h45m". Valid time units are "ns", "us" (or "µs"), "ms", "s", "m", "h".
 
 Help Output:
@@ -264,14 +266,3 @@ Global Flags:
       --workingDirectory string    the working directory path for zfsbackup. (default "~/.zfsbackup")
       --zfsPath string             the path to the zfs executable. (default "zfs")
 ```
-
-## TODOs
-
-- Make PGP cipher configurable.
-- Refactor
-- Test Coverage
-- Add more backends
-- Add delete feature
-- Appease linters
-- Track intermediary snaps as part of backup jobs
-- Parity archives?
