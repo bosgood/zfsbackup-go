@@ -27,6 +27,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"strconv"
@@ -516,10 +517,21 @@ func (a *AWSS3Backend) Download(ctx context.Context, key string) (io.ReadCloser,
 		Key:    aws.String(a.prefix + key),
 	})
 	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok && aerr.Code() == s3.ErrCodeNoSuchKey {
+			return nil, &notFoundError{err}
+		}
 		return nil, err
 	}
 	return resp.Body, nil
 }
+
+// notFoundError is a backend error for an object that is not there. It is fs.ErrNotExist, so
+// receive fails at once instead of retrying the download, and it prints the backend's message.
+type notFoundError struct{ err error }
+
+func (e *notFoundError) Error() string        { return e.err.Error() }
+func (e *notFoundError) Unwrap() error        { return e.err }
+func (e *notFoundError) Is(target error) bool { return target == fs.ErrNotExist }
 
 // Close will release any resources used by the AWS S3 backend.
 func (a *AWSS3Backend) Close() error {
