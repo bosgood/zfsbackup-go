@@ -30,7 +30,8 @@ import (
 
 // A send whose manifest would be longer than files.MaxManifestBytes fails, says to use a larger
 // --volsize, and publishes no manifest: a manifest no reader accepts would lock every reader out
-// of the destination (docs/specs/2026-10-10--high-risk-review/findings.md, Item 2).
+// of the destination (docs/specs/2026-10-10--high-risk-review/findings.md, Item 2). zfs's
+// estimate of the stream tells before the send starts, so no volume is uploaded either.
 func TestE2ESendRefusesManifestOverLimit(t *testing.T) {
 	env := newE2EEnv(t)
 	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
@@ -48,7 +49,14 @@ func TestE2ESendRefusesManifestOverLimit(t *testing.T) {
 	if !strings.Contains(logs, "--volsize") {
 		t.Errorf("the log does not say to use a larger --volsize: %v\n%s", err, logs)
 	}
-	if names := manifestNames(destObjects(t, env.dest)); len(names) != 0 {
-		t.Errorf("the failed send published a manifest: %q", names)
+	if !strings.Contains(logs, "zfs estimates the stream") {
+		t.Errorf("the send was not refused before it started: %v\n%s", err, logs)
+	}
+	if objects := destObjects(t, env.dest); len(objects) != 0 {
+		names := make([]string, 0, len(objects))
+		for name := range objects {
+			names = append(names, name)
+		}
+		t.Errorf("the refused send uploaded %q", names)
 	}
 }

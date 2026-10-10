@@ -104,7 +104,8 @@ func writeManifestOf(t *testing.T, j *JobInfo) string {
 	return path
 }
 
-// setManifestLimit lowers MaxManifestBytes for the test.
+// setManifestLimit lowers MaxManifestBytes for the test and restores it after. The limit is a package
+// variable: a test that calls this must not call t.Parallel.
 func setManifestLimit(t *testing.T, limit int) {
 	t.Helper()
 	old := MaxManifestBytes

@@ -13,6 +13,7 @@ Diagrams 3, 4, 5 in [../architecture.md](../architecture.md).
    - `prepareBackend` + `getCacheDir` per destination.
    - Take the lock `workdir/locks/md5(dataset).lck`. Busy means another `send` or `clean` runs on this host.
    - `refuseExistingSet`: manifest already at all destinations → error. At some → needs `--resume` or `CompletePartial`, then `copyManifest` verifies volume sizes + SHA-256 and uploads only the manifest.
+   - `checkManifestFits`: `zfs send -n -P` estimate ÷ volsize → manifest bytes (`manifestCost`). Over `files.MaxManifestBytes` → error that names the smallest `--volsize` that fits, before any upload. No estimate → warning, go on (`saveManifest` still refuses at the limit).
    - `--resume` → `tryResume` keeps volumes already at every destination. Else `discardPartialManifests`.
    - `validateSnapShotExists`, then run the pipeline.
 
@@ -46,7 +47,7 @@ All stages are goroutines in one `errgroup`. Any failure cancels `ctx`. No final
 - `zfs send` stdout → `sendStream`: SHA-256 of the whole stream (for resume), cut at `volsize − 50 KiB` with `CreateBackupVolume`.
 - Forwarder → `retryUploadChainer` per destination. **Chain, not fan-out**: dest 2 gets a volume after dest 1 uploads it. `MaxParallelUploads` workers, exponential backoff.
 - `delete://` backend is the last link. It removes the temp file when every real destination has the volume. Only when `--maxFileBuffer > 0`.
-- Finisher appends to `jobInfo.Volumes`, saves a partial manifest to the local cache, releases a `fileBuffer` token.
+- Finisher appends to `jobInfo.Volumes`, saves a partial manifest to the local cache, releases a `fileBuffer` token. Each save encodes the WHOLE manifest, so the cost per volume grows with the volume count.
 - The final manifest goes through the same chain last. A set is complete only when its manifest is at the destination.
 - `--maxFileBuffer 0` uses pipes. Then only one destination is allowed and a failed upload cannot retry.
 

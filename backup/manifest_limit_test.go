@@ -20,17 +20,23 @@
 package backup
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/someone1/zfsbackup-go/files"
 )
 
-// setManifestLimit lowers files.MaxManifestBytes for the test.
+// setManifestLimit lowers files.MaxManifestBytes for the test and restores it after. The limit is a package
+// variable: a test that calls this must not call t.Parallel.
 func setManifestLimit(t *testing.T, limit int) {
 	t.Helper()
 	old := files.MaxManifestBytes
@@ -116,4 +122,33 @@ func TestSaveManifestRefusesOverLimit(t *testing.T) {
 		t.Fatalf("under the limit: %v", err)
 	}
 	_ = manifest.DeleteVolume()
+}
+
+// The estimate checkManifestFits refuses a send by is counted high, but not by much: it is at
+// least the JSON a send writes for the same volumes, and within a few percent of it.
+func TestManifestCostCountsHigh(t *testing.T) {
+	set := &files.JobInfo{VolumeName: "tank/data", BaseSnapshot: files.SnapshotInfo{Name: "a", CreationTime: time.Now()},
+		ManifestPrefix: "manifests", Separator: "|", Compressor: files.InternalCompressor, VolumeSize: 200, StartTime: time.Now()}
+	const volumes, volumeBytes = 2000, 200<<20 - 50<<10
+	base, perVolume, err := manifestCost(set, volumes, volumeBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := int64(1); i <= volumes; i++ {
+		sum := sha256.Sum256([]byte{byte(i)})
+		set.Volumes = append(set.Volumes, &files.VolumeInfo{
+			ObjectName: set.BackupVolumeObjectName(i), VolumeNumber: i,
+			SHA256Sum: hex.EncodeToString(sum[:]), MD5Sum: hex.EncodeToString(sum[:16]), CRC32CSum32: uint32(i) << 20,
+			Size: volumeBytes, ZFSStreamBytes: volumeBytes, StreamSHA256: hex.EncodeToString(sum[:]),
+			CreateTime: time.Now(), CloseTime: time.Now(),
+		})
+	}
+	var buf bytes.Buffer
+	if err = json.NewEncoder(&buf).Encode(set); err != nil {
+		t.Fatal(err)
+	}
+	estimate, actual := base+perVolume*volumes, uint64(buf.Len())
+	if estimate < actual || estimate > actual+actual/20 {
+		t.Errorf("estimated %d bytes of manifest for %d volumes, a send writes %d", estimate, volumes, actual)
+	}
 }

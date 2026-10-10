@@ -472,6 +472,10 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	if done, err := refuseExistingSet(ctx, jobInfo, dests); err != nil || done {
 		return err
 	}
+	// Before anything touches the cache or the destinations.
+	if err := checkManifestFits(ctx, jobInfo); err != nil {
+		return err
+	}
 
 	if jobInfo.Resume {
 		if done, err := tryResume(ctx, jobInfo, dests); err != nil || done {
@@ -1066,6 +1070,75 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 	n, err := c.w.Write(p)
 	c.n += int64(n)
 	return n, err
+}
+
+// checkManifestFits refuses a send whose manifest would be over files.MaxManifestBytes, before
+// any volume is uploaded: saveManifest refuses it too, but only once the volumes over the limit
+// are uploaded, and those are then orphans. zfs estimates the stream before --compressor and
+// encryption, so with compression the count of volumes, and so the refusal, may be too high.
+// A send whose stream zfs cannot estimate goes on; saveManifest is the last check.
+func checkManifestFits(ctx context.Context, j *files.JobInfo) error {
+	streamBytes, err := zfs.GetZFSSendDryRun(ctx, j)
+	if err != nil {
+		log.AppLogger.Warningf(
+			"Could not estimate the size of the zfs stream (%v); if the manifest grows over %d MiB, the send fails after it uploads the volumes.",
+			err, files.MaxManifestBytes>>20,
+		)
+		return nil
+	}
+	// sendStream starts a new volume 50 KiB before --volsize.
+	volumeBytes := j.VolumeSize*humanize.MiByte - 50*humanize.KiByte
+	volumes := streamBytes/volumeBytes + 1
+	base, perVolume, err := manifestCost(j, volumes, volumeBytes)
+	if err != nil {
+		return err
+	}
+	if estimate := base + perVolume*volumes; estimate <= uint64(files.MaxManifestBytes) {
+		return nil
+	}
+	// The smallest --volsize (in MiB) whose manifest fits.
+	maxVolumes := (uint64(files.MaxManifestBytes) - min(base, uint64(files.MaxManifestBytes))) / perVolume
+	minVolSize := (streamBytes/(max(maxVolumes, 2)-1)+50*humanize.KiByte)/humanize.MiByte + 1
+	err = fmt.Errorf(
+		"zfs estimates the stream of %s at %s: some %d volumes at --volsize %d, and some %d MiB of manifest, "+
+			"more than the %d MiB a reader accepts; send with a --volsize of at least %d",
+		j.ManifestObjectName(), humanize.IBytes(streamBytes), volumes, j.VolumeSize,
+		(base+perVolume*volumes)>>20, files.MaxManifestBytes>>20, minVolSize,
+	)
+	log.AppLogger.Errorf("%v.", err)
+	return err
+}
+
+// manifestCost returns the bytes of JSON that the manifest of j takes without volumes, and that
+// each of volumes volumes of volumeBytes adds to it, counted high: every sum and time is filled
+// and every volume number has as many digits as the last one.
+func manifestCost(j *files.JobInfo, volumes, volumeBytes uint64) (base, perVolume uint64, err error) {
+	manifestmutex.Lock()
+	empty := *j
+	manifestmutex.Unlock()
+	empty.Volumes = nil
+	data, err := json.Marshal(&empty)
+	if err != nil {
+		return 0, 0, err
+	}
+	base = uint64(len(data)) + 1 // Encode's newline
+	now := time.Now()
+	data, err = json.Marshal(&files.VolumeInfo{
+		ObjectName:     j.BackupVolumeObjectName(int64(volumes)),
+		VolumeNumber:   int64(volumes),
+		SHA256Sum:      strings.Repeat("f", 2*sha256.Size),
+		MD5Sum:         strings.Repeat("f", 2*md5.Size),
+		CRC32CSum32:    ^uint32(0),
+		Size:           volumeBytes,
+		ZFSStreamBytes: volumeBytes,
+		StreamSHA256:   strings.Repeat("f", 2*sha256.Size),
+		CreateTime:     now,
+		CloseTime:      now,
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return base, uint64(len(data)) + 1, nil // "," between volumes
 }
 
 // nolint:funlen,gocyclo // Difficult to break this apart

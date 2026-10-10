@@ -92,7 +92,8 @@ func TestE2ERefusesToOverwrite(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return strings.Count("\n"+string(data), "\nsend ")
+		// Streams only: a send estimates its stream with `zfs send -n -P` first.
+		return strings.Count("\n"+string(data), "\nsend ") - strings.Count("\n"+string(data), "\nsend -n -P ")
 	}
 	sends := zfsSends()
 	if sends != 1 {

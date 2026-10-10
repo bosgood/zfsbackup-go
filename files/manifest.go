@@ -34,7 +34,11 @@ import (
 // and a reader allocates about three times this much for one at the limit. A send records some
 // 520 bytes of JSON per volume, so the limit is about 2 million volumes: one send of 400 TiB at
 // the default --volsize of 200 MiB, or of 100 TiB at --volsize 50. (The old limit of 64 MiB was
-// 128,558 volumes, 24.5 TiB at the default --volsize.) A variable so tests can lower it.
+// 128,558 volumes, 24.5 TiB at the default --volsize.) A send of that many volumes is slow before
+// it gets there: it writes the whole manifest to the cache after each volume.
+//
+// A variable only so tests can lower it. A test that changes it must restore it (t.Cleanup) and
+// must not run in parallel (t.Parallel) with any test that sends or reads a manifest.
 var MaxManifestBytes = 1 << 30
 
 // MaxManifestVolumes is the most volumes a manifest may list. Each volume a send records takes
