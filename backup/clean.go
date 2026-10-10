@@ -80,6 +80,9 @@ type cleanManifest struct {
 	object   string         // its name at the destination; "" for a manifest only in the cache
 	path     string         // its copy in the cache
 	manifest *files.JobInfo // nil when it could not be read
+	// foreign marks a local-only manifest cached under another name than it has with this
+	// --manifestPrefix: the state of another job that shares the destination, not of this one.
+	foreign bool
 }
 
 // cleanView is what clean reads from a destination and its manifest cache.
@@ -87,7 +90,7 @@ type cleanView struct {
 	manifests  []cleanManifest // of the manifests at the destination
 	localOnly  []cleanManifest // of the manifests only in the cache
 	allObjects []string
-	datasets   map[string]bool // of every decoded manifest, local-only included
+	datasets   map[string]bool // of every decoded manifest, local-only included, foreign excluded
 }
 
 // readForClean syncs the cache of the destination at backend, lists it and decodes its manifests.
@@ -125,7 +128,8 @@ func readForClean(
 	// Local-only manifests are the cached state of sends that never finished (or whose
 	// destination copy is gone). Decode them: their datasets are locked, and without
 	// --cleanLocal their volumes are protected as live. Under --cleanLocal an undecodable one
-	// cannot be matched to a lock, so it is deleted as before.
+	// cannot be matched to a lock, so it is deleted as before. One cached under another
+	// --manifestPrefix belongs to another job: its volumes are protected, and it is never deleted.
 	view.localOnly = make([]cleanManifest, 0, len(localOnlyFiles))
 	for _, manifest := range localOnlyFiles {
 		manifestPath := filepath.Join(localCachePath, manifest)
@@ -143,10 +147,13 @@ func readForClean(
 		if oerr != nil {
 			log.AppLogger.Warningf("Could not read local manifest %s due to error - %v; --cleanLocal deletes it.", manifestPath, oerr)
 			decodedManifest = nil
-		} else {
+		}
+		foreign := decodedManifest != nil &&
+			cachedManifestName(decodedManifest.StoredManifestObjectName(jobInfo.ManifestPrefix)) != manifest
+		if decodedManifest != nil && !foreign {
 			view.datasets[decodedManifest.VolumeName] = true
 		}
-		view.localOnly = append(view.localOnly, cleanManifest{path: manifestPath, manifest: decodedManifest})
+		view.localOnly = append(view.localOnly, cleanManifest{path: manifestPath, manifest: decodedManifest, foreign: foreign})
 	}
 	return view, nil
 }
@@ -154,9 +161,17 @@ func readForClean(
 // cleanReadRounds is how many times clean reads the destination before giving up on it settling.
 const cleanReadRounds = 3
 
-// Clean will remove files found in the desination that are not found in any of the manifests found locally or in the destination.
-// If cleanLocal is true, then local manifests not found in the destination are ignored and deleted. This function will optionally
-// delete broken backup sets in the destination if the --force flag is provided.
+// Clean deletes the backup volumes at the destination that no manifest lists, for the datasets
+// that have manifests there or in the cache. It deletes only objects that parse as backup volumes,
+// never a manifest, and refuses a destination that lists no manifests under jobInfo.ManifestPrefix
+// but holds objects. It holds the send lock of every dataset it judges; a dataset whose lock a
+// send holds is left alone, cached manifest included.
+//
+// Cached manifests not at the destination (local-only) are the state of interrupted sends: they
+// keep their volumes, unless cleanLocal is true, which deletes them and their volumes. One cached
+// under another manifest prefix is never deleted. jobInfo.Force also deletes broken backup sets
+// at the destination (manifest included), but never a local-only manifest. With dryRun, Clean
+// only logs what it would delete.
 // nolint:funlen,gocyclo // Difficult to break this up
 func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool) error {
 	ctx, cancel := context.WithCancel(pctx)
@@ -236,13 +251,25 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	}
 	decodedManifests, localOnlyManifests, allObjects, datasets := view.manifests, view.localOnly, view.allObjects, view.datasets
 
-	// With no manifests at all there is nothing to protect: the URI is almost certainly wrong,
-	// or the manifests are already gone. Either way, a bulk delete must not be one command away.
-	if len(decodedManifests) == 0 && len(localOnlyManifests) == 0 && len(allObjects) > 0 {
+	manifestPrefix := jobInfo.ManifestPrefix + jobInfo.Separator
+	if jobInfo.Separator == "" {
+		manifestPrefix = jobInfo.ManifestPrefix + files.DefaultSeparator
+	}
+
+	// With no manifests at the destination there is nothing to protect: the URI or
+	// --manifestPrefix is almost certainly wrong, or the manifests are already gone. Either way,
+	// a bulk delete must not be one command away. Cached manifests do not count: with a wrong
+	// prefix every one of them is local-only, and --cleanLocal would delete all their volumes.
+	if len(decodedManifests) == 0 && len(allObjects) > 0 {
 		err = fmt.Errorf(
-			"destination %s holds %d objects but no manifests; refusing to clean. If this is intended, delete the objects manually",
-			backends.RedactURI(target), len(allObjects),
+			"destination %s holds %d objects but no manifests; refusing to clean. No manifest there starts with %q: "+
+				"check --manifestPrefix and --separator. If the manifests are gone on purpose, delete the objects manually",
+			backends.RedactURI(target), len(allObjects), manifestPrefix,
 		)
+		if len(localOnlyManifests) > 0 {
+			err = fmt.Errorf("%w. The %d cached manifests not at the destination are kept, and so are their volumes",
+				err, len(localOnlyManifests))
+		}
 		log.AppLogger.Errorf("%v.", err)
 		return err
 	}
@@ -268,18 +295,30 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 		}
 	}
 
-	if !cleanLocal && len(localOnlyManifests) > 0 {
+	foreign := 0
+	for _, local := range localOnlyManifests {
+		if local.foreign {
+			foreign++
+		}
+	}
+	if foreign > 0 {
+		log.AppLogger.Noticef(
+			"There are %d cached manifests of another --manifestPrefix at this destination; leaving them and their volumes alone.",
+			foreign,
+		)
+	}
+	if !cleanLocal && len(localOnlyManifests) > foreign {
 		// nolint:lll // Long log message
 		log.AppLogger.Noticef(
 			"There are %d local manifests not found in the destination, use --cleanLocal to delete these locally and any of their volumes found in the destination.",
-			len(localOnlyManifests),
+			len(localOnlyManifests)-foreign,
 		)
 	}
 	// Removed only once their volumes are gone: a local manifest is how a later clean finds
 	// volumes a failed delete left behind.
 	var localDeletes []string
 	for _, local := range localOnlyManifests {
-		if !cleanLocal || (local.manifest != nil && busy[local.manifest.VolumeName]) {
+		if !cleanLocal || local.foreign || (local.manifest != nil && busy[local.manifest.VolumeName]) {
 			decodedManifests = append(decodedManifests, local) // live: its volumes stay
 			continue
 		}
@@ -310,10 +349,6 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 				key, backends.RedactURI(target),
 			)
 		}
-	}
-	manifestPrefix := jobInfo.ManifestPrefix + jobInfo.Separator
-	if jobInfo.Separator == "" {
-		manifestPrefix = jobInfo.ManifestPrefix + files.DefaultSeparator
 	}
 	nested := nestedDestinations(allObjects, manifestPrefix)
 	// Every volume a manifest here names is ours, whatever directory it seems to be in: from
@@ -377,8 +412,18 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 				break
 			}
 		}
-		if missing == "" || !jobInfo.Force {
-			if missing != "" {
+		// A local-only manifest kept here is the state of an interrupted send (or of another
+		// job): --force is about broken sets at the destination, and only --cleanLocal deletes it.
+		localOnly := m.object == ""
+		if missing == "" || !jobInfo.Force || localOnly {
+			switch {
+			case missing != "" && localOnly:
+				log.AppLogger.Noticef(
+					"The local manifest %s is missing volume %s (an interrupted send lists only what it uploaded); "+
+						"--force leaves it alone, --cleanLocal deletes it.",
+					m.path, missing,
+				)
+			case missing != "":
 				// Broken backup set! inform the user!
 				log.AppLogger.Warningf(
 					"The following backup set is missing volume %s:\n\n%s\n\nPass the --force flag to delete this backup set.",
@@ -397,40 +442,38 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 			"The following backup set is missing volume %s. Removing entire backupset:\n\n%s",
 			missing, manifest.String(),
 		)
-		if m.object != "" {
-			forcedManifests = append(forcedManifests, m.object)
-		}
+		forcedManifests = append(forcedManifests, m.object)
 		if dryRun {
 			log.AppLogger.Noticef("Would delete local cached manifest %s.", m.path)
 		} else {
 			localDeletes = append(localDeletes, m.path)
 		}
 	}
-	allObjects = make([]string, 0, len(candidates)+len(forcedManifests))
+	deletes := make([]string, 0, len(candidates)+len(forcedManifests))
 	for _, obj := range candidates {
 		if !keep[obj] {
-			allObjects = append(allObjects, obj)
+			deletes = append(deletes, obj)
 		}
 	}
-	allObjects = append(allObjects, forcedManifests...)
+	deletes = append(deletes, forcedManifests...)
 
 	if dryRun {
-		log.AppLogger.Noticef("Dry-run: would delete %d objects in destination.", len(allObjects))
-		for _, obj := range allObjects {
+		log.AppLogger.Noticef("Dry-run: would delete %d objects in destination.", len(deletes))
+		for _, obj := range deletes {
 			log.AppLogger.Noticef("Would delete %s.", joinURI(target, obj))
 		}
 		log.AppLogger.Noticef("Done.")
 		return nil
 	}
 
-	log.AppLogger.Noticef("Starting to delete %d objects in destination.", len(allObjects))
+	log.AppLogger.Noticef("Starting to delete %d objects in destination.", len(deletes))
 
-	// Whatever is left in allObjects was not found in any manifest, delete 'em
+	// Whatever is left in deletes was not found in any manifest, delete 'em
 	var group *errgroup.Group
 	group, ctx = errgroup.WithContext(ctx)
 
-	deleteChan := make(chan string, len(allObjects))
-	for _, obj := range allObjects {
+	deleteChan := make(chan string, len(deletes))
+	for _, obj := range deletes {
 		deleteChan <- obj
 	}
 	close(deleteChan)
@@ -467,7 +510,7 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 		})
 	}
 
-	log.AppLogger.Debugf("Waiting to delete %d objects in destination.", len(allObjects))
+	log.AppLogger.Debugf("Waiting to delete %d objects in destination.", len(deletes))
 	err = group.Wait()
 	if err != nil {
 		log.AppLogger.Errorf("Could not finish clean operation due to error, aborting: %v", err)

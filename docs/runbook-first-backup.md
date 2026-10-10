@@ -118,8 +118,21 @@ For a capture without creation times, such as
 from the snapshot names, read in that zone. Sanoid takes its snapshots seconds
 after the time in the name, and the manifests at the destination record that
 real time, so against a destination `plan` adopts the manifests' times for
-snapshots it finds there and says so at Warning. To plan exactly what `send`
-will do, use the capture command of step 1, which records `creation`.
+snapshots it finds there and says so at Warning. It adopts a time only when
+it is at most 10 minutes after the time in the name and every destination
+records the same one; otherwise (another host's snapshot of that name, a wrong
+clock, names read in the wrong zone, destinations that disagree) the snapshot
+keeps its name time and `plan` warns. To plan exactly what `send` will do, use
+the capture command of step 1, which records `creation`. In the hour the
+clocks fall back, sanoid's local-time names repeat; only the first snapshot of
+such a name can exist, and a name-dated capture reads it as that one.
+
+`send` and `plan` stop with "last backup newer than the pool" (exit 2) when a
+destination's last backup is dated after every snapshot on the pool: another
+host writing the same prefix, a pool or capture older than the destination (a
+`zfs rollback`, a stale `--snapshots` capture), or a wrong clock. A `from=`
+earlier than the destination's last backup is not such a case: the simulated
+runs before it see the snapshots the destination holds.
 `plan` refuses a `--snapshots` listing of another dataset.
 
 ## 2. Review a year of runs
@@ -211,10 +224,13 @@ host: do not run `clean` against a destination while another machine is sending
 to it. If it warns that a key `looks like a backup volume written by an older
 version`, that volume sits outside the destination's prefix and has to be
 deleted by hand. It refuses to run against a destination that has objects but no
-manifests at all, which usually means a wrong URI. Only `clean --force` deletes
-whole broken sets, manifest included. The planner ignores a cached manifest that
-is gone from the destination, but `clean` still treats it as live and keeps the
-volumes it lists.
+manifests under `--manifestPrefix`, which usually means a wrong URI or prefix;
+cached manifests do not count, so `--cleanLocal` cannot turn a wrong prefix into
+a bulk delete. Only `clean --force` deletes whole broken sets at the
+destination, manifest included. The planner ignores a cached manifest that is
+gone from the destination, but `clean` (with or without `--force`) still treats
+it as live and keeps the volumes it lists; only `--cleanLocal` deletes it, and
+never one cached under another `--manifestPrefix`.
 
 ## 4. Dry-run the send
 
@@ -362,7 +378,10 @@ With `--signFrom`, every manifest and volume must be signed by `--signFrom`'s
 key. After a switch to a new signing key, everything the old key signed is
 rejected: each smart send fails on the destination's manifests, and a restore
 of a chain that spans the rotation fails at its first old backup. The errors
-end with `pass --trustSigner <fingerprint>`.
+name the signing key's fingerprint. They also warn that someone who can write
+to the destination may have signed the object. Compare the full fingerprint
+with your records of the old key. Pass `--trustSigner <fingerprint>` only if
+the key is yours.
 
 1. Give the new signing key its own address (say `backup-2027@example.com`).
    `--signFrom` takes the first key in the ring with its address, so two

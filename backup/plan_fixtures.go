@@ -53,6 +53,9 @@ type Scenario struct {
 	// their sanoid names for want of a creation column (see zfs.ParseListing).
 	CaptureDataset string
 	NameDated      []string
+	// AdoptionWarnings explains each name-dated snapshot AdoptCreationTimes
+	// left at its name time although a manifest names it.
+	AdoptionWarnings []string
 	// Completable says a set missing at some destinations may be completed
 	// there (see PartialSetCompletable); plan sets it from the destinations.
 	Completable bool
@@ -256,22 +259,37 @@ func (s *Scenario) sortSnapshotsNewestFirst() {
 	})
 }
 
+// adoptWindow is how long after the time in its name a snapshot may have been
+// created and still take a manifest's creation time. Sanoid reads the clock
+// once per run, names every snapshot of that run with it and then takes them
+// one by one: the captured pool shows seconds, a run over many datasets on a
+// busy pool may take minutes. snapshot-delay= needs no allowance, as the name
+// carries the delay too.
+const adoptWindow = 10 * time.Minute
+
 // AdoptCreationTimes dates the name-dated snapshots (NameDated) from the
 // backups at the destinations: a snapshot that some manifest names, as its
 // base or its source, takes the creation time recorded there. send compares
 // snapshots by name and creation time, so without this a snapshot dated from
 // its name looks pruned next to its own backup, which was taken seconds later.
-// It returns how many snapshots changed. Call it after DestBackups are set.
+//
+// A recorded time is taken only when it can be the snapshot's own: at or up to
+// adoptWindow after its name time, and the same at every destination. Any
+// other time (another host's snapshot of that name, a forged manifest, a wrong
+// clock, names read in the wrong zone) would hide what send reports against
+// the live pool, so the snapshot keeps its name time and AdoptionWarnings says
+// why. It returns how many snapshots changed. Call it after DestBackups are set.
 func (s *Scenario) AdoptCreationTimes() int {
+	s.AdoptionWarnings = nil
 	if len(s.NameDated) == 0 {
 		return 0
 	}
-	recorded := make(map[string]time.Time)
+	recorded := make(map[string][]time.Time)
 	for _, dest := range s.DestBackups {
 		for _, m := range dest {
 			for _, snap := range []files.SnapshotInfo{m.BaseSnapshot, m.IncrementalSnapshot} {
-				if snap.Name != "" {
-					recorded[snap.Name] = snap.CreationTime
+				if snap.Name != "" && !containsTime(recorded[snap.Name], snap.CreationTime) {
+					recorded[snap.Name] = append(recorded[snap.Name], snap.CreationTime)
 				}
 			}
 		}
@@ -283,7 +301,26 @@ func (s *Scenario) AdoptCreationTimes() int {
 	adopted := 0
 	for i := range s.Snapshots {
 		snap := &s.Snapshots[i]
-		if t, ok := recorded[snap.Name]; ok && nameDated[snap.Name] && !t.Equal(snap.CreationTime) {
+		times := recorded[snap.Name]
+		if len(times) == 0 || !nameDated[snap.Name] {
+			continue
+		}
+		if len(times) > 1 {
+			sort.Slice(times, func(a, b int) bool { return times[a].Before(times[b]) })
+			s.AdoptionWarnings = append(s.AdoptionWarnings, fmt.Sprintf(
+				"the destinations disagree on when %s was created (%s): kept the time in its name",
+				snap.Name, formatTimes(times)))
+			continue
+		}
+		t := times[0]
+		if lag := t.Sub(snap.CreationTime); lag < 0 || lag > adoptWindow {
+			s.AdoptionWarnings = append(s.AdoptionWarnings, fmt.Sprintf(
+				"the destination records %s as created %s, not within %v after the time in its name, %s: "+
+					"kept the time in its name (another host's snapshot, a wrong clock, or names read in the wrong zone?)",
+				snap.Name, t.UTC().Format(time.RFC3339), adoptWindow, snap.CreationTime.UTC().Format(time.RFC3339)))
+			continue
+		}
+		if !t.Equal(snap.CreationTime) {
 			snap.CreationTime = t.In(s.location())
 			adopted++
 		}
@@ -292,6 +329,23 @@ func (s *Scenario) AdoptCreationTimes() int {
 		s.sortSnapshotsNewestFirst()
 	}
 	return adopted
+}
+
+func containsTime(times []time.Time, t time.Time) bool {
+	for _, have := range times {
+		if have.Equal(t) {
+			return true
+		}
+	}
+	return false
+}
+
+func formatTimes(times []time.Time) string {
+	out := make([]string, len(times))
+	for i, t := range times {
+		out[i] = t.UTC().Format(time.RFC3339)
+	}
+	return strings.Join(out, ", ")
 }
 
 // ReadManifests sets what the destinations already hold. Each line is one
@@ -392,9 +446,13 @@ func (s *Scenario) Zone() *time.Location {
 	return s.location()
 }
 
+// HostZone is the zone a Scenario without location= uses: the host's, where sanoid runs. Tests
+// set it instead of time.Local, which the runtime's timers read from other goroutines.
+var HostZone = time.Local
+
 func (s *Scenario) location() *time.Location {
 	if s.Location == nil {
-		return time.Local
+		return HostZone
 	}
 	return s.Location
 }
@@ -540,7 +598,7 @@ func (s *Scenario) parseSkip(value string) (TimeRange, error) {
 	}
 	r.From = from
 	if dateOnly {
-		r.Until = until.AddDate(0, 0, 1)
+		r.Until = wallClock(until.Year(), until.Month(), until.Day()+1, 0, 0, 0, 0, s.location())
 	} else {
 		r.Until = until.Add(time.Nanosecond)
 	}
@@ -560,11 +618,16 @@ func (s *Scenario) parseTimeDetail(value string) (t time.Time, dateOnly bool, er
 	if t, err = time.Parse(time.RFC3339, value); err == nil {
 		return t.In(s.location()), false, nil
 	}
-	if t, err = time.ParseInLocation("2006-01-02T15:04:05", value, s.location()); err == nil {
-		return t, false, nil
+	// Parse the wall clock, then place it in location the way cron would (see
+	// wallClock): a time in the spring-forward gap is after the jump.
+	inZone := func(t time.Time) time.Time {
+		return wallClock(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), s.location())
 	}
-	if t, err = time.ParseInLocation("2006-01-02", value, s.location()); err == nil {
-		return t, true, nil
+	if t, err = time.Parse("2006-01-02T15:04:05", value); err == nil {
+		return inZone(t), false, nil
+	}
+	if t, err = time.Parse("2006-01-02", value); err == nil {
+		return inZone(t), true, nil
 	}
 	return time.Time{}, false, errors.New("want RFC 3339, such as 2026-09-24T01:00:00Z")
 }

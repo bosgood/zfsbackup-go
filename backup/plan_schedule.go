@@ -157,13 +157,28 @@ func (s *Schedule) Advance(snaps []files.SnapshotInfo, from, to time.Time) (pool
 		}
 	}
 
+	// Sanoid names a snapshot by the local time it takes it. When the clocks
+	// fall back, the hour from 01:00 repeats and so would the names of its
+	// hourlies. ZFS refuses a second snapshot of an existing name, so only the
+	// first instance exists, whether sanoid tries the second and fails or sees
+	// the first as recent enough. zfs.SnapshotNameTime reads such a name as
+	// that first instance too.
+	names := make(map[string]bool, len(snaps))
+	for _, snap := range snaps {
+		names[snap.Name] = true
+	}
 	for _, b := range boundaries {
 		for i, name := range b.periods {
 			creation := b.at.Add(s.Delay + time.Duration(len(b.periods)-1-i)*s.tieGap)
-			taken = append(taken, files.SnapshotInfo{
+			snap := files.SnapshotInfo{
 				Name:         fmt.Sprintf("autosnap_%s_%s", creation.In(s.location()).Format(zfs.SanoidTimeLayout), name),
 				CreationTime: creation,
-			})
+			}
+			if names[snap.Name] {
+				continue
+			}
+			names[snap.Name] = true
+			taken = append(taken, snap)
 		}
 	}
 	newestFirst := func(snaps []files.SnapshotInfo) {

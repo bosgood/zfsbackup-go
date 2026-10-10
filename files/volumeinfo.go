@@ -175,10 +175,12 @@ func (v *VolumeInfo) signatureError() error {
 		return v.pgpr.SignatureError
 	}
 	if v.pgpr.SignedBy == nil {
-		if len(v.signers) > 0 {
-			return keyErrorf("signed by key %X, whose public key is in neither ring; add it to the public ring and pass --trustSigner to accept it", v.pgpr.SignedByKeyId)
+		if len(v.signers) == 0 {
+			return keyErrorf("signed by key %X, whose public key is in neither ring. %s", v.pgpr.SignedByKeyId,
+				unknownSignerAdvice("add it to the public ring"))
 		}
-		return keyErrorf("signed by key %X, whose public key is in neither ring; add it to the public ring to accept it", v.pgpr.SignedByKeyId)
+		return keyErrorf("signed by key %X, whose public key is in neither ring. %s", v.pgpr.SignedByKeyId,
+			unknownSignerAdvice("add it to the public ring and pass --trustSigner with its fingerprint"))
 	}
 	if len(v.signers) == 0 {
 		return nil
@@ -192,9 +194,20 @@ func (v *VolumeInfo) signatureError() error {
 		want = append(want, fmt.Sprintf("%X", signer.PrimaryKey.Fingerprint))
 	}
 	if len(want) == 1 {
-		return keyErrorf("signed by %X, want %s; if that is a key you rotated away from, pass --trustSigner %X", got, want[0], got)
+		return keyErrorf("signed by %X, want %s. %s", got, want[0],
+			unknownSignerAdvice("pass --trustSigner with its fingerprint"))
 	}
-	return keyErrorf("signed by %X, want one of %s; if that is a key you rotated away from, pass --trustSigner %X", got, strings.Join(want, ", "), got)
+	return keyErrorf("signed by %X, want one of %s. %s", got, strings.Join(want, ", "),
+		unknownSignerAdvice("pass --trustSigner with its fingerprint"))
+}
+
+// unknownSignerAdvice ends the error for a volume signed by a key that was not asked for, with
+// what to do once the key is known to be the user's. It must not tell the user to trust the key on
+// the error's word: anyone who can write the destination can sign an object with a key of their own.
+func unknownSignerAdvice(then string) string {
+	return "It may be a key of yours (one you rotated away from), or the object is not yours: anyone who can " +
+		"write the destination can sign one. Do not trust the key because of this message: compare its full " +
+		"fingerprint with your own records of your keys, and only if it is yours, " + then + "."
 }
 
 // eofReader records whether its reader reached io.EOF.

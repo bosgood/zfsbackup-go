@@ -27,6 +27,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -284,6 +285,9 @@ func (a *AWSS3Backend) Delete(ctx context.Context, key string) error {
 // waits for the restores to finish. AWS_S3_GLACIER_RESTORE_TIER picks the restore tier
 // (default Bulk); AWS_S3_RESTORE_POLL_INTERVAL sets how often a pending restore is polled
 // (a duration, default 1m; the interval grows up to ten times that).
+//
+// A restored copy that expires within restoreExpiryMargin is restored again: S3 then extends its
+// expiry, and the copy is still there when the downloads that follow PreDownload reach it.
 func (a *AWSS3Backend) PreDownload(ctx context.Context, keys []string) error {
 	toRestore := make([]string, 0, len(keys))
 	restoreTier := os.Getenv("AWS_S3_GLACIER_RESTORE_TIER")
@@ -304,17 +308,24 @@ func (a *AWSS3Backend) PreDownload(ctx context.Context, keys []string) error {
 		if !needsRestore(resp) {
 			continue
 		}
-		if restored(resp) {
+		// extend: a restored copy that expires soon. It stays readable while S3 extends it, so
+		// there is nothing to wait for.
+		extend := restored(resp)
+		switch {
+		case extend && !restoreExpiresBefore(resp.Restore, time.Now().Add(restoreExpiryMargin)):
 			log.AppLogger.Debugf("s3 backend: key %s is in the %s storage class and already restored.", key, *resp.StorageClass)
 			continue
+		case extend:
+			log.AppLogger.Debugf("s3 backend: the restored copy of key %s expires soon; extending it.", key)
+		default:
+			bytesToRestore += aws.Int64Value(resp.ContentLength)
+			toRestore = append(toRestore, key)
+			if restoreInProgress(resp.Restore) {
+				log.AppLogger.Debugf("s3 backend: key %s is already being restored from the %s storage class.", key, *resp.StorageClass)
+				continue
+			}
+			log.AppLogger.Debugf("s3 backend: key %s will be restored from the %s storage class.", key, *resp.StorageClass)
 		}
-		bytesToRestore += aws.Int64Value(resp.ContentLength)
-		toRestore = append(toRestore, key)
-		if restoreInProgress(resp.Restore) {
-			log.AppLogger.Debugf("s3 backend: key %s is already being restored from the %s storage class.", key, *resp.StorageClass)
-			continue
-		}
-		log.AppLogger.Debugf("s3 backend: key %s will be restored from the %s storage class.", key, *resp.StorageClass)
 		request := &s3.RestoreRequest{
 			GlacierJobParameters: &s3.GlacierJobParameters{
 				Tier: aws.String(restoreTier),
@@ -332,6 +343,11 @@ func (a *AWSS3Backend) PreDownload(ctx context.Context, keys []string) error {
 		})
 		if rerr != nil {
 			if aerr, ok := rerr.(awserr.Error); ok && aerr.Code() == "RestoreAlreadyInProgress" {
+				continue
+			}
+			if extend {
+				// The copy is still there; the downloads may yet finish before it expires.
+				log.AppLogger.Warningf("s3 backend: could not extend the restored copy of key %s - %v", key, rerr)
 				continue
 			}
 			log.AppLogger.Debugf("s3 backend: error trying to restore key %s - %v", key, rerr)
@@ -405,6 +421,36 @@ func restoreInProgress(restore *string) bool {
 // No header at all (nil) means no restore was requested, or the request is too new to show.
 func restoreDone(restore *string) bool {
 	return restore != nil && !restoreInProgress(restore)
+}
+
+// restoreExpiryMargin is how long a restored copy must still last for PreDownload to leave it
+// alone. Bulk restores of other objects, and the downloads after them, can take most of a day; a
+// copy expiring sooner is restored again, which extends it by the same days a new restore gets.
+const restoreExpiryMargin = 24 * time.Hour
+
+// restoreExpiresBefore reads the x-amz-restore header of a HEAD response for a restored copy
+// (`ongoing-request="false", expiry-date="Fri, 21 Dec 2012 00:00:00 GMT"`): its expiry-date is
+// before deadline. A header with no expiry-date, or one that does not parse, does not expire.
+func restoreExpiresBefore(restore *string, deadline time.Time) bool {
+	if restore == nil {
+		return false
+	}
+	const field = `expiry-date="`
+	i := strings.Index(*restore, field)
+	if i < 0 {
+		return false
+	}
+	date := (*restore)[i+len(field):]
+	j := strings.IndexByte(date, '"')
+	if j < 0 {
+		return false
+	}
+	expiry, err := http.ParseTime(date[:j])
+	if err != nil {
+		log.AppLogger.Debugf("s3 backend: cannot read the expiry-date of %q - %v", *restore, err)
+		return false
+	}
+	return expiry.Before(deadline)
 }
 
 // restorePollInterval is how long PreDownload waits between polls of a pending restore.

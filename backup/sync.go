@@ -23,10 +23,12 @@ package backup
 import (
 	"context"
 	"crypto/md5" // nolint:gosec // MD5 not used for cryptographic purposes here
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/someone1/zfsbackup-go/backends"
 	"github.com/someone1/zfsbackup-go/config"
@@ -160,7 +162,11 @@ func syncCache(ctx context.Context, j *files.JobInfo, localCache string, backend
 	var localOnlyFiles []string
 	var foundFiles []string
 	for _, file := range manifestFiles {
-		if file.IsDir() || files.IsAtomicTemp(file.Name()) {
+		if files.IsAtomicTemp(file.Name()) && !file.IsDir() {
+			removeStaleTemp(filepath.Join(localCache, file.Name()), file)
+			continue
+		}
+		if file.IsDir() {
 			continue
 		}
 		found := false
@@ -190,13 +196,56 @@ func syncCache(ctx context.Context, j *files.JobInfo, localCache string, backend
 
 		// manifests should only contain what we don't have locally
 		for idx, manifest := range manifests {
-			if err := downloadTo(ctx, backend, manifest, filepath.Join(localCache, safeManifests[idx])); err != nil {
+			err := downloadTo(ctx, backend, manifest, filepath.Join(localCache, safeManifests[idx]))
+			if errors.Is(err, errObjectTooLarge) {
+				// Not a manifest. Leave it uncached: only a reader that needs it (it names that
+				// reader's dataset, or the reader needs every manifest) fails on it.
+				continue
+			} else if err != nil {
 				return nil, nil, err
 			}
 		}
 	}
 
 	return atDestination, localOnlyFiles, nil
+}
+
+// staleTempAge is how old a temporary file of WriteFileAtomic in the cache must be before
+// syncCache removes it. A write in progress (a send on this host caching its manifest, a download)
+// keeps its file's modification time fresh; one left by a kill does not.
+const staleTempAge = 24 * time.Hour
+
+// removeStaleTemp removes the temporary file path, entry in the cache, if it is older than
+// staleTempAge.
+func removeStaleTemp(path string, entry os.DirEntry) {
+	info, err := entry.Info()
+	if err != nil || time.Since(info.ModTime()) < staleTempAge {
+		return
+	}
+	if err = os.Remove(path); err != nil && !os.IsNotExist(err) {
+		log.AppLogger.Warningf("Could not remove %s, left in the cache by an interrupted write: %v", path, err)
+		return
+	}
+	log.AppLogger.Infof("Removed %s, left in the cache by an interrupted write.", path)
+}
+
+// manifestMayBeFor returns false when objectName, a manifest under manifestPrefix, is certainly
+// not a manifest of volume: its name is not "<prefix><sep><volume><sep>..." for any separator.
+// The name of every manifest must be the one its contents give it (manifestNamed), so readers that
+// need only volume's manifests skip the others without decoding them, and an object someone else
+// put at the destination under another dataset's name cannot stop them.
+func manifestMayBeFor(objectName, manifestPrefix, volume string) bool {
+	rest, ok := strings.CutPrefix(objectName, manifestPrefix)
+	if !ok {
+		return true
+	}
+	for i := 1; i+len(volume) <= len(rest); i++ {
+		sep := rest[:i]
+		if strings.HasPrefix(rest[i:], volume) && strings.HasPrefix(rest[i+len(volume):], sep) {
+			return true
+		}
+	}
+	return false
 }
 
 // isManifestObject returns whether name, listed by manifestPrefix, is a manifest rather than an
@@ -247,16 +296,34 @@ func readCachedManifest(
 		return nil, err
 	}
 	if err = downloadTo(ctx, backend, objectName, path); err != nil {
+		if errors.Is(err, errObjectTooLarge) {
+			return nil, unreadableManifestError(objectName, err)
+		}
 		return nil, err
 	}
 	if manifest, err = readManifest(ctx, path, j); err == nil {
 		err = manifestNamed(j, manifest, objectName)
 	}
 	if err != nil {
-		log.AppLogger.Errorf("Could not read manifest %s, freshly downloaded to %s, due to error - %v", objectName, path, err)
-		return nil, err
+		// Keep no copy: the next run reads the destination's object again, which may be fixed by then.
+		if rerr := os.Remove(path); rerr != nil {
+			log.AppLogger.Warningf("Could not remove %s from the cache: %v", path, rerr)
+		}
+		return nil, unreadableManifestError(objectName, err)
 	}
 	return manifest, nil
+}
+
+// unreadableManifestError is the error for the object objectName under the manifest prefix that
+// is not a manifest this run can accept. It names the object, and says how to get rid of it.
+func unreadableManifestError(objectName string, err error) error {
+	err = fmt.Errorf(
+		"could not read the manifest %s at the destination: %w. If you did not write it (it is not a backup "+
+			"of yours, or someone else put it there), delete that object from the destination, then run again",
+		objectName, err,
+	)
+	log.AppLogger.Errorf("%v", err)
+	return err
 }
 
 // manifestNamed returns an error unless manifest, read from the object objectName, is the

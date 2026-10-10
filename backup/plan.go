@@ -276,7 +276,8 @@ func planSmartSnapshots(
 // checkLastBackupsOnPool fails with ErrLastBackupInFuture when a destination's last backup is
 // dated after every snapshot on the pool and is not on it: no snapshot would ever look newer, so
 // every run would quietly send nothing. Another host writing the same prefix and dataset name, a
-// forged manifest or a wrong clock leaves such a backup. snapshots is newest-first.
+// forged manifest or a wrong clock leaves such a backup; so does a pool or capture older than the
+// destination (a zfs rollback, a stale --snapshots capture). snapshots is newest-first.
 func checkLastBackupsOnPool(volume string, snapshots []files.SnapshotInfo, lastBackup []*files.SnapshotInfo) error {
 	for idx, last := range lastBackup {
 		if last == nil || !last.CreationTime.After(snapshots[0].CreationTime) {
@@ -291,7 +292,8 @@ func checkLastBackupsOnPool(volume string, snapshots []files.SnapshotInfo, lastB
 		}
 		return fmt.Errorf(
 			"%w: %s last backup of %s is %s, dated %s, after every snapshot on the pool; "+
-				"is another host writing this prefix, or was the clock wrong?",
+				"is another host writing this prefix, is the pool or capture older than the destination "+
+				"(a zfs rollback, a stale --snapshots capture), or was the clock wrong?",
 			ErrLastBackupInFuture, dest, volume, last.Name, last.CreationTime.UTC().Format(time.RFC3339),
 		)
 	}
@@ -364,7 +366,7 @@ func (s *Scenario) Run() *Simulation {
 		if s.skipped(at) {
 			continue // the host was down: sanoid still ran, the cron job did not
 		}
-		sim.Steps = append(sim.Steps, s.run(at, visibleAt(snapshots, at), dest))
+		sim.Steps = append(sim.Steps, s.run(at, visibleAt(snapshots, at, dest), dest))
 	}
 	sim.Manifests = dest
 	return sim
@@ -381,13 +383,37 @@ func (s *Scenario) skipped(at time.Time) bool {
 }
 
 // visibleAt drops the snapshots created after at from a newest-first list: a
-// run cannot see them yet (from= may be earlier than the newest snapshot).
-func visibleAt(snapshots []files.SnapshotInfo, at time.Time) []files.SnapshotInfo {
+// run cannot see them yet (from= may be earlier than the newest snapshot). It
+// keeps those a destination already holds a backup of or from: the backup
+// says the pool had them by then, and without them a from= earlier than the
+// last backup would read that backup as one from the future.
+func visibleAt(snapshots []files.SnapshotInfo, at time.Time, dest [][]*files.JobInfo) []files.SnapshotInfo {
 	i := 0
 	for i < len(snapshots) && snapshots[i].CreationTime.After(at) {
 		i++
 	}
-	return snapshots[i:]
+	if i == 0 {
+		return snapshots
+	}
+	var visible []files.SnapshotInfo
+	for _, snap := range snapshots[:i] {
+		if backedUp(dest, snap) {
+			visible = append(visible, snap)
+		}
+	}
+	return append(visible, snapshots[i:]...)
+}
+
+// backedUp reports whether a destination holds a backup of or from snap.
+func backedUp(dest [][]*files.JobInfo, snap files.SnapshotInfo) bool {
+	for _, backups := range dest {
+		for _, m := range backups {
+			if m.BaseSnapshot.Equal(&snap) || m.IncrementalSnapshot.Equal(&snap) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // run plans one run and records what it sends at every destination.
@@ -431,13 +457,35 @@ func (s *Scenario) firstRun() time.Time {
 	}
 }
 
-// nextRun steps by Every (default 24h). Whole days are added on the calendar,
-// so a daily run keeps its wall-clock time across DST changes, like cron.
+// nextRun steps by Every (default 24h). Whole days are added on the calendar
+// to the first run's wall-clock time, so a daily run keeps that time across
+// DST changes, like cron. Stepping from the previous run instead would keep a
+// run moved out of the spring-forward gap at its new time for good.
 func (s *Scenario) nextRun(at time.Time) time.Time {
-	if every := s.every(); every%(24*time.Hour) != 0 {
+	every := s.every()
+	if every%(24*time.Hour) != 0 {
 		return at.Add(every)
 	}
-	return at.In(s.location()).AddDate(0, 0, int(s.every()/(24*time.Hour)))
+	first := s.firstRun().In(s.location())
+	// at is a whole number of days after first, give or take a DST shift.
+	days := int((at.Sub(first)+12*time.Hour)/(24*time.Hour)) + int(every/(24*time.Hour))
+	return wallClock(first.Year(), first.Month(), first.Day()+days,
+		first.Hour(), first.Minute(), first.Second(), first.Nanosecond(), s.location())
+}
+
+// wallClock is time.Date, except that a wall-clock time the spring-forward gap
+// skips (02:30 in New York on the day clocks go from 02:00 to 03:00) is the
+// same time read with the offset before the gap, 03:30 the new time: after the
+// jump, as cron runs a job of the skipped hour, never before it. time.Date
+// gives 01:30 there. A time the fall-back hour repeats is its first instance.
+func wallClock(year int, month time.Month, day, hour, minute, sec, nsec int, loc *time.Location) time.Time {
+	t := time.Date(year, month, day, hour, minute, sec, nsec, loc)
+	want := time.Date(year, month, day, hour, minute, sec, nsec, time.UTC)
+	got := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.UTC)
+	if got.Before(want) {
+		t = t.Add(want.Sub(got))
+	}
+	return t
 }
 
 func (s *Scenario) every() time.Duration {

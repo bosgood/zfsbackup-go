@@ -25,8 +25,9 @@ get:
 test:
 	go test ./...
 
+# The root package's e2e tests take about 20 minutes under -race, past go test's 10m default.
 test-race:
-	go test -race ./...
+	go test -race -timeout 45m ./...
 
 # Integration tests are gated behind the `integration` build tag and are NOT
 # run by `test`/`test-race`. They require a host with ZFS (zfs/zpool binaries,
@@ -82,9 +83,10 @@ test-one:
 # `fmt` target above iterates over an undefined DIRS and so checks nothing.
 # Checks every tracked .go file outside vendor/ (so not the tmp/ scratch clones) with the pinned toolchain.
 # Fails if git lists no files: inside a git worktree the .git link points outside the mount.
+# Fails if gofmt does: a file that does not parse is not "formatted".
 fmt-check:
 	docker run --rm -v "$(CURDIR)":/src -w /src $(GO_IMAGE) \
-		sh -c 'files=$$(git -c safe.directory=/src ls-files "*.go" | grep -v ^vendor/); [ -n "$$files" ] || { echo "fmt-check: no .go files listed (a git worktree? its .git link does not resolve in the container)"; exit 1; }; out=$$(echo "$$files" | xargs gofmt -s -l); [ -z "$$out" ] || { echo "$$out"; echo "^ gofmt -s would rewrite these files"; exit 1; }'
+		sh -c 'files=$$(git -c safe.directory=/src ls-files "*.go" | grep -v ^vendor/); [ -n "$$files" ] || { echo "fmt-check: no .go files listed (a git worktree? its .git link does not resolve in the container)"; exit 1; }; out=$$(echo "$$files" | xargs gofmt -s -l) || { echo "$$out"; echo "^ gofmt failed (a file that does not parse?)"; exit 1; }; [ -z "$$out" ] || { echo "$$out"; echo "^ gofmt -s would rewrite these files"; exit 1; }'
 
 build:
 	${GOPATH}/bin/gox -ldflags="-w -s -X github.com/someone1/zfsbackup-go/config.GitCommit=${COMMIT_HASH}" -osarch=${TARGETS}

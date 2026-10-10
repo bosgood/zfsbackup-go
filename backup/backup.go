@@ -251,6 +251,9 @@ func getBackupsForTarget(ctx context.Context, volume, target string, jobInfo *fi
 	// Read in Manifests and display
 	decodedManifests := make([]*files.JobInfo, 0, len(manifests))
 	for _, manifest := range manifests {
+		if !manifestMayBeFor(manifest, jobInfo.ManifestPrefix, volume) {
+			continue
+		}
 		decodedManifest, oerr := readCachedManifest(ctx, jobInfo, localCachePath, backend, manifest)
 		if oerr != nil {
 			return nil, oerr
@@ -314,9 +317,13 @@ func reportDryRun(ctx context.Context, jobInfo *files.JobInfo) error {
 			jobInfo.IncrementalSnapshot.Name, jobInfo.IncrementalSnapshot.CreationTime,
 		)
 	}
+	redacted := make([]string, len(jobInfo.Destinations))
+	for i, d := range jobInfo.Destinations {
+		redacted[i] = backends.RedactURI(d)
+	}
 	log.AppLogger.Noticef(
 		"Dry-run: would upload to %d destination(s): %s",
-		len(jobInfo.Destinations), strings.Join(jobInfo.Destinations, ", "),
+		len(jobInfo.Destinations), strings.Join(redacted, ", "),
 	)
 	log.AppLogger.Noticef("Dry-run: ZFS send command: %s", strings.Join(zfs.GetZFSSendCommand(ctx, jobInfo).Args, " "))
 
@@ -782,6 +789,12 @@ func copyManifest(ctx context.Context, jobInfo *files.JobInfo, destinations []de
 	}
 	tmp.Close()
 	defer os.Remove(tmp.Name())
+	// A lifecycle rule may have moved the manifest to an archive storage class with its volumes;
+	// the cache means nothing else has needed to read it back. As in verifyVolumesAt.
+	if err = destinations[from].backend.PreDownload(ctx, []string{name}); err != nil {
+		log.AppLogger.Errorf("Could not prepare manifest %s at %s for reading due to error - %v", name, destinations[from], err)
+		return err
+	}
 	if err = downloadTo(ctx, destinations[from].backend, name, tmp.Name()); err != nil {
 		return err
 	}
@@ -951,6 +964,9 @@ func cacheFile(dir, name, path string) error {
 	return files.WriteFileAtomic(dir, name, f)
 }
 
+// syncDir is files.SyncDir; tests replace it to see when discardPartialManifests syncs.
+var syncDir = files.SyncDir
+
 // partialManifestCachePath is where the manifest of j's backup set is cached for the destination
 // uri: the file saveManifest writes after each volume and tryResume reads. It is the same file a
 // completed set's manifest is cached under (cachedManifestName), so a finished send leaves no
@@ -972,6 +988,10 @@ func discardPartialManifests(j *files.JobInfo, dests []destination) error {
 		err := os.Remove(path)
 		if os.IsNotExist(err) {
 			continue
+		}
+		if err == nil {
+			// Until the directory is synced, a crash can bring the file back.
+			err = syncDir(filepath.Dir(path))
 		}
 		if err != nil {
 			log.AppLogger.Errorf("Could not discard the cached manifest %s of an earlier attempt at %s - %v", path, name, err)
@@ -1234,7 +1254,8 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 }
 
 // tryResume continues a previous attempt from its cached partial manifest. destinations are the
-// prepared destinations of j.Destinations, in order: every volume it skips must still exist at each.
+// prepared destinations of j.Destinations, in order: every volume it skips must still exist at each,
+// and each one's own cache must record it (cachedAtEveryDestination).
 // When the attempt got as far as its final manifest, and only that upload failed, it uploads the
 // manifest and reports done: there is nothing left to send.
 //
@@ -1291,17 +1312,24 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination
 			}
 		}
 
-		// Manifests do not record their destinations, so a destination added since the first
-		// attempt shows up here as one that is missing every volume: the resume starts over.
+		// A volume is kept only when it is at every destination and every destination's own cache
+		// records it: a destination added since the first attempt has neither, so the resume starts
+		// over.
 		volumes, err := verifiedVolumes(ctx, j, originalManifest.Volumes, destinations)
 		if err != nil {
 			return false, err
 		}
+		volumes = cachedAtEveryDestination(ctx, j, volumes, destinations)
+		log.AppLogger.Noticef(
+			"Resuming from volume %d: %d of %d cached volumes verified at all destinations.",
+			len(volumes)+1, len(volumes), len(originalManifest.Volumes),
+		)
 		if len(volumes) == 0 {
 			log.AppLogger.Noticef("Nothing verifiable to resume; starting over.")
 			return false, discardPartialManifests(j, destinations)
 		}
-		// A final manifest (it has an EndTime) whose volumes are all there: only its upload failed.
+		// A final manifest (it has an EndTime) whose volumes are all there, and cached for every
+		// destination: only its upload failed.
 		if !originalManifest.EndTime.IsZero() && len(volumes) == len(originalManifest.Volumes) {
 			log.AppLogger.Noticef("Every volume of the interrupted attempt is uploaded; uploading its manifest.")
 			return true, uploadManifest(ctx, origManiPath, j.ManifestObjectName(), destinations, "the interrupted attempt")
@@ -1322,6 +1350,57 @@ func tryResume(ctx context.Context, j *files.JobInfo, destinations []destination
 		log.AppLogger.Infof("Will be resuming previous backup attempt.")
 	}
 	return false, nil
+}
+
+// cachedAtEveryDestination returns the longest run of cached (volumes cached for
+// destinations[0], in volume order) that the cached manifest of every other destination records
+// too, with the same number, name, size and SHA-256. A destination with no cache keeps nothing.
+//
+// Volume names and sizes do not tell two attempts apart: a send to some of the destinations
+// rewrites the same-named volumes there with other bytes (another encryption session key) of
+// the same size. The cache can: every run that writes to a destination first discards or
+// rewrites that destination's cache, and adds a volume to it only once the volume is uploaded,
+// so each destination's cache describes the volumes the last run that touched it left there.
+// Comparing caches costs no download; it cannot see a send to the destination from another host
+// or working directory, which the lock does not cover either.
+func cachedAtEveryDestination(
+	ctx context.Context, j *files.JobInfo, cached []*files.VolumeInfo, destinations []destination,
+) []*files.VolumeInfo {
+	cached = append([]*files.VolumeInfo(nil), cached...)
+	sort.Sort(files.ByVolumeNumber(cached))
+	keep := len(cached)
+	for _, d := range destinations[1:] {
+		if keep == 0 {
+			break
+		}
+		var theirs []*files.VolumeInfo
+		switch m, err := readManifest(ctx, partialManifestCachePath(j, d.uri), j); {
+		case os.IsNotExist(err):
+			log.AppLogger.Noticef("No cached state of the interrupted attempt for %s; every volume will be re-sent.", d)
+		case err != nil:
+			log.AppLogger.Noticef(
+				"Could not read the cached state of the interrupted attempt for %s (%v); every volume will be re-sent.", d, err,
+			)
+		default:
+			theirs = append(theirs, m.Volumes...)
+			sort.Sort(files.ByVolumeNumber(theirs))
+		}
+		for n := 0; n < keep; n++ {
+			mine := cached[n]
+			if n >= len(theirs) || theirs[n].VolumeNumber != mine.VolumeNumber ||
+				theirs[n].ObjectName != mine.ObjectName || theirs[n].Size != mine.Size || theirs[n].SHA256Sum != mine.SHA256Sum {
+				if theirs != nil {
+					log.AppLogger.Noticef(
+						"The cached state for %s differs from the one for %s at volume %s; it and later volumes will be re-sent.",
+						d, destinations[0], mine.ObjectName,
+					)
+				}
+				keep = n
+				break
+			}
+		}
+	}
+	return cached[:keep]
 }
 
 // verifiedVolumes returns the longest run of cached volumes, numbered contiguously from 1, that
@@ -1377,7 +1456,6 @@ func verifiedVolumes(
 			}
 		}
 	}
-	log.AppLogger.Noticef("Resuming from volume %d: %d of %d cached volumes verified at all destinations.", keep+1, keep, len(cached))
 	return cached[:keep], nil
 }
 

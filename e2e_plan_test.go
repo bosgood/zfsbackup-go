@@ -221,12 +221,13 @@ func TestE2EPlanManifestsFileAdoptsCreationTimes(t *testing.T) {
 	}
 }
 
-// setLocal makes loc the host's zone (time.Local) for the rest of the test.
+// setLocal makes loc the host's zone (backup.HostZone) for the rest of the test. Not
+// time.Local: the runtime's timers read it, so writing it is a data race under -race.
 func setLocal(t *testing.T, loc *time.Location) {
 	t.Helper()
-	old := time.Local
-	time.Local = loc
-	t.Cleanup(func() { time.Local = old })
+	old := backup.HostZone
+	backup.HostZone = loc
+	t.Cleanup(func() { backup.HostZone = old })
 }
 
 // Sanoid names snapshots in the host's local time. Without location=, a names-only capture

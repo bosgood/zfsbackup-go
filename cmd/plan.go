@@ -219,7 +219,8 @@ func runPlan(cmd *cobra.Command, args []string) error {
 // adoptManifestTimes takes the manifests' creation times for a capture without
 // them. Such a capture dates snapshots from their names, seconds before the
 // time the manifests hold; send would then see the backed-up snapshot as
-// pruned. Take the manifests' word for it. Call it after DestBackups are set.
+// pruned. Take the manifests' word for it, unless it cannot be that snapshot's
+// time (see Scenario.AdoptCreationTimes). Call it after DestBackups are set.
 func adoptManifestTimes(sc *backup.Scenario) {
 	if adopted := sc.AdoptCreationTimes(); len(sc.NameDated) > 0 {
 		log.AppLogger.Warningf("The capture has no creation times: %d taken from the manifests at the destination, "+
@@ -227,12 +228,15 @@ func adoptManifestTimes(sc *backup.Scenario) {
 			"Capture `zfs list -H -p -o name,creation -t snapshot,bookmark -S creation %s` to plan exactly what send will do.",
 			adopted, zoneName(sc.Zone()), sc.Volume)
 	}
+	for _, w := range sc.AdoptionWarnings {
+		log.AppLogger.Warningf("Not adopting a manifest's creation time: %s.", w)
+	}
 }
 
-// zoneName names loc for a message: time.Local calls itself "Local", so add
-// its current abbreviation.
+// zoneName names loc for a message: the host's zone (time.Local) calls itself
+// "Local", so add its current abbreviation.
 func zoneName(loc *time.Location) string {
-	if loc == time.Local {
+	if loc == backup.HostZone {
 		return fmt.Sprintf("local (%s)", time.Now().In(loc).Format("MST"))
 	}
 	return loc.String()

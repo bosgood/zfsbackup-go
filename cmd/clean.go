@@ -39,12 +39,14 @@ var cleanCmd = &cobra.Command{
 	Short: "Clean deletes backup volumes at the destination that no manifest there lists.",
 	Long: `Clean deletes backup volumes at the destination that no manifest lists, for the datasets
 that have manifests there. It never deletes manifests or objects it cannot parse as a
-backup volume, refuses a destination with objects but no manifests, and leaves alone
-any dataset a send on this host is working on.
+backup volume, refuses a destination with objects but no manifests under
+--manifestPrefix, and leaves alone any dataset a send on this host is working on.
 
---force also deletes broken backup sets (manifest included) whose volumes are missing.
+--force also deletes broken backup sets (manifest included) at the destination whose
+volumes are missing. It leaves cached manifests that are not at the destination alone.
 --cleanLocal also deletes cached manifests that are not at the destination, and their
-volumes at the destination; those manifests are what --resume continues from.`,
+volumes at the destination; those manifests are what --resume continues from. Cached
+manifests of another --manifestPrefix are never deleted.`,
 	SilenceErrors: true,
 	PreRunE:       validateCleanFlags,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -59,7 +61,8 @@ func init() {
 	cleanCmd.Flags().BoolVarP(&cleanLocal, "cleanLocal", "", false, "Delete cached manifests that are not at the destination, and delete their volumes at the destination.")
 	cleanCmd.Flags().BoolVarP(&cleanDryRun, "dry-run", "n", false, "Do not delete anything; only log what would be deleted.")
 	cleanCmd.Flags().BoolVarP(&jobInfo.Force, "force", "", false,
-		"This will force the deletion of broken backup sets (sets where volumes expected in the manifest file are not found). Use with caution.",
+		"Also delete broken backup sets at the destination (sets where volumes expected in the manifest file are not found), manifest included. "+
+			"Cached manifests that are not at the destination are left alone; see --cleanLocal. Use with caution.",
 	)
 }
 

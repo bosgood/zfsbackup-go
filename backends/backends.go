@@ -286,9 +286,16 @@ func LegacySpellings(canonical, typed string) []string {
 // An '@' after the authority is left alone only when the authority holds no ':' either:
 // url.Parse reads "user:1234/secret@host" as host "user", port "1234" and a path, so a
 // password that starts like a port looks like a URI with no user at all.
+//
+// A string with no "://" is not a URI this tool takes, but the CLI logs it when it rejects
+// it: an scp-style "user:password@host:/path", or the "password-tail@host/path" a comma
+// split leaves of a password that holds a ','. So everything up to the last '@' goes there too.
 func RedactURI(uri string) string {
 	scheme, rest, ok := strings.Cut(uri, "://")
-	if !ok || !strings.Contains(rest, "@") {
+	if !ok {
+		return uri[strings.LastIndex(uri, "@")+1:]
+	}
+	if !strings.Contains(rest, "@") {
 		return uri
 	}
 	u, err := url.Parse(uri)

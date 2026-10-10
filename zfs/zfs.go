@@ -300,6 +300,11 @@ func (l *listing) add(name, creation, kind string, loc *time.Location) error {
 // SnapshotNameTime returns the time embedded in a sanoid-style snapshot name
 // (autosnap_2006-01-02_15:04:05_<period>), read in loc. ok is false when the
 // name carries no such timestamp.
+//
+// Sanoid names snapshots in local time, so a name is ambiguous in the hour
+// the clocks fall back, which repeats. It reads as the first instance: the
+// second cannot exist, as its name is already taken (ZFS refuses a duplicate).
+// Only a capture with creation times dates such a snapshot exactly.
 func SnapshotNameTime(name string, loc *time.Location) (time.Time, bool) {
 	ts := sanoidTimestamp.FindString(name)
 	if ts == "" {

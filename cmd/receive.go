@@ -108,7 +108,9 @@ func init() {
 		"maxFileBuffer",
 		5,
 		"the maximum number of volumes to download in parallel and hold on local storage before zfs receive takes "+
-			"them. Each volume's SHA-256 and signature are checked before zfs receive reads any of it. Set to 0 to stream "+
+			"them. Each volume's size and SHA-256 are checked against its manifest before zfs receive reads any of it "+
+			"(with --signFrom the manifest's signature is checked first, so this checks the volume against what you "+
+			"signed); the volume's own signature is checked as zfs receive reads it, at its end. Set to 0 to stream "+
 			"each volume straight into zfs receive with no local storage: its bytes reach zfs receive before they are "+
 			"checked, so 0 cannot be used with --signFrom.",
 	)
@@ -162,6 +164,11 @@ func ResetReceiveJobInfo() {
 func validateReceiveFlags(cmd *cobra.Command, args []string) error {
 	if len(args) != 3 {
 		_ = cmd.Usage()
+		return errInvalidInput
+	}
+
+	if jobInfo.MaxFileBuffer < 0 {
+		log.AppLogger.Errorf("--maxFileBuffer must be 0 or more, was given %d.", jobInfo.MaxFileBuffer)
 		return errInvalidInput
 	}
 

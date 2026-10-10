@@ -6,7 +6,8 @@
 #   1. a first run, from a container with no rules;
 #   2. a re-run, sampling the policies all along: none may ever be ACCEPT;
 #   3. a re-run started by the dev user (through its sudoers rule) and killed
-#      after 0.3s: the policies must stay DROP and an outside host blocked;
+#      after 0.3s: its trap must close the network (exit 1, the "interrupted"
+#      message, loopback-only rules), so an outside host is blocked;
 #   4. a re-run from the closed state that the kill may leave.
 #
 # The probe host must be reachable from containers on this machine without
@@ -54,14 +55,29 @@ wait "$sampler" 2>/dev/null
 [ ! -s "$seen" ] || fail "a policy was ACCEPT during the re-run: $(sort -u "$seen" | tr '\n' ' ')"
 
 step "re-run by the dev user, killed after 0.3s"
-runuser -u dev -- bash -c '
-    sudo -n /usr/local/bin/init-firewall.sh &
+# The allowlist from step 2 already has DROP policies and blocks the probe, so
+# those alone do not show the kill did anything: check that the trap ran.
+killed_log=$(mktemp)
+chown dev "$killed_log"
+rc=$(runuser -u dev -- bash -c '
+    sudo -n /usr/local/bin/init-firewall.sh > "$1" 2>&1 &
     pid=$!
     sleep 0.3
     kill -TERM "$pid" || exit 3
     wait "$pid"
-    exit 0
-' || fail "could not start and kill the re-run as dev"
+    echo "$?"
+' _ "$killed_log") || fail "could not start and kill the re-run as dev"
+cat "$killed_log"
+[ "$rc" = 1 ] || fail "the killed re-run exited $rc, want 1 from its trap (killed before the trap was set, or after it finished?)"
+grep -q 'firewall failed: interrupted; network is closed' "$killed_log" \
+    || fail "the killed re-run did not report closing the network"
+loopback_only=$'-P INPUT DROP\n-P FORWARD DROP\n-P OUTPUT DROP\n-A INPUT -i lo -j ACCEPT\n-A OUTPUT -o lo -j ACCEPT'
+[ "$(iptables -S)" = "$loopback_only" ] \
+    || fail "the killed re-run did not leave loopback only: $(iptables -S | tr '\n' ' ')"
+if ip6tables -L -n >/dev/null 2>&1; then
+    [ "$(ip6tables -S)" = "$loopback_only" ] \
+        || fail "the killed re-run did not leave IPv6 loopback only: $(ip6tables -S | tr '\n' ' ')"
+fi
 policies_drop || fail "the killed re-run left a policy other than DROP: $(iptables -S | grep -- '^-P' | tr '\n' ' ')"
 probe_blocked || fail "$PROBE is reachable after the killed re-run"
 

@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -77,7 +78,14 @@ func AutoRestore(pctx context.Context, jobInfo *files.JobInfo) error {
 		return serr
 	}
 
-	decodedManifests, derr := readAndSortManifests(ctx, jobInfo, localCachePath, backend, manifests)
+	// Only this volume's manifests: another dataset's cannot stop this restore.
+	ours := manifests[:0]
+	for _, manifest := range manifests {
+		if manifestMayBeFor(manifest, jobInfo.ManifestPrefix, jobInfo.VolumeName) {
+			ours = append(ours, manifest)
+		}
+	}
+	decodedManifests, derr := readAndSortManifests(ctx, jobInfo, localCachePath, backend, ours)
 	if derr != nil {
 		return derr
 	}
@@ -145,16 +153,29 @@ func AutoRestore(pctx context.Context, jobInfo *files.JobInfo) error {
 	}
 
 	jobsToRestore := make([]*files.JobInfo, 0, 10)
+	inChain := make(map[*files.JobInfo]bool)
 	for {
 		// See if the snapshots we want to restore already exist
 		if ok := validateSnapShotExistsFromSnaps(&jobToRestore.BaseSnapshot, snapshots, false); ok {
 			break
 		}
+		if inChain[jobToRestore] {
+			log.AppLogger.Errorf(
+				"The backups at the destination that lead to %s form a loop: the backup of %s is its own ancestor.",
+				jobInfo.BaseSnapshot.Name, jobToRestore.BaseSnapshot.Name,
+			)
+			return errors.New("the manifests at the destination form a loop")
+		}
+		inChain[jobToRestore] = true
 
 		log.AppLogger.Infof("Adding backup job for %s to the restore list.", jobToRestore.BaseSnapshot.Name)
 		jobsToRestore = append(jobsToRestore, jobToRestore)
 		if jobToRestore.IncrementalSnapshot.Name == "" {
 			// This is a full backup, no need to go further back
+			break
+		}
+		if sourceIsLocal(jobToRestore, snapshots) {
+			// Its source is here, whether or not a backup of the source is still at the destination
 			break
 		}
 		if jobToRestore.ParentSnap == nil {
@@ -191,15 +212,22 @@ func AutoRestore(pctx context.Context, jobInfo *files.JobInfo) error {
 // backupThatApplies returns, among backups of one snapshot, an incremental whose chain of
 // parents reaches a snapshot in local (zfs refuses a full stream into a dataset that has
 // snapshots); else the full (it needs no parent, and still works once an old chain is gone);
-// else the first of them; else nil.
+// else the first of them; else nil. A chain reaches local when a backup in it is of a snapshot in
+// local, or is an incremental from one: once the backup of that source is retired, the
+// incremental still applies.
 func backupThatApplies(backups []*files.JobInfo, local []files.SnapshotInfo) *files.JobInfo {
 	for _, b := range backups {
-		for p := b; p != nil; p = p.ParentSnap {
+		seen := make(map[*files.JobInfo]bool)
+		for p := b; p != nil && !seen[p]; p = p.ParentSnap {
+			seen[p] = true
 			if validateSnapShotExistsFromSnaps(&p.BaseSnapshot, local, false) {
 				return b
 			}
 			if p.IncrementalSnapshot.Name == "" {
 				break
+			}
+			if sourceIsLocal(p, local) {
+				return b
 			}
 		}
 	}
@@ -212,6 +240,12 @@ func backupThatApplies(backups []*files.JobInfo, local []files.SnapshotInfo) *fi
 		return nil
 	}
 	return backups[0]
+}
+
+// sourceIsLocal returns whether the incremental backup b is from a snapshot in local.
+func sourceIsLocal(b *files.JobInfo, local []files.SnapshotInfo) bool {
+	source := b.IncrementalSnapshot // a copy: the check records whether it matched a bookmark
+	return validateSnapShotExistsFromSnaps(&source, local, false)
 }
 
 // Receive will download and restore the backup job described to the Volume target provided.
@@ -442,7 +476,13 @@ func processSequence(ctx context.Context, sequence downloadSequence, backend bac
 		sequence.c <- vol
 	}
 
-	_, err = io.Copy(vol, r)
+	// Read at most one byte more than the manifest records: a larger object is not the volume, and
+	// need not be downloaded whole to tell.
+	limit := int64(math.MaxInt64)
+	if sequence.volume.Size < math.MaxInt64 {
+		limit = int64(sequence.volume.Size) + 1
+	}
+	_, err = io.Copy(vol, io.LimitReader(r, limit))
 	if err != nil {
 		log.AppLogger.Noticef("Could not download file %s to the local cache dir due to error - %v.", sequence.volume.ObjectName, err)
 		if err = vol.Close(); err != nil {
@@ -468,6 +508,12 @@ func processSequence(ctx context.Context, sequence downloadSequence, backend bac
 			if err = vol.DeleteVolume(); err != nil {
 				log.AppLogger.Noticef("Could not delete temporary file to download %s due to error - %v.", sequence.volume.ObjectName, err)
 			}
+		}
+		if vol.Size > sequence.volume.Size {
+			return backoff.Permanent(fmt.Errorf(
+				"%s does not match its manifest: it is larger than the %d bytes the manifest records",
+				sequence.volume.ObjectName, sequence.volume.Size,
+			))
 		}
 		return backoff.Permanent(fmt.Errorf(
 			"%s does not match its manifest: got %d bytes with SHA256 %s, want %d bytes with SHA256 %s",
@@ -569,18 +615,50 @@ func receiveStream(ctx context.Context, cmd *exec.Cmd, j *files.JobInfo, c <-cha
 	return nil
 }
 
-// downloadTo downloads objectName to toPath, atomically: toPath is never a partial download.
+// downloadTo downloads the manifest objectName to toPath, atomically: toPath is never a partial
+// download. A manifest object longer than files.MaxManifestBytes is an errObjectTooLarge, and
+// leaves nothing at toPath: ReadManifest would reject it anyway (its gzip and pgp framing never
+// make a real manifest longer than the JSON it holds), and whoever can write the destination
+// could otherwise fill the cache's disk.
 func downloadTo(ctx context.Context, backend backends.Backend, objectName, toPath string) error {
+	return downloadAtMost(ctx, backend, objectName, toPath, files.MaxManifestBytes)
+}
+
+// errObjectTooLarge is a download that was cut off at its limit.
+var errObjectTooLarge = errors.New("the object is larger than expected")
+
+// downloadAtMost is downloadTo with limit bytes as the limit.
+func downloadAtMost(ctx context.Context, backend backends.Backend, objectName, toPath string, limit int64) error {
 	r, rerr := backend.Download(ctx, objectName)
 	if rerr != nil {
 		log.AppLogger.Errorf("Could not download file %s to the local cache dir due to error - %v.", objectName, rerr)
 		return rerr
 	}
 	defer r.Close()
-	if err := files.WriteFileAtomic(filepath.Dir(toPath), filepath.Base(toPath), r); err != nil {
+	if err := files.WriteFileAtomic(filepath.Dir(toPath), filepath.Base(toPath), &atMostReader{r: r, left: limit}); err != nil {
+		if errors.Is(err, errObjectTooLarge) {
+			err = fmt.Errorf("%s is larger than %d MiB, more than any manifest: %w", objectName, limit>>20, err)
+		}
 		log.AppLogger.Errorf("Could not download file %s to the local cache dir due to error - %v.", objectName, err)
 		return err
 	}
 	log.AppLogger.Debugf("Downloaded %s to local cache.", objectName)
 	return nil
+}
+
+// atMostReader reads r, and fails with errObjectTooLarge once r has more than left bytes.
+type atMostReader struct {
+	r    io.Reader
+	left int64
+}
+
+func (a *atMostReader) Read(p []byte) (int, error) {
+	if int64(len(p)) > a.left+1 {
+		p = p[:a.left+1]
+	}
+	n, err := a.r.Read(p)
+	if a.left -= int64(n); a.left < 0 {
+		return 0, errObjectTooLarge
+	}
+	return n, err
 }

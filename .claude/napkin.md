@@ -22,6 +22,7 @@
 | 2026-10-08 | self | Spawned 4 subagents with `isolation: worktree`; every worktree came up at `b733e96` (the old master merge), NOT the current branch tip, and none of the e2e files existed there | Tell worktree agents to `git log -1` and `git reset --hard <tip>` first (they are on private branches), or create the worktree yourself from HEAD. Cherry-pick their commits back by hash; the only conflict in 4 picks was a shared hunk in `tryResume` |
 | 2026-10-05 | self | (twice) An e2e subtest name with a comma (`"same size, other bytes"`) made send fail with "invalid URI": `t.TempDir()` puts the test name in the path, and `--destinations` / the dest argument is comma-separated | Never put `,` in a subtest name of a test that uses t.TempDir() for a destination |
 | 2026-10-08 | self | Five parallel agents in git worktrees each ran `make fmt-check` and it passed while checking NOTHING: the worktree's `.git` is a link to a host path outside the container mount, so `git ls-files` listed no files | Fixed in 39175ad (fmt-check now fails on an empty file list). Run `make fmt-check` from the main checkout after merging worktree branches |
+| 2026-10-08 | self | `go test -race ./...` "failed" with a 10m timeout and a DATA RACE on HEAD itself: the root package takes ~20 min under -race, and `setLocal` wrote `time.Local`, which runtime timers read from other goroutines | `make test-race` now passes `-timeout 45m`. Tests set `backup.HostZone`, never `time.Local` |
 
 ## User Preferences
 - Use Makefile targets for repeatable operations (test, build, lint). Keep the Makefile as the source of truth; extend it when a task is missing.
@@ -71,6 +72,8 @@
 - Upload-failure injection for a `file://` destination that works as root in Docker: create a regular FILE at `<dest>/tank` (first path component of the volume) so the file backend's MkdirAll fails; manifests (`manifests|...`) still upload.
 - S3 code paths without network: an `httptest.Server` answering ListObjectsV2 XML, plus env `AWS_S3_CUSTOM_ENDPOINT=<srv.URL>`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`. The backend forces path-style, so requests are `/<bucket>?list-type=2&prefix=...`; enough to run `clean --dry-run`.
 - ENOSPC at a volume's final flush: `docker run --tmpfs /work/temp:size=40k ...`, `--workingDirectory /work`, `FAKEZFS_STREAM_BYTES` under the 256 KiB bufio buffer and `--compressor=` (so Close's Flush is the only file write).
+
+- Parallel fix agents without worktrees (2026-10-08, round 3): each agent works in `git archive HEAD | tar -x -C /tmp/fix3-<area>` + a throwaway `git init` commit, owns a disjoint file set, adds tests only in NEW files, and hands back `git diff --cached HEAD > /tmp/fix3-<area>.patch`. All 4 patches applied to the real tree with `git apply --3way` and no conflicts (two touched different hunks of backup.go and restore.go). No commits, no worktree base-commit trap.
 
 ## Patterns That Don't Work
 - (RESOLVED 2026-09-05) The go.mod `go 1.25` vs Dockerfile `golang:1.23` mismatch is fixed in the working tree;
