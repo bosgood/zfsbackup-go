@@ -294,22 +294,54 @@ func (a *AWSS3Backend) Delete(ctx context.Context, key string) error {
 //
 // A restored copy that expires within restoreExpiryMargin is restored again: S3 then extends its
 // expiry, and the copy is still there when the downloads that follow PreDownload reach it.
+//
+// A wait can last longer than the margin (a DEEP_ARCHIVE Bulk restore takes up to 48 hours), so
+// after each wait PreDownload checks the copies that were readable before it again: it extends
+// one that now expires soon, and restores and waits for one that expired. It gives up after
+// maxRestoreRounds such waits.
 func (a *AWSS3Backend) PreDownload(ctx context.Context, keys []string) error {
-	toRestore := make([]string, 0, len(keys))
 	restoreTier := os.Getenv("AWS_S3_GLACIER_RESTORE_TIER")
 	if restoreTier == "" {
 		restoreTier = s3.TierBulk
 	}
-	var bytesToRestore int64
 	log.AppLogger.Debugf("s3 backend: will use the %s restore tier when trying to restore from Glacier.", restoreTier)
-	for _, key := range keys {
-		key = a.prefix + key
+	for round := 0; ; round++ {
+		toRestore, readable, bytesToRestore, err := a.classifyRestores(ctx, keys, restoreTier)
+		if err != nil {
+			return err
+		}
+		if len(toRestore) == 0 {
+			return nil
+		}
+		if round == maxRestoreRounds {
+			return fmt.Errorf("s3 backend: restored copies kept expiring during the wait; giving up after %d rounds", maxRestoreRounds)
+		}
+		if err := a.waitForRestores(ctx, toRestore, bytesToRestore); err != nil {
+			return err
+		}
+		keys = readable
+	}
+}
+
+// maxRestoreRounds is how many times PreDownload waits for restores and checks the copies that
+// were readable before the wait again.
+const maxRestoreRounds = 3
+
+// classifyRestores HEADs each key (relative to the prefix) and requests a restore for each one
+// that a GET cannot read yet, or whose restored copy expires within restoreExpiryMargin. It
+// returns the prefixed keys to wait for and their total size, and the keys (relative) that a
+// GET can read now, including the copies it extends.
+func (a *AWSS3Backend) classifyRestores(
+	ctx context.Context, keys []string, restoreTier string,
+) (toRestore, readable []string, bytesToRestore int64, err error) {
+	for _, rel := range keys {
+		key := a.prefix + rel
 		resp, err := a.client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
 			Bucket: aws.String(a.bucketName),
 			Key:    aws.String(key),
 		})
 		if err != nil {
-			return err
+			return nil, nil, 0, err
 		}
 		if !needsRestore(resp) {
 			continue
@@ -320,9 +352,11 @@ func (a *AWSS3Backend) PreDownload(ctx context.Context, keys []string) error {
 		switch {
 		case extend && !restoreExpiresBefore(resp.Restore, time.Now().Add(restoreExpiryMargin)):
 			log.AppLogger.Debugf("s3 backend: key %s is in the %s storage class and already restored.", key, *resp.StorageClass)
+			readable = append(readable, rel)
 			continue
 		case extend:
 			log.AppLogger.Debugf("s3 backend: the restored copy of key %s expires soon; extending it.", key)
+			readable = append(readable, rel)
 		default:
 			bytesToRestore += aws.Int64Value(resp.ContentLength)
 			toRestore = append(toRestore, key)
@@ -357,17 +391,18 @@ func (a *AWSS3Backend) PreDownload(ctx context.Context, keys []string) error {
 				continue
 			}
 			log.AppLogger.Debugf("s3 backend: error trying to restore key %s - %v", key, rerr)
-			return rerr
+			return nil, nil, 0, rerr
 		}
 	}
-	if len(toRestore) == 0 {
-		return nil
-	}
+	return toRestore, readable, bytesToRestore, nil
+}
+
+// waitForRestores polls each prefixed key until a GET can read it.
+func (a *AWSS3Backend) waitForRestores(ctx context.Context, toRestore []string, bytesToRestore int64) error {
 	log.AppLogger.Infof(
 		"s3 backend: waiting for %d objects to restore from an archive storage class totaling %d bytes (this could take several hours)",
 		len(toRestore), bytesToRestore,
 	)
-	// Now wait for the objects to be restored
 	poll := restorePollInterval()
 	backoffCount := 1
 	for idx := 0; idx < len(toRestore); idx++ {
@@ -430,8 +465,9 @@ func restoreDone(restore *string) bool {
 }
 
 // restoreExpiryMargin is how long a restored copy must still last for PreDownload to leave it
-// alone. Bulk restores of other objects, and the downloads after them, can take most of a day; a
-// copy expiring sooner is restored again, which extends it by the same days a new restore gets.
+// alone. It covers the downloads after PreDownload, which can take most of a day; a copy expiring
+// sooner is restored again, which extends it by the same days a new restore gets. It does not
+// cover PreDownload's own wait for other restores: the re-check after each wait does.
 const restoreExpiryMargin = 24 * time.Hour
 
 // restoreExpiresBefore reads the x-amz-restore header of a HEAD response for a restored copy

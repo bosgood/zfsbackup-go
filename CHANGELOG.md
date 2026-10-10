@@ -1,5 +1,6 @@
 # CHANGELOG
 
+* [FIX] s3: receive re-checks already-restored Glacier copies after waiting for the others, and extends or restores any that expired meanwhile; a DEEP_ARCHIVE Bulk restore can take longer than the 24-hour margin
 * [FIX] s3: uploads obey --maxUploadSpeed; they ignored it unless --maxFileBuffer was 0
 * [FIX] ssh: the default key list tries `~/.ssh/id_ecdsa`; it was misspelled `id_cdsa` and never found
 * [FIX] cli: `send --help` describes the command (its description was a truncated sentence); `--fullIfOlderThan` help reads correctly; `plan --help` no longer shows backticked text as flag types
