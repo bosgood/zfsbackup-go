@@ -228,6 +228,14 @@ func (r *reader) Read(p []byte) (int, error) {
 // uploads are cleaned up by the s3manager provided by the AWS Go SDK, but users can also
 // implement lifecycle rules, see:
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/mpuoverview.html#mpu-abort-incomplete-mpu-lifecycle-config
+//
+// The body is always the Read-only reader adapter, never the *files.VolumeInfo. s3manager reads a
+// body that implements io.ReaderAt through io.SectionReader, which calls VolumeInfo.ReadAt and
+// skips the --maxUploadSpeed limiter on VolumeInfo.Read. With the adapter, s3manager copies each
+// part once (rate limited) into a pooled buffer and hashes that buffer. Two costs: s3manager
+// holds Concurrency+1 parts in memory (MaxParallelUploads+1 times UploadChunkSize), and it no
+// longer knows the size, so it cannot raise PartSize for a volume of more than 10,000 parts.
+// At the minimum 5 MiB chunk that is a 50 GiB volume; --volsize defaults to 200 MiB.
 func (a *AWSS3Backend) Upload(ctx context.Context, vol *files.VolumeInfo) error {
 	// We will achieve parallel upload by splitting a single upload into chunks
 	// so don't let multiple calls to this function run in parallel.
@@ -237,10 +245,9 @@ func (a *AWSS3Backend) Upload(ctx context.Context, vol *files.VolumeInfo) error 
 	key := a.prefix + vol.ObjectName
 	var options []request.Option
 	options = append(options, withRequestLimiter(a.conf.MaxParallelUploadBuffer))
-	var r io.Reader
+	r := &reader{vol}
 
 	if !vol.IsUsingPipe() {
-		r = vol
 		if vol.Size < uint64(s3manager.MinUploadPartSize) {
 			// It will not chunk the upload so we already know the md5 of the content
 			md5Raw, merr := hex.DecodeString(vol.MD5Sum)
@@ -252,8 +259,6 @@ func (a *AWSS3Backend) Upload(ctx context.Context, vol *files.VolumeInfo) error 
 		} else {
 			options = append(options, withComputeMD5HashHandler)
 		}
-	} else {
-		r = &reader{vol} // Remove the Seek interface since we are using a Pipe
 	}
 
 	// Do a MultiPart Upload - force the s3manager to compute each chunks md5 hash

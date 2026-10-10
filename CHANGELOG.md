@@ -1,5 +1,6 @@
 # CHANGELOG
 
+* [FIX] s3: uploads obey --maxUploadSpeed; they ignored it unless --maxFileBuffer was 0
 * [FIX] ssh: the default key list tries `~/.ssh/id_ecdsa`; it was misspelled `id_cdsa` and never found
 * [FIX] cli: `send --help` describes the command (its description was a truncated sentence); `--fullIfOlderThan` help reads correctly; `plan --help` no longer shows backticked text as flag types
 * [CHANGE] docs: README rewrite: build from source (no `go get`, no releases link), `zfs` named as the host requirement, every S3 environment variable, `--auto` restore semantics, `list` and `clean` sections, exit codes, links to the docs, and recaptured help for every command
