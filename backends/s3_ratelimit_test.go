@@ -128,7 +128,7 @@ func TestS3UploadRateLimited(t *testing.T) {
 	if err = vol.Close(); err != nil {
 		t.Fatal(err)
 	}
-	defer vol.DeleteVolume()
+	defer func() { _ = vol.DeleteVolume() }()
 	vol.ObjectName = "ratelimited"
 
 	old := config.BackupUploadBucket
