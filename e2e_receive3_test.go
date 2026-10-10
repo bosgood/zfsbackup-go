@@ -95,7 +95,7 @@ func TestE2EReceiveAutoIgnoresOtherDatasetsJunk(t *testing.T) {
 				}
 				return nil
 			})
-			if cached > files.MaxManifestBytes {
+			if cached > int64(files.MaxManifestBytes) {
 				t.Errorf("the cache holds %d bytes, more than one manifest may be", cached)
 			}
 		})

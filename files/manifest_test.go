@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -37,6 +38,7 @@ import (
 // own key and encrypted to the real one, whose gzip body inflates to 128 MiB of JSON string.
 // ReadManifest must reject it without decoding all of it (that allocated 516 MiB).
 func TestReadManifestBounded(t *testing.T) {
+	setManifestLimit(t, 64<<20)
 	key, forger := newTestKey(t, "backup@example.com"), newTestKey(t, "evil@example.com")
 	loadRings(t, []*openpgp.Entity{key}, []*openpgp.Entity{key})
 	var gz bytes.Buffer
@@ -77,7 +79,7 @@ func TestReadManifestBounded(t *testing.T) {
 	runtime.ReadMemStats(&before)
 	_, err = ReadManifest(context.Background(), &JobInfo{SignKey: key, EncryptKey: key}, path)
 	runtime.ReadMemStats(&after)
-	if err == nil || !strings.Contains(err.Error(), "longer than 64 MiB") {
+	if !errors.Is(err, ErrManifestTooLong) || !strings.Contains(err.Error(), "(64 MiB)") {
 		t.Fatalf("want the 64 MiB limit to reject a 128 MiB manifest, got %v", err)
 	}
 	if mib := (after.TotalAlloc - before.TotalAlloc) >> 20; mib > 256 {

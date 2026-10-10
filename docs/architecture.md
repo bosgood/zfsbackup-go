@@ -41,7 +41,7 @@ flowchart TD
     subgraph files["files/ — data model"]
         ji["jobinfo.go<br/>JobInfo = manifest,<br/>object names"]
         vi["volumeinfo.go<br/>VolumeInfo: compress,<br/>pgp, hash, file or pipe"]
-        mf["manifest.go<br/>ReadManifest (64 MiB cap)"]
+        mf["manifest.go<br/>ReadManifest (1 GiB cap)"]
         at["atomic.go<br/>WriteFileAtomic"]
     end
 

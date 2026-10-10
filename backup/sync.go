@@ -283,6 +283,10 @@ func readCachedManifest(
 			return manifest, nil
 		}
 	}
+	if errors.Is(err, files.ErrManifestTooLong) {
+		// The copy is whole; downloading the object again would only cost the same egress.
+		return nil, unreadableManifestError(objectName, err)
+	}
 	if !os.IsNotExist(err) {
 		log.AppLogger.Warningf("Cached manifest %s (%s) is unreadable (%v); downloading it again.", path, objectName, err)
 		if rerr := os.Remove(path); rerr != nil {
@@ -302,24 +306,37 @@ func readCachedManifest(
 	if manifest, err = readManifest(ctx, path, j); err == nil {
 		err = manifestNamed(j, manifest, objectName)
 	}
-	if err != nil {
+	if err != nil && !errors.Is(err, files.ErrManifestTooLong) {
 		// Keep no copy: the next run reads the destination's object again, which may be fixed by then.
 		if rerr := os.Remove(path); rerr != nil {
 			log.AppLogger.Warningf("Could not remove %s from the cache: %v", path, rerr)
 		}
+	}
+	if err != nil {
 		return nil, unreadableManifestError(objectName, err)
 	}
 	return manifest, nil
 }
 
 // unreadableManifestError is the error for the object objectName under the manifest prefix that
-// is not a manifest this run can accept. It names the object, and says how to get rid of it.
+// is not a manifest this run can accept. It names the object, and says what to do: a manifest
+// over the limit may be a real backup of more volumes than this version reads, so it must not
+// be deleted; anything else is not a manifest, and deleting it is the way out.
 func unreadableManifestError(objectName string, err error) error {
-	err = fmt.Errorf(
-		"could not read the manifest %s at the destination: %w. If you did not write it (it is not a backup "+
-			"of yours, or someone else put it there), delete that object from the destination, then run again",
-		objectName, err,
-	)
+	if errors.Is(err, files.ErrManifestTooLong) {
+		err = fmt.Errorf(
+			"could not read the manifest %s at the destination: %w. If you wrote it, it is a backup of more "+
+				"volumes than this version reads: do not delete it or its volumes, and send with a larger --volsize "+
+				"so later backups fit. If you did not write it, it is not a manifest; move it out of the destination",
+			objectName, err,
+		)
+	} else {
+		err = fmt.Errorf(
+			"could not read the manifest %s at the destination: %w. If you did not write it (it is not a backup "+
+				"of yours, or someone else put it there), delete that object from the destination, then run again",
+			objectName, err,
+		)
+	}
 	log.AppLogger.Errorf("%v", err)
 	return err
 }

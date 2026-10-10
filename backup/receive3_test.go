@@ -35,6 +35,7 @@ import (
 // A manifest download stops past files.MaxManifestBytes and leaves nothing behind: whoever can
 // write the destination must not be able to fill the cache's disk.
 func TestDownloadToStopsOversizeManifest(t *testing.T) {
+	setManifestLimit(t, 1<<20)
 	dir := t.TempDir()
 	b := &cacheBackend{objects: map[string][]byte{"manifests|x": make([]byte, files.MaxManifestBytes+1)}}
 	if err := downloadTo(context.Background(), b, "manifests|x", filepath.Join(dir, "cached")); err == nil {
@@ -52,6 +53,7 @@ func TestDownloadToStopsOversizeManifest(t *testing.T) {
 // A 300 MiB object under the manifest prefix is not downloaded whole into the cache, and clean
 // fails naming it.
 func TestCleanDoesNotCacheHugeManifest(t *testing.T) {
+	setManifestLimit(t, 64<<20)
 	targetDir, jobInfo := setupCleanTest(t)
 	set := &files.JobInfo{VolumeName: "tank/data", BaseSnapshot: files.SnapshotInfo{Name: "a"},
 		ManifestPrefix: "manifests", Separator: "|", Compressor: files.InternalCompressor}

@@ -54,7 +54,8 @@ func writeRawManifest(t *testing.T, json string) string {
 // bytes of JSON: at the cap, some 10 GB of heap. More volumes than a manifest of real ones can
 // hold is an error, found before they are decoded.
 func TestReadManifestRejectsTooManyVolumes(t *testing.T) {
-	n := MaxManifestVolumes + 1
+	setManifestLimit(t, 1<<20)
+	n := MaxManifestVolumes() + 1
 	path := writeRawManifest(t, `{"Volumes":[`+strings.Repeat("{},", n-1)+`{}]}`)
 	_, err := ReadManifest(context.Background(), &JobInfo{}, path)
 	if err == nil || !strings.Contains(err.Error(), "volumes") {

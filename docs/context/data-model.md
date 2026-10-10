@@ -13,7 +13,7 @@ One `JobInfo` per backup set. It is serialized as the manifest object. Fields ta
 - `Compressor`, `EncryptTo`, `SignFrom`, plus the resolved key fingerprints.
 - `Destinations` are canonical URIs. `DestinationsAsTyped` maps them to the spelling the user typed.
 
-`files/manifest.go`: `ReadManifest` caps a manifest at 64 MiB. `files/atomic.go`: `WriteFileAtomic` for cache writes.
+`files/manifest.go`: `ReadManifest` caps a manifest at `MaxManifestBytes` (1 GiB of JSON, about 2 million volumes; `ErrManifestTooLong`); `backup.saveManifest` refuses to write one over it. `files/atomic.go`: `WriteFileAtomic` for cache writes.
 
 ## `files.VolumeInfo` (`files/volumeinfo.go`) = writer layers
 

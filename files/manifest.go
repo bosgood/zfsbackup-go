@@ -29,19 +29,27 @@ import (
 	"io"
 )
 
-// MaxManifestBytes is the most of a manifest ReadManifest reads, decompressed. The largest
-// manifest the e2e suite writes is 2.6 KB; anyone who can write the destination can make one
-// inflate without bound.
-const MaxManifestBytes = 64 << 20
+// MaxManifestBytes is the most of a manifest ReadManifest reads, decompressed, and the most a
+// send writes: anyone who can write the destination can make a manifest inflate without bound,
+// and a reader allocates about three times this much for one at the limit. A send records some
+// 520 bytes of JSON per volume, so the limit is about 2 million volumes: one send of 400 TiB at
+// the default --volsize of 200 MiB, or of 100 TiB at --volsize 50. (The old limit of 64 MiB was
+// 128,558 volumes, 24.5 TiB at the default --volsize.) A variable so tests can lower it.
+var MaxManifestBytes = 1 << 30
 
 // MaxManifestVolumes is the most volumes a manifest may list. Each volume a send records takes
 // more than 256 bytes of JSON (its keys and hex sums alone), so no manifest under
 // MaxManifestBytes lists more; a forged one of `{},` would, and decode to a VolumeInfo of some
 // 480 bytes per 3 bytes of JSON.
-const MaxManifestVolumes = MaxManifestBytes / 256
+func MaxManifestVolumes() int { return MaxManifestBytes / 256 }
+
+// ErrManifestTooLong marks a manifest longer than MaxManifestBytes. It is the one read error
+// that may be a real backup's (one of more volumes than fit), so readers must not treat such a
+// manifest as a forgery or a damaged file, nor advise deleting it.
+var ErrManifestTooLong = errors.New("too long")
 
 // ReadManifest extracts the manifest at path with the keys of j, checks its signature and
-// decodes it. A manifest longer than MaxManifestBytes is an error.
+// decodes it. A manifest longer than MaxManifestBytes is an ErrManifestTooLong.
 func ReadManifest(ctx context.Context, j *JobInfo, path string) (*JobInfo, error) {
 	manifestVol, err := ExtractLocal(ctx, j, path, true)
 	if err != nil {
@@ -51,7 +59,8 @@ func ReadManifest(ctx context.Context, j *JobInfo, path string) (*JobInfo, error
 	// Read checks the signature at EOF, so nothing a forger wrote is decoded.
 	data, err := readAtMost(manifestVol, MaxManifestBytes)
 	if errors.Is(err, errTooLong) {
-		return nil, fmt.Errorf("manifest %s is longer than %d MiB", path, MaxManifestBytes>>20)
+		return nil, fmt.Errorf("manifest %s is longer than %d bytes (%d MiB), the most this version reads: %w",
+			path, MaxManifestBytes, MaxManifestBytes>>20, ErrManifestTooLong)
 	} else if err != nil {
 		return nil, err
 	}
@@ -78,8 +87,8 @@ func (manifestVolumes) UnmarshalJSON(data []byte) error {
 		return nil // null, or not an array: decoding the manifest reports the latter
 	}
 	for n := 1; dec.More(); n++ {
-		if n > MaxManifestVolumes {
-			return fmt.Errorf("it lists more than %d volumes", MaxManifestVolumes)
+		if n > MaxManifestVolumes() {
+			return fmt.Errorf("it lists more than %d volumes", MaxManifestVolumes())
 		}
 		var vol json.RawMessage
 		if err := dec.Decode(&vol); err != nil {

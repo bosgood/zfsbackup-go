@@ -1017,7 +1017,8 @@ func saveManifest(ctx context.Context, j *files.JobInfo, final bool) (*files.Vol
 		return nil, err
 	}
 	manifest.IsFinalManifest = final
-	jsonEnc := json.NewEncoder(manifest)
+	counted := &countingWriter{w: manifest}
+	jsonEnc := json.NewEncoder(counted)
 	err = jsonEnc.Encode(j)
 	if err != nil {
 		log.AppLogger.Errorf("Could not JSON Encode job information due to error - %v", err)
@@ -1025,6 +1026,21 @@ func saveManifest(ctx context.Context, j *files.JobInfo, final bool) (*files.Vol
 	}
 	if err = manifest.Close(); err != nil {
 		log.AppLogger.Errorf("Could not close manifest volume due to error - %v", err)
+		return nil, err
+	}
+	// A manifest no reader accepts would lock clean, list, plan, smart sends and receive --auto
+	// out of the destination, and the set could not be restored. Fail before it is cached or
+	// uploaded. --volsize sets how many volumes a stream becomes.
+	if counted.n > int64(files.MaxManifestBytes) {
+		err = fmt.Errorf(
+			"the manifest of %s is %d bytes of JSON for %d volumes, more than the %d MiB a reader accepts; "+
+				"send with a larger --volsize (each volume costs some %d bytes of manifest)",
+			j.ManifestObjectName(), counted.n, len(j.Volumes), files.MaxManifestBytes>>20, counted.n/int64(max(len(j.Volumes), 1)),
+		)
+		log.AppLogger.Errorf("%v.", err)
+		if derr := manifest.DeleteVolume(); derr != nil {
+			log.AppLogger.Warningf("Error deleting temporary manifest file - %v", derr)
+		}
 		return nil, err
 	}
 	for _, destination := range j.Destinations {
@@ -1038,6 +1054,18 @@ func saveManifest(ctx context.Context, j *files.JobInfo, final bool) (*files.Vol
 		log.AppLogger.Debugf("Copied manifest to local cache for destination %s.", backends.RedactURI(destination))
 	}
 	return manifest, nil
+}
+
+// countingWriter counts the bytes written through it.
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // nolint:funlen,gocyclo // Difficult to break this apart
