@@ -171,8 +171,8 @@ func AddSmartFlags(fs *pflag.FlagSet, j *files.JobInfo) {
 		&j.FullIfOlderThan,
 		"fullIfOlderThan",
 		-1*time.Minute,
-		"set this flag to do an incremental backup of the most recent snapshot from the most recent snapshot found in the target unless the "+
-			"it's been greater than the time specified in this flag, then do a full backup.",
+		"set this flag to do an incremental backup of the most recent snapshot from the most recent snapshot found in the target, unless "+
+			"the last full backup is older than this duration, in which case do a full backup.",
 	)
 	fs.StringVar(
 		&j.FullSnapshotSuffix,

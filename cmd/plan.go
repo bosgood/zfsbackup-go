@@ -77,22 +77,22 @@ func init() {
 		&jobInfo.Resume,
 		"resume",
 		false,
-		"plan as `send --resume` would: complete a backup set missing at some destinations even where its volumes are not all there.",
+		"plan as \"send --resume\" would: complete a backup set missing at some destinations even where its volumes are not all there.",
 	)
 	planCmd.Flags().StringVar(
 		&planSnapshots,
 		"snapshots",
 		"",
 		"read the snapshots from this file (- for stdin) instead of the pool: the output of "+
-			"`zfs list -H -p -t snapshot,bookmark -o name,creation,type -S creation <volume>`, bare sanoid names, or a JSON "+
+			"\"zfs list -H -p -t snapshot,bookmark -o name,creation,type -S creation <volume>\", bare sanoid names, or a JSON "+
 			"array of rows with a name and optionally a creation epoch and a type.",
 	)
 	planCmd.Flags().StringVar(
 		&planManifests,
 		"manifests",
 		"",
-		"read the backups already at the destinations from this file instead of destination URIs: one `<base>` (full) or "+
-			"`<source> to <base>` (incremental) per line, with `---` between destinations.",
+		"read the backups already at the destinations from this file instead of destination URIs: one \"<base>\" (full) or "+
+			"\"<source> to <base>\" (incremental) per line, with \"---\" between destinations.",
 	)
 	planCmd.Flags().StringVar(
 		&planSchedule,

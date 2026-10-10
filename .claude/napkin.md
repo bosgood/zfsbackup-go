@@ -27,6 +27,7 @@
 | 2026-10-10 | self | `make lint` died at once: `.golangci.yml` was v1 format, the host has golangci-lint v2. A plain migrate also turned on depguard's v2 default rule (only std imports allowed), which v1 never had | `make lint` now runs the pinned `golangci/golangci-lint:v2.12.2` image on a v2 config. Bump the image tag on purpose; a new version can add issues |
 | 2026-10-10 | self | Wrote "Delete of a missing object must not fail clean" into docs/context/backends.md from assumption; `FileBackend.Delete` is a bare `os.Remove` and `Clean` propagates the error | Verify every behavioral claim in a context doc with `cs`/a read before writing it; docs are read by agents as fact |
 | 2026-10-10 | self | Ran `echo ======` as a separator again although the 2026-09-24 row warns about zsh `=word` expansion; the whole chained command aborted | Read the Corrections table before composing chained Bash, not only before the task |
+| 2026-10-10 | self | `plan --help` printed `--manifests <base>` and `--snapshots zfs list -H ...` as the flag TYPE: pflag takes the first backtick-quoted span in a flag's usage string as its value name | Never put backticks in a cobra/pflag usage string; use double quotes. Check with `make help CMD=<cmd>` after editing flag help |
 
 ## User Preferences
 - Use Makefile targets for repeatable operations (test, build, lint). Keep the Makefile as the source of truth; extend it when a task is missing.
@@ -171,7 +172,7 @@ Ranked. None fixed yet; feature otherwise works and unit tests pass.
    The `verr != nil` branches in `reportDryRun` are dead code.
 5. LOW: `--resume` is ignored. `Backup` returns at `:355` before `tryResume` (`:359`), so the preview can
    differ from the resumed run (different base snapshot, skipped volumes). No warning is printed.
-6. LOW: README's captured `send --help` block (README.md:226-268) has no `-n, --dry-run`, `--fullSnapshotSuffix` or `--incrementalSnapshotSuffix`; README has no help block at all for `clean`, `receive`, `list`, `plan` (README review 2026-10-10).
+6. FIXED 2026-10-10: README help blocks are recaptured for every command with `make help CMD=<cmd>`; rerun it after a flag change.
 7. NIT: `GetZFSSendCommand` logs "Enabling the X flag" at Info; reportDryRun (`:335`) and `GetZFSSendDryRun`
    (`:340`) each call it -> every line twice at `--logLevel info`.
 8. GAP: no integration-test coverage for dry-run; no test asserting no backend is initialized.

@@ -7,12 +7,9 @@ DOCKER_BUILD = docker build --build-arg GO_VERSION=$(GO_VERSION)
 
 check: lint test test-race e2e
 
+# Rewrite every tracked non-vendor .go file with gofmt -s (fmt-check reports them).
 fmt:
-	@for d in $(DIRS) ; do \
-		if [ "`gofmt -s -w $$d/*.go | tee /dev/stderr`" ]; then \
-			echo "^ error formatting go files" && echo && exit 1; \
-		fi \
-	done
+	git ls-files "*.go" | grep -v ^vendor/ | xargs gofmt -s -l -w
 
 # golangci-lint in Docker, pinned so new linters do not appear by surprise. .golangci.yml is v2 format.
 GOLANGCI_LINT_IMAGE=golangci/golangci-lint:v2.12.2

@@ -74,7 +74,7 @@ func buildAuthMethods(userHomeDir string, password string) (sshAuths []ssh.AuthM
 
 		defaultKeys := []string{
 			filepath.Join(userHomeDir, ".ssh/id_rsa"),
-			filepath.Join(userHomeDir, ".ssh/id_cdsa"),
+			filepath.Join(userHomeDir, ".ssh/id_ecdsa"),
 			filepath.Join(userHomeDir, ".ssh/id_ecdsa_sk"),
 			filepath.Join(userHomeDir, ".ssh/id_ed25519"),
 			filepath.Join(userHomeDir, ".ssh/id_ed25519_sk"),

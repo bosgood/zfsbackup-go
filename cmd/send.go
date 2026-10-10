@@ -47,9 +47,14 @@ var (
 
 // sendCmd represents the send command
 var sendCmd = &cobra.Command{
-	Use:     "send [flags] filesystem|volume|snapshot uri(s)",
-	Short:   "send will backup of a ZFS volume similar to how the \"zfs send\" command works.",
-	Long:    `send take a subset of the`,
+	Use:   "send [flags] filesystem|volume|snapshot uri(s)",
+	Short: "send will backup of a ZFS volume similar to how the \"zfs send\" command works.",
+	Long: `send runs "zfs send" for the snapshot given (or the one --full, --increment or
+--fullIfOlderThan selects), splits the stream into volumes of --volsize MiB, and
+optionally compresses, encrypts and signs each one before uploading it to every
+destination URI. A manifest that lists the volumes is uploaded last. Use "receive"
+to restore a backup, "list" to see the backups at a destination, and "plan" or
+--dry-run to see what a run would send without uploading anything.`,
 	PreRunE: validateSendFlags,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		log.AppLogger.Infof("Limiting the number of active files to %d", jobInfo.MaxFileBuffer)
@@ -101,7 +106,7 @@ func init() {
 		&jobInfo.Resume,
 		"resume",
 		false,
-		"set this flag to true when you want to try and resume a previously cancled or failed backup. It is up to the caller to ensure the same "+
+		"set this flag to true when you want to try and resume a previously cancelled or failed backup. It is up to the caller to ensure the same "+
 			"command line arguments are provided between the original backup and the resumed one.",
 	)
 	backup.AddSmartFlags(sendCmd.Flags(), &jobInfo)

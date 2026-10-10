@@ -1,5 +1,9 @@
 # CHANGELOG
 
+* [FIX] ssh: the default key list tries `~/.ssh/id_ecdsa`; it was misspelled `id_cdsa` and never found
+* [FIX] cli: `send --help` describes the command (its description was a truncated sentence); `--fullIfOlderThan` help reads correctly; `plan --help` no longer shows backticked text as flag types
+* [CHANGE] docs: README rewrite: build from source (no `go get`, no releases link), `zfs` named as the host requirement, every S3 environment variable, `--auto` restore semantics, `list` and `clean` sections, exit codes, links to the docs, and recaptured help for every command
+* [ADD] dev: `make help CMD=<command>` prints a command's `--help` from the working tree; `make fmt` formats every tracked `.go` file (its directory list was empty, so it formatted nothing)
 * [FIX] clean: a cached manifest that is not at the destination and that this run cannot read (truncated, or encrypted to another key) stops the run in both modes; `--cleanLocal` no longer deletes it or its volumes. The error says whose the file may be and to delete it by hand if it is yours
 * [FIX] clean: volumes of a backup set that a manifest under another `--manifestPrefix` names at the destination are never deleted; before, a plain `clean` under one prefix deleted the other prefix's volumes of the same dataset
 * [FIX] files: the manifest limit is 1 GiB of JSON (about 2 million volumes, 400 TiB in one send at the default `--volsize`), was 64 MiB (128,558 volumes, 24.5 TiB); `send` refuses to write a manifest over the limit and says to use a larger `--volsize`; a manifest over the limit is kept in the cache, downloaded once, and the error no longer advises deleting it
