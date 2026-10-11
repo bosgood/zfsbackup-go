@@ -1146,6 +1146,16 @@ func manifestCost(j *files.JobInfo, volumes, volumeBytes uint64) (base, perVolum
 	return base, uint64(len(data)) + 1, nil // "," between volumes
 }
 
+// errorUnlessCanceledf logs at Error, or at Debug when ctx is canceled: the error is then the
+// cancel's echo (a SIGTERM, or another stage that failed and logged its own error).
+func errorUnlessCanceledf(ctx context.Context, format string, args ...interface{}) {
+	if ctx.Err() != nil {
+		log.AppLogger.Debugf(format, args...)
+		return
+	}
+	log.AppLogger.Errorf(format, args...)
+}
+
 // nolint:funlen,gocyclo // Difficult to break this apart
 func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeInfo, buffer <-chan bool) error {
 	group, ctx := errgroup.WithContext(pctx)
@@ -1287,7 +1297,7 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 				}
 				return nil
 			} else if ierr != nil {
-				log.AppLogger.Errorf("Error while trying to read from the zfs stream for volume %s - %v", volume.ObjectName, ierr)
+				errorUnlessCanceledf(pctx, "Error while trying to read from the zfs stream for volume %s - %v", volume.ObjectName, ierr)
 				return ierr
 			}
 		}
@@ -1315,7 +1325,10 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 	defer func() {
 		if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
 			err = cmd.Process.Kill()
-			if err != nil {
+			if errors.Is(err, os.ErrProcessDone) {
+				// Killed by a signal, a cancel's included: Wait has reaped it already.
+				return
+			} else if err != nil {
 				log.AppLogger.Errorf("Could not kill zfs send command due to error - %v", err)
 				return
 			}
@@ -1334,7 +1347,7 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 
 	err = group.Wait()
 	if err != nil {
-		log.AppLogger.Errorf("Error waiting for zfs command to finish - %v", err)
+		errorUnlessCanceledf(pctx, "Error waiting for zfs command to finish - %v", err)
 		// The deferred stop runs before the caller's group cancels pctx, so abort here too.
 		if volume := current.Load(); volume != nil {
 			volume.Abort(err)

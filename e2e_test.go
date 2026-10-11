@@ -108,6 +108,11 @@ func (env *e2eEnv) writeSnapshots(t *testing.T, volume string, snaps []files.Sna
 
 // send runs `zfsbackup send` in-process and returns what it logged.
 func (env *e2eEnv) send(args ...string) (string, error) {
+	return env.sendCtx(context.Background(), args...)
+}
+
+// sendCtx is send under ctx. Like main, it removes the temp dir when the send fails.
+func (env *e2eEnv) sendCtx(ctx context.Context, args ...string) (string, error) {
 	cmd.ResetSendJobInfo()
 	var logs bytes.Buffer
 	log.AppLogger.SetBackend(logging.AddModuleLevel(logging.NewLogBackend(&logs, "", 0)))
@@ -123,7 +128,7 @@ func (env *e2eEnv) send(args ...string) (string, error) {
 		cmd.RootCmd.SetArgs(nil)
 		cmd.ResetSendJobInfo()
 	}()
-	err := cmd.RootCmd.ExecuteContext(context.Background())
+	_, err := cmd.Run(ctx)
 	return logs.String(), err
 }
 
