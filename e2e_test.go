@@ -129,17 +129,23 @@ func (env *e2eEnv) send(args ...string) (string, error) {
 
 // plan runs `zfsbackup plan` in-process and returns what it printed and logged.
 func (env *e2eEnv) plan(args ...string) (out, logs string, err error) {
-	cmd.ResetSendJobInfo()
+	return env.run(cmd.ResetSendJobInfo, append([]string{"plan", "--zfsPath", env.self, "--workingDirectory", env.work}, args...)...)
+}
+
+// run runs `zfsbackup <args>` in-process, with reset before and after, and returns what it
+// printed and logged.
+func (env *e2eEnv) run(reset func(), args ...string) (out, logs string, err error) {
+	reset()
 	var outBuf, logBuf bytes.Buffer
 	log.AppLogger.SetBackend(logging.AddModuleLevel(logging.NewLogBackend(&logBuf, "", 0)))
 	oldStdout := config.Stdout
 	config.Stdout = &outBuf
 	defer func() { config.Stdout = oldStdout }()
 
-	cmd.RootCmd.SetArgs(append([]string{"plan", "--zfsPath", env.self, "--workingDirectory", env.work}, args...))
+	cmd.RootCmd.SetArgs(args)
 	defer func() {
 		cmd.RootCmd.SetArgs(nil)
-		cmd.ResetSendJobInfo()
+		reset()
 	}()
 	err = cmd.RootCmd.ExecuteContext(context.Background())
 	return outBuf.String(), logBuf.String(), err

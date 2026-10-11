@@ -21,36 +21,17 @@
 package main
 
 import (
-	"bytes"
-	"context"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/op/go-logging"
-
 	"github.com/someone1/zfsbackup-go/cmd"
-	"github.com/someone1/zfsbackup-go/config"
 	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/log"
 )
 
 // list runs `zfsbackup list` in-process and returns what it printed and logged.
 func (env *e2eEnv) list(args ...string) (out, logs string, err error) {
-	cmd.ResetListJobInfo()
-	var outBuf, logBuf bytes.Buffer
-	log.AppLogger.SetBackend(logging.AddModuleLevel(logging.NewLogBackend(&logBuf, "", 0)))
-	oldStdout := config.Stdout
-	config.Stdout = &outBuf
-	defer func() { config.Stdout = oldStdout }()
-
-	cmd.RootCmd.SetArgs(append([]string{"list", "--zfsPath", env.self, "--workingDirectory", env.work}, args...))
-	defer func() {
-		cmd.RootCmd.SetArgs(nil)
-		cmd.ResetListJobInfo()
-	}()
-	err = cmd.RootCmd.ExecuteContext(context.Background())
-	return outBuf.String(), logBuf.String(), err
+	return env.run(cmd.ResetListJobInfo, append([]string{"list", "--zfsPath", env.self, "--workingDirectory", env.work}, args...)...)
 }
 
 // list with a secret ring that lacks the key the manifests are encrypted to fails, names the key

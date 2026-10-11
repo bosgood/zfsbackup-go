@@ -339,12 +339,13 @@ func readCachedManifest(
 // unreadableManifestError is the error for the object objectName under the manifest prefix that
 // is not a manifest this run can accept. It names the object, and says what to do: a manifest
 // over the limit may be a real backup of more volumes than this version reads, and one encrypted
-// or signed with a key this run lacks is a backup written with another key, so neither must be
+// or signed with a key this run lacks is most likely a backup written with another key, so neither must be
 // deleted; anything else is not a manifest, and deleting it is the way out. A manifest over
 // the limit stays at cachePath, and readCachedManifest reads that copy, not the object, until
 // it is deleted: the error says so, or replacing the object would change nothing.
 func unreadableManifestError(objectName, cachePath string, err error) error {
-	if errors.Is(err, files.ErrManifestTooLong) {
+	switch {
+	case errors.Is(err, files.ErrManifestTooLong):
 		err = fmt.Errorf(
 			"could not read the manifest %s at the destination: %w. If you wrote it, it is the manifest of a backup "+
 				"with more volumes than this version reads: do not delete it, its volumes or its copy in the cache, and "+
@@ -353,7 +354,7 @@ func unreadableManifestError(objectName, cachePath string, err error) error {
 				"reads it, not the object at the destination",
 			objectName, err, cachePath,
 		)
-	} else if errors.As(err, new(*files.KeyError)) {
+	case errors.As(err, new(*files.KeyError)):
 		err = fmt.Errorf(
 			"could not read the manifest %s at the destination: %w. It is most likely a backup of yours written "+
 				"with other keys or other --encryptTo/--signFrom flags: pass the secret key ring that holds its key "+
@@ -361,7 +362,7 @@ func unreadableManifestError(objectName, cachePath string, err error) error {
 				"with. Do not delete it unless you know it is not a backup",
 			objectName, err,
 		)
-	} else {
+	default:
 		err = fmt.Errorf(
 			"could not read the manifest %s at the destination: %w. If you did not write it (it is not a backup "+
 				"of yours, or someone else put it there), delete that object from the destination, then run again",
