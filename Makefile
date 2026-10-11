@@ -86,6 +86,7 @@ devcontainer-firewall-check:
 
 # Run a single test against the supported toolchain without rebuilding the
 # image, e.g. `make test-one RUN=TestSelectSmartSnapshots PKG=./backup/`.
+# TESTFLAGS adds go test flags, e.g. TESTFLAGS=-race.
 GO_IMAGE=golang:$(GO_VERSION)-bookworm
 RUN?=.
 PKG?=./...
@@ -93,7 +94,7 @@ PKG?=./...
 GOCACHE_DIR?=/tmp/zfsb-gocache
 test-one:
 	mkdir -p "$(GOCACHE_DIR)"
-	docker run --rm -v "$(CURDIR)":/src -v "$(GOCACHE_DIR)":/root/.cache/go-build -w /src $(GO_IMAGE) go test -run '$(RUN)' -v $(PKG)
+	docker run --rm -v "$(CURDIR)":/src -v "$(GOCACHE_DIR)":/root/.cache/go-build -w /src $(GO_IMAGE) go test $(TESTFLAGS) -run '$(RUN)' -v $(PKG)
 
 # Report files that `gofmt -s` would rewrite, using the pinned toolchain.
 # Checks every tracked .go file outside vendor/ (so not the tmp/ scratch clones) with the pinned toolchain.

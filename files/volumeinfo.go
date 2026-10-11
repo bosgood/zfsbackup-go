@@ -113,6 +113,9 @@ type VolumeInfo struct {
 	// Detail Objects
 	counter   *datacounter.WriterCounter
 	usingPipe bool
+	// extracted marks a pipe volume that Extract reads: rw and cmd are then the reader's, and
+	// the writer's Close leaves them to the reader's. Set under lock.
+	extracted bool
 	isClosed  bool
 	isOpened  bool
 	closeErr  error
@@ -343,7 +346,12 @@ func ExtractLocal(ctx context.Context, j *JobInfo, path string, isManifest bool)
 // Extract will setup the volume for reading such that reading from it will handle any
 // decryption, signature verification, and decompression that was used on it.
 func (v *VolumeInfo) Extract(ctx context.Context, j *JobInfo, isManifest bool) error {
-	if !v.usingPipe {
+	if v.usingPipe {
+		// Before the first read: the writer cannot finish, and Close, until this side reads.
+		v.lock.Lock()
+		v.extracted = true
+		v.lock.Unlock()
+	} else {
 		f, ferr := os.Open(v.filename)
 		if ferr != nil {
 			return ferr
@@ -466,17 +474,22 @@ func (v *VolumeInfo) Close() error {
 		}
 	}
 
+	// The writer of a pipe that Extract reads: the decompressor is the reader's, who may be in a
+	// Read of it now. Closing it here deadlocked pgzip, whose read-ahead waited for the end of
+	// the volume still in bufw.
+	readerOwned := v.pw != nil && v.extracted
+
 	// Close the (de)compressor, if any
 	if v.cw != nil {
 		keep(v.cw.Close())
 		v.cw = nil
 	}
-	if v.rw != nil {
+	if !readerOwned && v.rw != nil {
 		keep(v.rw.Close())
 		v.rw = nil
 	}
 	// If we used an external (de)compressor, wait for it to close as well
-	if v.cmd != nil {
+	if !readerOwned && v.cmd != nil {
 		if v.cmdWaited {
 			keep(v.cmdErr)
 		} else {
