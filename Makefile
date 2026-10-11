@@ -36,6 +36,21 @@ integration:
 test-docker:
 	$(DOCKER_BUILD) --target test -t zfsbackup-test . && docker run --rm zfsbackup-test
 
+# Only build the `integration` image (it compiles and vets the test); works on any Docker host.
+integration-image:
+	$(DOCKER_BUILD) --target integration -t zfsbackup-integration .
+
+# ZFS + S3 integration test (TestIntegrationS3) in Docker against MinIO. Needs a
+# Linux host whose kernel has the zfs module (see integration/README.md); on a
+# Mac use integration-vm. RUN picks tests, e.g. RUN=TestIntegrationS3/Pipe.
+# `down -v` runs when the test fails too; the target keeps the test's status.
+INTEGRATION_COMPOSE ?= -f integration/compose.yaml
+INTEGRATION_RUN = $(if $(filter .,$(RUN)),TestIntegrationS3,$(RUN))
+integration-docker:
+	GO_VERSION=$(GO_VERSION) RUN='$(INTEGRATION_RUN)' docker compose $(INTEGRATION_COMPOSE) up \
+		--build --abort-on-container-exit --exit-code-from zfs; \
+	status=$$?; docker compose $(INTEGRATION_COMPOSE) down -v; exit $$status
+
 # Tests that need a full disk: the working directory's temp/ is a 40 KiB tmpfs. Plain `go test`
 # skips them (they need ZFSBACKUP_ENOSPC_WORK).
 test-enospc:
