@@ -35,6 +35,7 @@ import (
 // recheckKey describes one object of a recheckS3Client.
 type recheckKey struct {
 	class string
+	size  int64 // ContentLength; 0 means 50
 	// restoredUntil, if set, is the expiry of the object's restored copy, given the number of
 	// waits that have ended so far. A zero time means the copy is gone (no x-amz-restore header).
 	restoredUntil func(waits int) time.Time
@@ -62,7 +63,11 @@ func (c *recheckS3Client) HeadObjectWithContext(
 	_ aws.Context, in *s3.HeadObjectInput, _ ...request.Option,
 ) (*s3.HeadObjectOutput, error) {
 	k := c.keys[aws.StringValue(in.Key)]
-	out := &s3.HeadObjectOutput{StorageClass: aws.String(k.class), ContentLength: aws.Int64(50)}
+	size := k.size
+	if size == 0 {
+		size = 50
+	}
+	out := &s3.HeadObjectOutput{StorageClass: aws.String(k.class), ContentLength: aws.Int64(size)}
 	if k.restoreHeads > 0 {
 		k.restoreHeads++
 		if k.restoreHeads == 2 {
@@ -138,6 +143,13 @@ func TestS3PreDownloadExtendsCopyThatExpiresDuringWait(t *testing.T) {
 	}
 	if want := []string{"vol2", "vol1"}; strings.Join(c.restores, ",") != strings.Join(want, ",") {
 		t.Errorf("RestoreObject calls %q, want %q", c.restores, want)
+	}
+	// The extension gets the same window as a new restore: the days to download every key.
+	want := restoreDays(100, 50<<20)
+	for _, key := range []string{"vol1", "vol2"} {
+		if got := c.keys[key].restoreDays; got == nil || *got != want {
+			t.Errorf("RestoreObject of %s: Days %v, want %d", key, aws.Int64Value(got), want)
+		}
 	}
 }
 

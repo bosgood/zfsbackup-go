@@ -30,6 +30,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,6 +44,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3iface"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager/s3manageriface"
+	"github.com/dustin/go-humanize"
 
 	"github.com/someone1/zfsbackup-go/files"
 	"github.com/someone1/zfsbackup-go/log"
@@ -294,6 +296,9 @@ func (a *AWSS3Backend) Delete(ctx context.Context, key string) error {
 // (default Bulk); AWS_S3_RESTORE_POLL_INTERVAL sets how often a pending restore is polled
 // (a duration, default 1m; the interval grows up to ten times that).
 //
+// A restored copy stays readable for the days the downloads of every key need (restoreDays, at
+// AWS_S3_RESTORE_DOWNLOAD_RATE); AWS_S3_RESTORE_DAYS sets the days instead.
+//
 // A restored copy that expires within restoreExpiryMargin is restored again: S3 then extends its
 // expiry, and the copy is still there when the downloads that follow PreDownload reach it.
 //
@@ -307,8 +312,12 @@ func (a *AWSS3Backend) PreDownload(ctx context.Context, keys []string) error {
 		restoreTier = s3.TierBulk
 	}
 	log.AppLogger.Debugf("s3 backend: will use the %s restore tier when trying to restore from Glacier.", restoreTier)
+	window, err := newRestoreWindow()
+	if err != nil {
+		return err
+	}
 	for round := 0; ; round++ {
-		toRestore, readable, bytesToRestore, err := a.classifyRestores(ctx, keys, restoreTier)
+		toRestore, readable, bytesToRestore, err := a.classifyRestores(ctx, keys, restoreTier, window)
 		if err != nil {
 			return err
 		}
@@ -332,19 +341,29 @@ const maxRestoreRounds = 3
 // classifyRestores HEADs each key (relative to the prefix) and requests a restore for each one
 // that a GET cannot read yet, or whose restored copy expires within restoreExpiryMargin. It
 // returns the prefixed keys to wait for and their total size, and the keys (relative) that a
-// GET can read now, including the copies it extends.
+// GET can read now, including the copies it extends. Every key is HEADed before any restore, so
+// window sees the size of all of them.
 func (a *AWSS3Backend) classifyRestores(
-	ctx context.Context, keys []string, restoreTier string,
+	ctx context.Context, keys []string, restoreTier string, window *restoreWindow,
 ) (toRestore, readable []string, bytesToRestore int64, err error) {
-	for _, rel := range keys {
-		key := a.prefix + rel
-		resp, err := a.client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
+	heads := make([]*s3.HeadObjectOutput, len(keys))
+	var totalBytes int64
+	for i, rel := range keys {
+		heads[i], err = a.client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
 			Bucket: aws.String(a.bucketName),
-			Key:    aws.String(key),
+			Key:    aws.String(a.prefix + rel),
 		})
 		if err != nil {
 			return nil, nil, 0, err
 		}
+		totalBytes += aws.Int64Value(heads[i].ContentLength)
+	}
+	days := window.daysFor(totalBytes)
+	var requested int
+	var requestedBytes int64
+	classes := make(map[string]bool)
+	for i, rel := range keys {
+		key, resp := a.prefix+rel, heads[i]
 		if !needsRestore(resp) {
 			continue
 		}
@@ -377,7 +396,7 @@ func (a *AWSS3Backend) classifyRestores(
 		// A restored Intelligent-Tiering object moves back to a frequent-access tier for good;
 		// S3 rejects a lifetime for it.
 		if resp.ArchiveStatus == nil {
-			restoreRequest.Days = aws.Int64(3)
+			restoreRequest.Days = aws.Int64(days)
 		}
 		_, rerr := a.client.RestoreObjectWithContext(ctx, &s3.RestoreObjectInput{
 			Bucket:         aws.String(a.bucketName),
@@ -396,8 +415,84 @@ func (a *AWSS3Backend) classifyRestores(
 			log.AppLogger.Debugf("s3 backend: error trying to restore key %s - %v", key, rerr)
 			return nil, nil, 0, rerr
 		}
+		requested++
+		requestedBytes += aws.Int64Value(resp.ContentLength)
+		classes[storageClass] = true
+	}
+	if requested > 0 && !window.logged {
+		window.logged = true
+		names := make([]string, 0, len(classes))
+		for class := range classes {
+			names = append(names, class)
+		}
+		sort.Strings(names)
+		log.AppLogger.Noticef(
+			"s3 backend: restoring %d objects (%s) from %s for %d days, the time to download %s at %s/s; "+
+				"AWS_S3_RESTORE_DAYS overrides.",
+			requested, humanize.IBytes(uint64(requestedBytes)), strings.Join(names, ", "), days,
+			humanize.IBytes(uint64(totalBytes)), humanize.IBytes(uint64(window.rate)),
+		)
 	}
 	return toRestore, readable, bytesToRestore, nil
+}
+
+// restoreWindow is how long one PreDownload keeps its restored copies.
+type restoreWindow struct {
+	rate     int64 // bytes per second the downloads run at
+	override int64 // AWS_S3_RESTORE_DAYS, or 0
+	days     int64 // set by the first daysFor
+	logged   bool
+}
+
+// defaultRestoreDownloadRate is the download rate restoreDays assumes without
+// AWS_S3_RESTORE_DOWNLOAD_RATE: 50 MiB/s, about 4.1 TiB a day.
+const defaultRestoreDownloadRate = 50 << 20
+
+// newRestoreWindow reads AWS_S3_RESTORE_DOWNLOAD_RATE (bytes per second, such as 50MiB) and
+// AWS_S3_RESTORE_DAYS (1 to 30). A bad value is an error.
+func newRestoreWindow() (*restoreWindow, error) {
+	w := &restoreWindow{rate: defaultRestoreDownloadRate}
+	if v := os.Getenv("AWS_S3_RESTORE_DOWNLOAD_RATE"); v != "" {
+		rate, err := humanize.ParseBytes(v)
+		if err != nil || rate == 0 || rate > 1<<46 { // 64 TiB/s: rate * 86400 must not overflow
+			return nil, fmt.Errorf("s3 backend: AWS_S3_RESTORE_DOWNLOAD_RATE=%q: want bytes per second, such as 50MiB", v)
+		}
+		w.rate = int64(rate)
+	}
+	if v := os.Getenv("AWS_S3_RESTORE_DAYS"); v != "" {
+		days, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || days < 1 || days > maxRestoreDays {
+			return nil, fmt.Errorf("s3 backend: AWS_S3_RESTORE_DAYS=%q: want a number of days from 1 to %d", v, maxRestoreDays)
+		}
+		w.override = days
+	}
+	return w, nil
+}
+
+// daysFor returns the days to restore for, for downloads of totalBytes. The first call fixes the
+// answer for the PreDownload: later rounds check fewer keys, but the downloads still cover all.
+func (w *restoreWindow) daysFor(totalBytes int64) int64 {
+	if w.days == 0 {
+		w.days = w.override
+		if w.days == 0 {
+			w.days = restoreDays(totalBytes, w.rate)
+		}
+	}
+	return w.days
+}
+
+const (
+	minRestoreDays = 3
+	maxRestoreDays = 30
+)
+
+// restoreDays is how long a restored copy must stay readable: the days to download totalBytes at
+// rate bytes per second, plus one for the wait that follows the restore and one for
+// restoreExpiryMargin. At least 3, at most 30.
+func restoreDays(totalBytes, rate int64) int64 {
+	perDay := rate * 86400
+	days := (totalBytes+perDay-1)/perDay + 2
+	return min(max(days, minRestoreDays), maxRestoreDays)
 }
 
 // waitForRestores polls each prefixed key until a GET can read it.
