@@ -250,18 +250,25 @@ func backupThatApplies(backups []*files.JobInfo, local []files.SnapshotInfo) *fi
 // chain walk that does not stop at it goes on to a full, which zfs refuses to receive into a
 // dataset that has snapshots, with a message that does not name this cause.
 func noteLocalSnapshotMismatch(volume string, snap *files.SnapshotInfo, local []files.SnapshotInfo) {
+	if msg := localSnapshotMismatch(volume, snap, local); msg != "" {
+		log.AppLogger.Noticef("%s The restore does not build on it.", msg)
+	}
+}
+
+// localSnapshotMismatch returns a sentence that names both creation times when local holds a
+// snapshot (not a bookmark) named as snap but created at another time, and "" otherwise.
+func localSnapshotMismatch(volume string, snap *files.SnapshotInfo, local []files.SnapshotInfo) string {
 	const layout = "2006-01-02 15:04:05 MST"
 	for i := range local {
 		if local[i].Name != snap.Name || local[i].Bookmark || local[i].Equal(snap) {
 			continue
 		}
-		log.AppLogger.Noticef(
-			"The local snapshot %s@%s is not the one backed up: it was created %s, the backup's on %s. "+
-				"The restore does not build on it.",
+		return fmt.Sprintf(
+			"The local snapshot %s@%s is not the one backed up: it was created %s, the backup's on %s.",
 			volume, snap.Name, local[i].CreationTime.UTC().Format(layout), snap.CreationTime.UTC().Format(layout),
 		)
-		return
 	}
+	return ""
 }
 
 // sourceIsLocal returns whether the incremental backup b is from a snapshot in local.
@@ -293,7 +300,7 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 		return cerr
 	}
 
-	// See if the snapshots we want to restore already exist
+	// The dataset zfs receive writes to
 	volume := jobInfo.LocalVolume
 	parts := strings.Split(jobInfo.VolumeName, "/")
 	if jobInfo.FullPath {
@@ -305,31 +312,39 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 		volume = fmt.Sprintf("%s/%s", volume, parts[len(parts)-1])
 	}
 
-	if jobInfo.BaseSnapshot.CreationTime.IsZero() {
-		if ok, verr := validateSnapShotExists(ctx, &jobInfo.BaseSnapshot, volume, false); verr != nil {
-			log.AppLogger.Errorf("Cannot validate if selected base snapshot exists due to error - %v", verr)
-			return verr
-		} else if ok {
-			log.AppLogger.Noticef("Selected base snapshot already exists, nothing to do!")
-			return nil
-		}
-	}
-
-	// Check that we have the parent snap shot this wants to restore from
-	if jobInfo.IncrementalSnapshot.Name != "" && jobInfo.IncrementalSnapshot.CreationTime.IsZero() {
-		if ok, verr := validateSnapShotExists(ctx, &jobInfo.IncrementalSnapshot, volume, false); verr != nil {
-			log.AppLogger.Errorf("Cannot validate if selected incremental snapshot exists due to error - %v", verr)
-			return verr
-		} else if !ok {
-			log.AppLogger.Errorf("Selected incremental snapshot does not exist!")
-			return fmt.Errorf("selected incremental snapshot does not exist")
-		}
-	}
-
 	manifest, err := readCachedManifest(ctx, jobInfo, localCachePath, backend, jobInfo.ManifestObjectName())
 	if err != nil {
 		log.AppLogger.Errorf("Error trying to retrieve manifest volume - %v", err)
 		return err
+	}
+
+	// Compare with the manifest's snapshots: they carry the creation times of what was backed up.
+	local, lerr := zfs.GetSnapshotsAndBookmarks(ctx, volume)
+	if lerr != nil {
+		// The dataset is not there yet
+		log.AppLogger.Debugf("Could not list snapshots for %s: %v", volume, lerr)
+		local = nil
+	}
+	if validateSnapShotExistsFromSnaps(&manifest.BaseSnapshot, local, false) {
+		log.AppLogger.Noticef("Selected base snapshot %s@%s already exists, nothing to do!", volume, manifest.BaseSnapshot.Name)
+		return nil
+	}
+	// zfs would refuse it, and with --force a full stream destroys the snapshots there: a name
+	// collision is never what -F is for.
+	if msg := localSnapshotMismatch(volume, &manifest.BaseSnapshot, local); msg != "" {
+		log.AppLogger.Errorf("%s Refusing to receive over it, with or without --force.", msg)
+		return fmt.Errorf("the local snapshot %s@%s is not the one backed up", volume, manifest.BaseSnapshot.Name)
+	}
+
+	// Check that we have the parent snapshot this wants to restore from. --auto checked its chain
+	// before, and an earlier step of the chain may have just received it.
+	if manifest.IncrementalSnapshot.Name != "" && !jobInfo.AutoRestore {
+		source := manifest.IncrementalSnapshot // a copy: the check records whether it matched a bookmark
+		if !validateSnapShotExistsFromSnaps(&source, local, false) {
+			noteLocalSnapshotMismatch(volume, &manifest.IncrementalSnapshot, local)
+			log.AppLogger.Errorf("Selected incremental snapshot does not exist!")
+			return fmt.Errorf("selected incremental snapshot does not exist")
+		}
 	}
 
 	manifest.ManifestPrefix = jobInfo.ManifestPrefix

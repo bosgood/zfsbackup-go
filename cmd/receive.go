@@ -21,8 +21,6 @@
 package cmd
 
 import (
-	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -32,7 +30,6 @@ import (
 	"github.com/someone1/zfsbackup-go/backup"
 	"github.com/someone1/zfsbackup-go/files"
 	"github.com/someone1/zfsbackup-go/log"
-	"github.com/someone1/zfsbackup-go/zfs"
 )
 
 // receiveCmd represents the receive command
@@ -212,20 +209,9 @@ func validateReceiveFlags(cmd *cobra.Command, args []string) error {
 	// Remove 'origin=' from beginning of -o argument
 	jobInfo.Origin = strings.TrimPrefix(jobInfo.Origin, "origin=")
 
-	if !jobInfo.AutoRestore {
-		// Let's see if we already have this snap shot
-		creationTime, err := zfs.GetCreationDate(context.TODO(), fmt.Sprintf("%s@%s", jobInfo.LocalVolume, jobInfo.BaseSnapshot.Name))
-		if err == nil {
-			jobInfo.BaseSnapshot.CreationTime = creationTime
-		}
-		if jobInfo.IncrementalSnapshot.Name != "" {
-			jobInfo.IncrementalSnapshot.Name = strings.TrimPrefix(jobInfo.IncrementalSnapshot.Name, jobInfo.VolumeName)
-			jobInfo.IncrementalSnapshot.Name = strings.TrimPrefix(jobInfo.IncrementalSnapshot.Name, "@")
-			creationTime, err = zfs.GetCreationDate(context.TODO(), fmt.Sprintf("%s@%s", jobInfo.LocalVolume, jobInfo.IncrementalSnapshot.Name))
-			if err == nil {
-				jobInfo.IncrementalSnapshot.CreationTime = creationTime
-			}
-		}
+	if jobInfo.IncrementalSnapshot.Name != "" {
+		jobInfo.IncrementalSnapshot.Name = strings.TrimPrefix(jobInfo.IncrementalSnapshot.Name, jobInfo.VolumeName)
+		jobInfo.IncrementalSnapshot.Name = strings.TrimPrefix(jobInfo.IncrementalSnapshot.Name, "@")
 	}
 
 	for _, destination := range jobInfo.Destinations {

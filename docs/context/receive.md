@@ -7,11 +7,16 @@ Diagrams 7 and 8 in [../architecture.md](../architecture.md).
 ## `Receive` (`backup/restore.go`)
 
 1. `readCachedManifest`: read the manifest from the local cache, sync from the destination if missing.
-2. `CheckDecompressor`: run only a known decompressor, or the one given by `--compressor` (`JobInfo.TrustedCompressor`). A manifest from an untrusted writer must not pick the binary.
-3. `backend.PreDownload`: S3 Glacier restore and similar.
-4. `downloadChannel` has one entry per volume. `N = maxFileBuffer` workers download with backoff. Each checks size + SHA-256 against the manifest. **A mismatch is permanent.** The retry loop does not retry it.
-5. Orderer emits volumes in order to `receiveStream`.
-6. `VolumeInfo.Extract` reverses the writer layers: pgp verify or decrypt, then decompress. Output goes to `zfs receive` stdin.
+2. List the target dataset (the one `-d`/`-e` compute, not `LocalVolume`). Compare with the MANIFEST's snapshots, which carry creation times:
+   - The base snapshot is there (name and creation time): Notice "already exists, nothing to do", return nil.
+   - A snapshot with the base's name but another creation time is there: error that names both times (`localSnapshotMismatch`), with or without `--force`. `-F` would destroy the local snapshots.
+   - Explicit receive only: the incremental source must be there. `--auto` checked its chain before.
+   - A listing error means the dataset is not there yet: an empty list.
+3. `CheckDecompressor`: run only a known decompressor, or the one given by `--compressor` (`JobInfo.TrustedCompressor`). A manifest from an untrusted writer must not pick the binary.
+4. `backend.PreDownload`: S3 Glacier restore and similar.
+5. `downloadChannel` has one entry per volume. `N = maxFileBuffer` workers download with backoff. Each checks size + SHA-256 against the manifest. **A mismatch is permanent.** The retry loop does not retry it.
+6. Orderer emits volumes in order to `receiveStream`.
+7. `VolumeInfo.Extract` reverses the writer layers: pgp verify or decrypt, then decompress. Output goes to `zfs receive` stdin.
 
 Receive flags on `JobInfo`: `Force`, `FullPath`, `LastPath`, `NotMounted`, `Origin`, `LocalVolume`, `AutoRestore`.
 
@@ -28,4 +33,4 @@ Receive flags on `JobInfo`: `Force`, `FullPath`, `LastPath`, `NotMounted`, `Orig
 
 - `backup/restore_test.go`, `backup/receive3_test.go`.
 - `receiveStream` without ZFS: pass `exec.Command("cat")` as the receive command.
-- End to end: root `e2e_receive*_test.go`, `e2e_thaw3_test.go` (PreDownload). `FAKEZFS_RECEIVE_LOG` records bytes + SHA-256 that `zfs receive` got.
+- End to end: root `e2e_receive*_test.go` (`e2e_receive_exists_test.go`: a target that already holds the snapshot, or another of its name), `e2e_thaw3_test.go` (PreDownload). `FAKEZFS_RECEIVE_LOG` records bytes + SHA-256 that `zfs receive` got.
