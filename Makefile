@@ -79,8 +79,7 @@ test-one:
 	mkdir -p "$(GOCACHE_DIR)"
 	docker run --rm -v "$(CURDIR)":/src -v "$(GOCACHE_DIR)":/root/.cache/go-build -w /src $(GO_IMAGE) go test -run '$(RUN)' -v $(PKG)
 
-# Report files that `gofmt -s` would rewrite, using the pinned toolchain. The
-# `fmt` target above iterates over an undefined DIRS and so checks nothing.
+# Report files that `gofmt -s` would rewrite, using the pinned toolchain.
 # Checks every tracked .go file outside vendor/ (so not the tmp/ scratch clones) with the pinned toolchain.
 # Fails if git lists no files: inside a git worktree the .git link points outside the mount.
 # Fails if gofmt does: a file that does not parse is not "formatted".

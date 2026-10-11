@@ -500,3 +500,39 @@ and never relax `manifestNamed` to accept any name.
 - The whole root package was run in one go (`make test-run PKG=.`).
 - `git status` shows nothing unstaged that is not yours (another session may
   share this tree; stage files by name).
+
+---
+
+## Implementation notes (2026-10-11)
+
+Executed on `clean-dry-run`, one commit per item: caed77d (1), f81f81c (2), 8380e26 (5),
+707b9df (3), 3fbe1e1 (4), e73af4e (7), plus 97091d8 (`make fmt-write`). Deviations:
+
+- **Item 1.** The incremental-source check runs for an explicit receive only. The fake zfs
+  does not add a received snapshot to its listing, so in `--auto` the check would fail on
+  step 2 of a chain. The chain walk already checks the source. `noteLocalSnapshotMismatch`
+  now wraps `localSnapshotMismatch`, which returns the sentence; the explicit path logs it as
+  an error. Sub-tests cover `--fullPath` and `--lastPath`.
+- **Item 2.** The advice says "most likely a backup of yours written with other keys or other
+  --encryptTo/--signFrom flags ... Do not delete it unless you know it is not a backup". Some
+  KeyErrors are "not signed" / "not encrypted", which can also be a forgery, so "It is a
+  backup of yours" was too sure. The unit test uses the `cacheBackend` mock (it counts
+  downloads) rather than a `FileBackend`. `env.list` lives in `e2e_list_test.go`.
+- **Item 5.** `TestSyncCacheRetriesTruncatedDownload` used the object name `manifests|x` (no
+  set part, no `.manifest`); it now uses a real manifest name.
+- **Item 3.** Passed first time: test-only. What finalizes the set: `tryResume` keeps all
+  volumes; `sendStream` skips the stream and returns at the `volNum > 1` Peek-EOF guard; the
+  forwarder's deferred `pending.done()` takes `pending` (started at 1) to zero when `startCh`
+  closes; the final-manifest goroutine saves from the kept `jobInfo.Volumes`. The partial and
+  the final manifest share one cache file (`partialManifestCachePath`).
+- **Item 4.** `classifyRestores` HEADs every key before the first RestoreObject (the days
+  depend on the total). A `restoreWindow` holds rate, override and the days the first round
+  fixes. The rate is capped at 64 TiB/s so `rate * 86400` cannot overflow. Extra test:
+  `TestS3PreDownloadRejectsBadRestoreEnv`. The red run used a stub `restoreDays` that returns
+  3, because without the function the package does not build.
+- **Item 7.** Passed first time: no incompatibility. Proven able to fail by breaking
+  `manifestNamed` in place (all four sub-tests failed). `build-rev` makes a Linux binary, so
+  the script runs in the same image through `make fixture-old REV=master`. `env.clean` wraps
+  `cleanS3In` (it works for any URI).
+- **Host.** `TestScenarioAdoptCreationTimes` and `TestE2EPlanManifestsFileAdoptsCreationTimes`
+  fail on the host at HEAD too (zone EDT); they pass in Docker.

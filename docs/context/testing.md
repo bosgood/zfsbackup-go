@@ -13,8 +13,10 @@ Read this before you run anything. All repeatable work goes through the Makefile
 | `make scenarios` / `make scenarios-update` | golden plan scenarios, see [plan.md](plan.md) |
 | `make test-enospc` | full-disk tests on a 40 KiB tmpfs |
 | `make lint` | golangci-lint v2, pinned image |
-| `make fmt-check` | `gofmt -s -l` in the pinned image. `make fmt` is broken (undefined `DIRS`). |
+| `make fmt-check` | `gofmt -s -l` in the pinned image. `make fmt` rewrites every tracked file with the host's gofmt. |
 | `make fmt-write FILES="a.go b.go"` | `gofmt -s -w` on those files in the pinned image. `fmt-check` sees tracked files only: check a new file after `git add`. |
+| `make build-rev REV=master` | build an older revision (its `vendor/`, pinned image, Linux) to `tmp/zfsbackup-<REV>` |
+| `make fixture-old REV=master` | `build-rev`, then write a destination with it to `testdata/manifests/<REV>-<hash>/` (`testdata/manifests/make-fixture.sh`, a `zfs` shim). Never regenerate a committed fixture to match new code |
 | `make integration` | needs a real ZFS host and `tank/data@c`; build tag `integration` |
 | `make plan ARGS="..."` | run `plan` with the working tree |
 
