@@ -76,25 +76,43 @@ destination of your choosing.`,
 // Execute adds all child commands to the root command sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute(ctx context.Context) {
+	cmd, err := Run(ctx)
+	if code := exitCode(cmd, err); code != 0 {
+		os.Exit(code)
+	}
+}
+
+// Run runs the command RootCmd's arguments name and removes the temp dir when it fails.
+// Execute calls it; the in-process e2e tests call it too.
+func Run(ctx context.Context) (*cobra.Command, error) {
+	// cobra gives a subcommand the root's context only when it has none, so an in-process
+	// run would keep the context of the first run, canceled or not.
+	for _, c := range RootCmd.Commands() {
+		c.SetContext(ctx)
+	}
 	cmd, err := RootCmd.ExecuteContextC(ctx)
 	if err != nil {
 		// PersistentPostRun only runs after a successful RunE, but a smart
 		// send with nothing new returns ErrNoOp from PreRunE, every day.
 		postRunCleanup(cmd, nil)
 	}
-	if code := exitCode(cmd, err); code != 0 {
-		os.Exit(code)
-	}
+	return cmd, err
 }
 
 // exitCode maps the outcome of a command to the process exit status: 0 on
-// success and when a smart send finds nothing new to back up, 2 when plan's
-// checks fail or a smart send finds the last backup newer than the pool, 1 for
-// other plan errors and 255 for any other error.
+// success and when a smart send finds nothing new to back up, 128+signal (130
+// for SIGINT, 143 for SIGTERM) when a signal stopped it, 2 when plan's checks
+// fail or a smart send finds the last backup newer than the pool, 1 for other
+// plan errors and 255 for any other error.
 func exitCode(cmd *cobra.Command, err error) int {
+	// After a cancel the error is often a wrapped child failure ("zfs send failed:
+	// signal: killed"), not context.Canceled: ask the handler, not the error.
+	sig := interrupted()
 	switch {
-	case err == nil, errors.Is(err, backup.ErrNoOp):
+	case err == nil, errors.Is(err, backup.ErrNoOp) && sig == 0:
 		return 0
+	case sig != 0:
+		return 128 + int(sig)
 	case errors.Is(err, errChecksFailed), errors.Is(err, backup.ErrLastBackupInFuture):
 		return 2
 	case cmd == planCmd:
@@ -176,6 +194,7 @@ func init() {
 
 func resetRootFlags() {
 	jobInfo = files.JobInfo{}
+	resetInterrupted()
 	numCores = 2
 	logLevel = "notice"
 	secretKeyRingPath = ""
@@ -191,6 +210,7 @@ func resetRootFlags() {
 
 // nolint:gocyclo,funlen // Will do later
 func processFlags(cmd *cobra.Command, args []string) error {
+	setRunningCmd(cmd.Name())
 	switch strings.ToLower(logLevel) {
 	case "critical":
 		logging.SetLevel(logging.CRITICAL, log.LogModuleName)

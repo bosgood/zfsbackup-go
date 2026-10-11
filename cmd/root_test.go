@@ -21,8 +21,10 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
+	"syscall"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -48,6 +50,27 @@ func TestExitCode(t *testing.T) {
 	for _, tc := range testCases {
 		if got := exitCode(tc.cmd, tc.err); got != tc.want {
 			t.Errorf("exitCode(%s, %v) = %d, want %d", tc.cmd.Name(), tc.err, got, tc.want)
+		}
+	}
+}
+
+func TestExitCodeAfterSignal(t *testing.T) {
+	t.Cleanup(resetInterrupted)
+	for _, tc := range []struct {
+		sig  syscall.Signal
+		err  error
+		want int
+	}{
+		{syscall.SIGINT, errors.New("x"), 130},
+		{syscall.SIGTERM, fmt.Errorf("zfs send failed: %w", errors.New("signal: killed")), 143},
+		{syscall.SIGTERM, backup.ErrNoOp, 143},
+		{syscall.SIGTERM, nil, 0}, // the command finished before it saw the signal
+	} {
+		signalMu.Lock()
+		interruptedBy = tc.sig
+		signalMu.Unlock()
+		if got := exitCode(sendCmd, tc.err); got != tc.want {
+			t.Errorf("after %s, exitCode(send, %v) = %d, want %d", signalName(tc.sig), tc.err, got, tc.want)
 		}
 	}
 }

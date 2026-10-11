@@ -27,8 +27,10 @@ import (
 )
 
 func main() {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// SIGINT and SIGTERM cancel ctx: the command stops, releases its lock and removes its temp
+	// files. Execute calls os.Exit, which skips this defer; that is harmless.
+	ctx, stop := cmd.SignalContext(context.Background())
+	defer stop()
 
 	cmd.Execute(ctx)
 }
