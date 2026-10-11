@@ -51,6 +51,28 @@ integration-docker:
 		--build --abort-on-container-exit --exit-code-from zfs; \
 	status=$$?; docker compose $(INTEGRATION_COMPOSE) down -v; exit $$status
 
+# The NixOS Lima VM with the zfs module and Docker (integration/lima.yaml,
+# integration/nixos/): the way to run integration-docker on a Mac. The first
+# integration-vm-up takes several minutes (image, nixos-rebuild, restart).
+# In the VM the test runs the VM's own zfs userland (integration/compose.nixos.yaml).
+LIMA_VM ?= zfsbackup
+integration-vm-up:
+	integration/vm-up.sh '$(LIMA_VM)'
+
+integration-vm: integration-vm-up
+	limactl shell '$(LIMA_VM)' -- bash -c 'cd "$(CURDIR)" && make integration-docker RUN="$(RUN)" \
+		INTEGRATION_COMPOSE="-f integration/compose.yaml -f integration/compose.nixos.yaml" \
+		ZFS_USERLAND="$$(dirname "$$(readlink -f "$$(command -v zfs)")")"'
+
+integration-vm-shell: integration-vm-up
+	limactl shell '$(LIMA_VM)'
+
+integration-vm-down:
+	limactl stop '$(LIMA_VM)'
+
+integration-vm-delete:
+	limactl delete --force '$(LIMA_VM)'
+
 # Tests that need a full disk: the working directory's temp/ is a 40 KiB tmpfs. Plain `go test`
 # skips them (they need ZFSBACKUP_ENOSPC_WORK).
 test-enospc:

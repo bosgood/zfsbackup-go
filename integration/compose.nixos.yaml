@@ -1,0 +1,9 @@
+# Added to compose.yaml on a NixOS host (make integration-vm does): the test
+# runs the host's own zfs userland, so it always matches the host's module.
+# ZFS_USERLAND is the bin directory of the host's zfs package, in /nix/store.
+services:
+  zfs:
+    volumes:
+      - /nix/store:/nix/store:ro
+    environment:
+      ZFS_USERLAND: "${ZFS_USERLAND:?set ZFS_USERLAND to the host zfs bin directory}"
