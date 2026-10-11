@@ -121,6 +121,11 @@ func (a *AWSS3Backend) Init(ctx context.Context, conf *BackendConfig, opts ...Op
 		opt.Apply(a)
 	}
 
+	// PreDownload reads these; a bad value fails every command now, not a receive later.
+	if _, err = newRestoreWindow(); err != nil {
+		return err
+	}
+
 	if a.client == nil {
 		awsconf := aws.NewConfig().
 			WithS3ForcePathStyle(true).
@@ -359,7 +364,7 @@ func (a *AWSS3Backend) classifyRestores(
 		totalBytes += aws.Int64Value(heads[i].ContentLength)
 	}
 	days := window.daysFor(totalBytes)
-	var requested int
+	var requested, withDays int
 	var requestedBytes int64
 	classes := make(map[string]bool)
 	for i, rel := range keys {
@@ -397,6 +402,7 @@ func (a *AWSS3Backend) classifyRestores(
 		// S3 rejects a lifetime for it.
 		if resp.ArchiveStatus == nil {
 			restoreRequest.Days = aws.Int64(days)
+			withDays++
 		}
 		_, rerr := a.client.RestoreObjectWithContext(ctx, &s3.RestoreObjectInput{
 			Bucket:         aws.String(a.bucketName),
@@ -426,12 +432,21 @@ func (a *AWSS3Backend) classifyRestores(
 			names = append(names, class)
 		}
 		sort.Strings(names)
-		log.AppLogger.Noticef(
-			"s3 backend: restoring %d objects (%s) from %s for %d days, the time to download %s at %s/s; "+
-				"AWS_S3_RESTORE_DAYS overrides.",
-			requested, humanize.IBytes(uint64(requestedBytes)), strings.Join(names, ", "), days,
-			humanize.IBytes(uint64(totalBytes)), humanize.IBytes(uint64(window.rate)),
-		)
+		msg := fmt.Sprintf("s3 backend: restoring %d objects (%s) from %s",
+			requested, humanize.IBytes(uint64(requestedBytes)), strings.Join(names, ", "))
+		switch {
+		case withDays == 0:
+			// Intelligent-Tiering only: those take no lifetime.
+		case window.override != 0:
+			msg += fmt.Sprintf(" for %d days, as AWS_S3_RESTORE_DAYS sets", days)
+		default:
+			msg += fmt.Sprintf(" for %d days, the time to download %s at %s/s (AWS_S3_RESTORE_DAYS overrides)",
+				days, humanize.IBytes(uint64(totalBytes)), humanize.IBytes(uint64(window.rate)))
+		}
+		if withDays > 0 && withDays < requested {
+			msg += "; the Intelligent-Tiering objects stay restored"
+		}
+		log.AppLogger.Noticef("%s.", msg)
 	}
 	return toRestore, readable, bytesToRestore, nil
 }

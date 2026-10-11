@@ -136,12 +136,20 @@ func (v *VolumeInfo) Counter() uint64 {
 // volume; callers that start over on those must not on this.
 type KeyError struct {
 	msg string
+	// NeedsSecretKey: the volume is encrypted to a key whose secret part this run lacks or
+	// cannot unlock. A run with that key reads the same bytes. The other cases (not signed, not
+	// encrypted, an unknown or untrusted signer) are what a forged object also gives.
+	NeedsSecretKey bool
 }
 
 func (e *KeyError) Error() string { return e.msg }
 
 func keyErrorf(format string, args ...interface{}) error {
 	return &KeyError{msg: fmt.Sprintf(format, args...)}
+}
+
+func secretKeyErrorf(format string, args ...interface{}) error {
+	return &KeyError{msg: fmt.Sprintf(format, args...), NeedsSecretKey: true}
 }
 
 // Read will passthru the command to the underlying io.Reader, which will be setup
@@ -357,9 +365,9 @@ func (v *VolumeInfo) Extract(ctx context.Context, j *JobInfo, isManifest bool) e
 		pgpReader, perr := openpgp.ReadMessage(v.r, pgp.GetCombinedKeyRing(), pgp.PromptFunc, pgpConfig)
 		switch {
 		case errors.Is(perr, pgp.ErrNeedsPassphrase):
-			return keyErrorf("%s %v", name, perr)
+			return secretKeyErrorf("%s %v", name, perr)
 		case errors.Is(perr, pgperrors.ErrKeyIncorrect):
-			return keyErrorf("%s is encrypted to no key in the secret ring (%v)", name, perr)
+			return secretKeyErrorf("%s is encrypted to no key in the secret ring (%v)", name, perr)
 		case perr != nil:
 			return perr
 		}

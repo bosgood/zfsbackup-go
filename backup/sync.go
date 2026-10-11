@@ -301,7 +301,7 @@ func readCachedManifest(
 			return manifest, nil
 		}
 	}
-	if errors.Is(err, files.ErrManifestTooLong) || errors.As(err, new(*files.KeyError)) {
+	if keepsCachedCopy(err) {
 		// The copy is whole; downloading the object again would only cost the same egress.
 		return nil, unreadableManifestError(objectName, path, err)
 	}
@@ -324,7 +324,7 @@ func readCachedManifest(
 	if manifest, err = readManifest(ctx, path, j); err == nil {
 		err = manifestNamed(j, manifest, objectName)
 	}
-	if err != nil && !errors.Is(err, files.ErrManifestTooLong) && !errors.As(err, new(*files.KeyError)) {
+	if err != nil && !keepsCachedCopy(err) {
 		// Keep no copy: the next run reads the destination's object again, which may be fixed by then.
 		if rerr := os.Remove(path); rerr != nil {
 			log.AppLogger.Warningf("Could not remove %s from the cache: %v", path, rerr)
@@ -336,14 +336,25 @@ func readCachedManifest(
 	return manifest, nil
 }
 
+// keepsCachedCopy returns whether readCachedManifest keeps the cached copy of a manifest that
+// failed with err: one over the limit, or one encrypted to a secret key this run lacks. A run
+// that can read those reads the same bytes. Any other failure, also a manifest that is not
+// signed or encrypted as asked (a forgery gives that too), keeps no copy.
+func keepsCachedCopy(err error) bool {
+	var kerr *files.KeyError
+	return errors.Is(err, files.ErrManifestTooLong) || errors.As(err, &kerr) && kerr.NeedsSecretKey
+}
+
 // unreadableManifestError is the error for the object objectName under the manifest prefix that
 // is not a manifest this run can accept. It names the object, and says what to do: a manifest
 // over the limit may be a real backup of more volumes than this version reads, and one encrypted
-// or signed with a key this run lacks is most likely a backup written with another key, so neither must be
-// deleted; anything else is not a manifest, and deleting it is the way out. A manifest over
-// the limit stays at cachePath, and readCachedManifest reads that copy, not the object, until
-// it is deleted: the error says so, or replacing the object would change nothing.
+// to a secret key this run lacks is most likely a backup written with another key, so neither
+// must be deleted. One not signed or encrypted as asked may be a backup written with other flags,
+// or a forgery. Anything else is not a manifest, and deleting it is the way out. The copies
+// keepsCachedCopy keeps stay at cachePath, and readCachedManifest reads that copy, not the object,
+// until it is deleted: the error says so, or replacing the object would change nothing.
 func unreadableManifestError(objectName, cachePath string, err error) error {
+	var kerr *files.KeyError
 	switch {
 	case errors.Is(err, files.ErrManifestTooLong):
 		err = fmt.Errorf(
@@ -354,12 +365,20 @@ func unreadableManifestError(objectName, cachePath string, err error) error {
 				"reads it, not the object at the destination",
 			objectName, err, cachePath,
 		)
-	case errors.As(err, new(*files.KeyError)):
+	case errors.As(err, &kerr) && kerr.NeedsSecretKey:
 		err = fmt.Errorf(
-			"could not read the manifest %s at the destination: %w. It is most likely a backup of yours written "+
-				"with other keys or other --encryptTo/--signFrom flags: pass the secret key ring that holds its key "+
-				"with --secretKeyRingPath (and --trustSigner for a rotated signing key), or the flags it was written "+
-				"with. Do not delete it unless you know it is not a backup",
+			"could not read the manifest %s at the destination: %w. It is most likely a backup of yours encrypted "+
+				"to another key: pass the secret key ring that holds that key with --secretKeyRingPath. Do not delete "+
+				"it unless you know it is not a backup. Its copy stays in the cache, %s, and every run reads that copy, "+
+				"not the object at the destination: if you delete or replace the object, delete that copy too",
+			objectName, err, cachePath,
+		)
+	case errors.As(err, &kerr):
+		err = fmt.Errorf(
+			"could not read the manifest %s at the destination: %w. If you wrote it with other --encryptTo/--signFrom "+
+				"flags or another signing key, run with those flags (--trustSigner for a rotated signing key). If you "+
+				"did not, anyone who can write to the destination could have put it there: delete that object from "+
+				"the destination, then run again",
 			objectName, err,
 		)
 	default:

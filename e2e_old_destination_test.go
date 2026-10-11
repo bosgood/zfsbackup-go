@@ -91,6 +91,12 @@ func TestE2EOldDestinationReads(t *testing.T) {
 	t.Run("receive", func(t *testing.T) {
 		receiveLog := filepath.Join(t.TempDir(), "receive.log")
 		t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+		// The fixture's streams come from a shim, not the fake zfs: say which snapshots they carry.
+		queue := filepath.Join(t.TempDir(), "unknown")
+		if err := os.WriteFile(queue, []byte("tank/data@a\ntank/data@b\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("FAKEZFS_RECEIVE_UNKNOWN", queue)
 		logs, err := guarded(t, func() (string, error) { return env.receive("--auto", "tank/data@b", dest, "restored/data") })
 		if err != nil {
 			t.Fatalf("receive --auto: %v\n%s", err, logs)

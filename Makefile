@@ -94,21 +94,24 @@ fmt-write:
 	docker run --rm -v "$(CURDIR)":/src -w /src $(GO_IMAGE) gofmt -s -w $(FILES)
 
 # Build an older revision (Linux, pinned image) to tmp/zfsbackup-<REV>, e.g. `make build-rev REV=master`.
-# The revision's vendor/ is used, so no network is needed.
+# The revision's vendor/ is used, so no network is needed. A "/" in REV (origin/master) is "-" in
+# the file name. REV must name a commit: it is checked before any path is made from it.
+REV_NAME = $(subst /,-,$(REV))
 build-rev:
 	@[ -n "$(REV)" ] || { echo "build-rev: set REV"; exit 1; }
-	rm -rf tmp/build-$(REV) && mkdir -p tmp/build-$(REV)
-	git archive $(REV) | tar -x -C tmp/build-$(REV)
-	docker run --rm -v "$(CURDIR)/tmp/build-$(REV)":/src -v "$(GOCACHE_DIR)":/root/.cache/go-build -w /src \
+	@git rev-parse --verify --quiet '$(REV)^{commit}' >/dev/null || { echo "build-rev: REV=$(REV) is not a commit"; exit 1; }
+	rm -rf 'tmp/build-$(REV_NAME)' && mkdir -p 'tmp/build-$(REV_NAME)'
+	git archive '$(REV)' | tar -x -C 'tmp/build-$(REV_NAME)'
+	docker run --rm -v "$(CURDIR)/tmp/build-$(REV_NAME)":/src -v "$(GOCACHE_DIR)":/root/.cache/go-build -w /src \
 		-e GOTOOLCHAIN=local -e GOFLAGS=-mod=vendor $(GO_IMAGE) go build -o zfsbackup .
-	cp tmp/build-$(REV)/zfsbackup tmp/zfsbackup-$(REV)
-	rm -rf tmp/build-$(REV)
+	cp 'tmp/build-$(REV_NAME)/zfsbackup' 'tmp/zfsbackup-$(REV_NAME)'
+	rm -rf 'tmp/build-$(REV_NAME)'
 
 # Write a destination with the build of REV (see build-rev) to testdata/manifests/<REV>-<short hash>/.
 # Commit the result with a README.md; never regenerate a committed fixture to match new code.
 fixture-old: build-rev
 	docker run --rm -v "$(CURDIR)":/src -w /src $(GO_IMAGE) \
-		sh testdata/manifests/make-fixture.sh tmp/zfsbackup-$(REV) testdata/manifests/$(REV)-$$(git rev-parse --short $(REV))
+		sh testdata/manifests/make-fixture.sh 'tmp/zfsbackup-$(REV_NAME)' "testdata/manifests/$(REV_NAME)-$$(git rev-parse --short '$(REV)')"
 
 build:
 	${GOPATH}/bin/gox -ldflags="-w -s -X github.com/someone1/zfsbackup-go/config.GitCommit=${COMMIT_HASH}" -osarch=${TARGETS}

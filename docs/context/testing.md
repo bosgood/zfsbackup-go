@@ -15,7 +15,7 @@ Read this before you run anything. All repeatable work goes through the Makefile
 | `make lint` | golangci-lint v2, pinned image |
 | `make fmt-check` | `gofmt -s -l` in the pinned image. `make fmt` rewrites every tracked file with the host's gofmt. |
 | `make fmt-write FILES="a.go b.go"` | `gofmt -s -w` on those files in the pinned image. `fmt-check` sees tracked files only: check a new file after `git add`. |
-| `make build-rev REV=master` | build an older revision (its `vendor/`, pinned image, Linux) to `tmp/zfsbackup-<REV>` |
+| `make build-rev REV=master` | build an older revision (its `vendor/`, pinned image, Linux) to `tmp/zfsbackup-<REV>` (a `/` in REV becomes `-`) |
 | `make fixture-old REV=master` | `build-rev`, then write a destination with it to `testdata/manifests/<REV>-<hash>/` (`testdata/manifests/make-fixture.sh`, a `zfs` shim). Never regenerate a committed fixture to match new code |
 | `make integration` | needs a real ZFS host and `tank/data@c`; build tag `integration` |
 | `make plan ARGS="..."` | run `plan` with the working tree |
@@ -40,8 +40,11 @@ A pure-Go `zfs`. The test binary becomes the fake when `FAKEZFS=1` (`RunIfReques
 | `FAKEZFS_FAIL_AFTER_BYTES` | send dies mid-stream after N bytes |
 | `FAKEZFS_STREAM_SALT` | change stream bytes, keep GUIDs |
 | `FAKEZFS_RECEIVE_LOG` | file that records `<bytes> <sha256>` of each receive |
+| `FAKEZFS_RECEIVE_UNKNOWN` | file of `dataset@name` lines; a received stream that matches no fixture snapshot (a shim's) takes the first line |
 | `FAKEZFS_DRYRUN_OUTPUT` | replaces `zfs send -n -P` output |
 | `FAKEZFS_LOG` | one line per invocation |
+
+`zfs receive` adds the snapshot it received to `FAKEZFS_SNAPSHOTS` (as `-d`/`-e` map the name, with the sent creation time), as real zfs lists it afterwards. It finds the snapshot by comparing the stream with what `zfs send` writes for each fixture snapshot, with the current `FAKEZFS_STREAM_SALT`. A second receive of the same snapshot is an error. A test that receives one snapshot again must put the fixture back (see `checkRestores`).
 
 ## Habits that work
 

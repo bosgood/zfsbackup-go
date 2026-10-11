@@ -536,3 +536,27 @@ Executed on `clean-dry-run`, one commit per item: caed77d (1), f81f81c (2), 8380
   `cleanS3In` (it works for any URI).
 - **Host.** `TestScenarioAdoptCreationTimes` and `TestE2EPlanManifestsFileAdoptsCreationTimes`
   fail on the host at HEAD too (zone EDT); they pass in Docker.
+
+## Review follow-up (2026-10-11)
+
+An adversarial review of 26cdb48..525b133 found these; all are fixed:
+
+- **C1 (item 2).** Keeping the cached copy for every `KeyError` trapped the operator: a planted
+  unsigned object blocked `list`, `clean` and smart `send`, the advice said to keep it, and
+  after a delete the kept copy blocked `clean` as a local-only manifest. Now `KeyError` has
+  `NeedsSecretKey` (only "encrypted to no key in the secret ring" and a locked key). Only those,
+  and `ErrManifestTooLong`, keep the copy (`keepsCachedCopy`), and that error names the cache
+  path. The others say to delete the object if you did not write it.
+- **W1 (item 1).** The `--auto` skip of the source check came from a limit of the fake, with a
+  comment that gave another reason. The fake `zfs receive` now adds the received snapshot to
+  `FAKEZFS_SNAPSHOTS`, found by matching the stream with `StreamSalted` of each fixture pair.
+  The check runs in `--auto` too. Shim streams (the master fixture) need
+  `FAKEZFS_RECEIVE_UNKNOWN`. `checkRestores` puts the fixture back after each receive.
+- **N2.** The collision error says to `zfs rename` the local snapshot (not destroy: it holds
+  other data) or receive elsewhere.
+- **N3.** The restore notice says "as AWS_S3_RESTORE_DAYS sets" for an override, and gives no
+  days when only Intelligent-Tiering objects are restored.
+- **N4.** `Init` checks the restore variables, so a bad value fails every s3 command at once.
+  Trade-off: a bad value set for a restore also stops `send`.
+- **N5.** `build-rev`: `REV` must be a commit (checked first), paths are quoted, and `/`
+  becomes `-` in file names. Checked with `make build-rev REV=origin/master`.

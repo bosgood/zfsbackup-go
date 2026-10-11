@@ -1,11 +1,12 @@
 # CHANGELOG
 
-* [FIX] receive: a snapshot that is already on the target is a no-op; a local snapshot with the backed-up name but another creation time is refused, with or without --force
-* [FIX] errors: a manifest encrypted or signed with another key names the key problem and never advises deleting the object; its cached copy stays
+* [FIX] receive: a snapshot that is already on the target is a no-op (receive --auto says so too); a local snapshot with the backed-up name but another creation time is refused, with or without --force, and the error says to rename it or receive elsewhere; receive --auto checks the source of each incremental step, as an explicit receive does
+* [FIX] errors: a manifest encrypted to a secret key this run lacks names the key problem, never advises deleting the object, and keeps its cached copy (the error names it); one not signed or not encrypted as asked, or signed by an unknown key, keeps no copy and says to delete the object if you did not write it
 * [FIX] clean: a sibling --manifestPrefix that starts with a symbol (manifests@v2) is not read as ours; its sets are spared
 * [ADD] test: --resume finalizes a set whose every volume was cached before the kill (it already did)
-* [CHANGE] s3: the Glacier restore window follows the bytes to download (AWS_S3_RESTORE_DOWNLOAD_RATE, default 50 MiB/s; AWS_S3_RESTORE_DAYS overrides), was 3 days
-* [ADD] test: a destination written by master (testdata/manifests/master-b733e96) reads back in list, receive --auto, clean and smart send; make build-rev, make fixture-old, make fmt-write
+* [CHANGE] s3: the Glacier restore window follows the bytes to download (AWS_S3_RESTORE_DOWNLOAD_RATE, default 50 MiB/s; AWS_S3_RESTORE_DAYS overrides; a bad value of either stops every command at an s3:// destination), was 3 days; the notice says where the days come from
+* [ADD] test: a destination written by master (testdata/manifests/master-b733e96) reads back in list, receive --auto, clean and smart send; make build-rev (REV may hold a "/"), make fixture-old, make fmt-write
+* [ADD] test: the fake zfs receive adds the received snapshot to its listing (FAKEZFS_RECEIVE_UNKNOWN for streams it cannot tell)
 * [FIX] s3: AWS_S3_ENABLE_DEBUG lines no longer carry a "%!(EXTRA ...)" suffix; README warns that the dump includes credentials
 * [FIX] s3: receive stops at once when a volume is gone from the bucket, instead of retrying the download for --maxRetryTime
 * [FIX] s3: receive re-checks already-restored Glacier copies after waiting for the others, and extends or restores any that expired meanwhile; a DEEP_ARCHIVE Bulk restore can take longer than the 24-hour margin

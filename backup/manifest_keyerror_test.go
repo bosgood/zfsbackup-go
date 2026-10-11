@@ -30,10 +30,10 @@ import (
 	"github.com/someone1/zfsbackup-go/files"
 )
 
-// A manifest encrypted to a key this run lacks is a backup of the user's written with another
-// key, not a forgery: the error names the key problem and how to pass the right ring, never
-// advises deleting the object, keeps the cached copy (the object is the same bytes), and the
-// object is downloaded once.
+// A manifest encrypted to a key this run lacks is most likely a backup of the user's written with
+// another key: the error names the key problem and how to pass the right ring, never
+// advises deleting the object, keeps the cached copy (the object is the same bytes) and names it,
+// and the object is downloaded once.
 func TestReadCachedManifestWrongKeyAdvice(t *testing.T) {
 	targetDir, jobInfo := setupCleanTest(t)
 	k1, k2 := prefixedKey(t, "k1@example.com"), prefixedKey(t, "k2@example.com")
@@ -62,11 +62,52 @@ func TestReadCachedManifestWrongKeyAdvice(t *testing.T) {
 		if !strings.Contains(err.Error(), "--secretKeyRingPath") {
 			t.Errorf("round %d: the error does not say how to pass the key: %v", round, err)
 		}
+		if cached := filepath.Join(cache, cachedManifestName(name)); !strings.Contains(err.Error(), cached) {
+			t.Errorf("round %d: the error does not name the cached copy %s: %v", round, cached, err)
+		}
 		if _, serr := os.Stat(filepath.Join(cache, cachedManifestName(name))); serr != nil {
 			t.Errorf("round %d: the cached copy is gone: %v", round, serr)
 		}
 		if b.downloads != 1 {
 			t.Errorf("round %d: %d downloads, want 1", round, b.downloads)
+		}
+	}
+}
+
+// A manifest that is not signed, read by a run with --signFrom, is what a forgery gives too: the
+// error says to delete the object if the user did not write it, and keeps no cached copy, so a
+// run after the object is deleted or replaced does not read a stale copy.
+func TestReadCachedManifestUnsignedKeepsNoCopy(t *testing.T) {
+	targetDir, jobInfo := setupCleanTest(t)
+	k1 := prefixedKey(t, "k1@example.com")
+	loadPrefixedRings(t, k1)
+	t.Cleanup(func() { loadPrefixedRings(t) }) // leave the package rings empty
+
+	set, _ := prefixedSet(t, targetDir, "tank/data", "a", "", "manifests", k1, "k1@example.com")
+	name := set.ManifestObjectName()
+	data, err := os.ReadFile(filepath.Join(targetDir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobInfo.EncryptKey, jobInfo.EncryptTo = k1, "k1@example.com"
+	jobInfo.SignKey, jobInfo.SignFrom = k1, "k1@example.com"
+	b := &cacheBackend{objects: map[string][]byte{name: data}}
+	cache := t.TempDir()
+
+	for round := 1; round <= 2; round++ {
+		_, err := readCachedManifest(context.Background(), jobInfo, cache, b, name)
+		var kerr *files.KeyError
+		if !errors.As(err, &kerr) || kerr.NeedsSecretKey {
+			t.Fatalf("round %d: got %v, want a KeyError that needs no secret key", round, err)
+		}
+		if !strings.Contains(err.Error(), "delete that object") {
+			t.Errorf("round %d: the error does not say to delete an object the user did not write: %v", round, err)
+		}
+		if _, serr := os.Stat(filepath.Join(cache, cachedManifestName(name))); !os.IsNotExist(serr) {
+			t.Errorf("round %d: the cached copy is still there (%v)", round, serr)
+		}
+		if b.downloads != round {
+			t.Errorf("round %d: %d downloads, want %d", round, b.downloads, round)
 		}
 	}
 }

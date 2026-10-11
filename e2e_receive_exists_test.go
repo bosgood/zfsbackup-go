@@ -27,6 +27,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/someone1/zfsbackup-go/files"
 )
 
 // receiveTargets are the ways to name restored/data as the target of a receive of tank/data:
@@ -91,7 +93,8 @@ func TestE2EReceiveOfLocalSnapshotIsNoOp(t *testing.T) {
 }
 
 // A local snapshot with the backed-up name but another creation time is another snapshot: an
-// explicit receive refuses it, with or without --force, and names both times.
+// explicit receive refuses it, with or without --force, names both times, and says how to get
+// the name free without losing the local snapshot.
 func TestE2EReceiveRefusesSameNameOtherSnapshot(t *testing.T) {
 	for _, target := range receiveTargets {
 		for _, force := range []string{"--force=false", "--force=true"} {
@@ -103,7 +106,7 @@ func TestE2EReceiveRefusesSameNameOtherSnapshot(t *testing.T) {
 				if err == nil {
 					t.Errorf("receive over another snapshot named a succeeded\n%s", logs)
 				}
-				for _, want := range []string{"2026-09-01 00:00:00 UTC", "2026-09-02 00:00:00 UTC"} {
+				for _, want := range []string{"2026-09-01 00:00:00 UTC", "2026-09-02 00:00:00 UTC", "zfs rename restored/data@a"} {
 					if !strings.Contains(logs, want) {
 						t.Errorf("want the log to name %s\n%s", want, logs)
 					}
@@ -111,5 +114,57 @@ func TestE2EReceiveRefusesSameNameOtherSnapshot(t *testing.T) {
 				noReceive(t, receiveLog, logs)
 			})
 		}
+	}
+}
+
+// receive --auto checks the source of each incremental step in the listing, as an explicit
+// receive does: the earlier step's zfs receive put it there. A second run finds the chain's
+// last snapshot there and does nothing. If a step's receive did not leave its snapshot where
+// the next step looks (here: the fake cannot tell what a salted stream carries), the next step
+// stops before zfs receive.
+func TestE2EReceiveAutoChecksEachSource(t *testing.T) {
+	for _, lost := range []bool{false, true} {
+		t.Run(fmt.Sprint("lost=", lost), func(t *testing.T) {
+			env := newE2EEnv(t)
+			t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+			env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+				{Name: "b", CreationTime: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)},
+				{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+			})
+			dest := "file://" + env.dest
+			env.sendOK(t, "--compressor", "", "tank/data@a", dest)
+			env.sendOK(t, "--compressor", "", "-i", "a", "tank/data@b", dest)
+			if lost {
+				t.Setenv("FAKEZFS_STREAM_SALT", "unknown")
+			}
+			receiveLog := filepath.Join(t.TempDir(), "receive.log")
+			t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+			receive := func() (string, error) {
+				return guarded(t, func() (string, error) { return env.receive("--auto", "tank/data@b", dest, "restored/data") })
+			}
+			logs, err := receive()
+			got, _ := os.ReadFile(receiveLog)
+			if lost {
+				if err == nil || !strings.Contains(logs, "Selected incremental snapshot does not exist") {
+					t.Errorf("receive --auto with step 1's snapshot missing: %v, want the missing source refused\n%s", err, logs)
+				}
+				if n := strings.Count(string(got), "\n"); n != 1 {
+					t.Errorf("want 1 zfs receive (the full of a), got %d\n%s", n, logs)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("receive --auto: %v\n%s", err, logs)
+			}
+			if n := strings.Count(string(got), "\n"); n != 2 {
+				t.Errorf("want 2 zfs receives, got %d\n%s", n, logs)
+			}
+			if logs, err = receive(); err != nil || !strings.Contains(logs, "already exists") {
+				t.Errorf("a second receive --auto: %v, want the no-op notice\n%s", err, logs)
+			}
+			if again, _ := os.ReadFile(receiveLog); len(again) != len(got) {
+				t.Errorf("the second receive --auto ran zfs receive\n%s", logs)
+			}
+		})
 	}
 }

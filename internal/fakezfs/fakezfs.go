@@ -34,6 +34,14 @@
 //	FAKEZFS_STREAM_SALT    when set, changes the bytes `zfs send` writes (not the snapshots'
 //	                       guids), like a snapshot whose contents changed under the same name
 //	FAKEZFS_RECEIVE_LOG    file `zfs receive` appends "<bytes> <sha256 hex>" of its stdin to
+//
+// `zfs receive` also adds the snapshot it received to FAKEZFS_SNAPSHOTS, as real zfs lists it
+// after a receive. It finds which snapshot the stream carries by comparing it with what `zfs send`
+// writes for each snapshot in the fixture (with this FAKEZFS_STREAM_SALT). A stream that matches
+// none, such as one written by a shim, adds nothing, unless FAKEZFS_RECEIVE_UNKNOWN names it:
+//
+//	FAKEZFS_RECEIVE_UNKNOWN  file of sent snapshots (dataset@name), one per line; a receive of
+//	                       a stream that matches no fixture snapshot takes the first line
 //	FAKEZFS_DRYRUN_OUTPUT  replaces what `zfs send -n -P` prints
 //	FAKEZFS_LOG            file every invocation's arguments are appended to, one line each
 //
@@ -42,6 +50,7 @@
 package fakezfs
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -269,15 +278,39 @@ func StreamSalted(source, target, salt string, size int64) io.Reader {
 	return io.LimitReader(rand.New(rand.NewSource(int64(h.Sum64()))), size) // nolint:gosec // not for security
 }
 
-// receive: receive [flags] <dataset> - consumes the stream and records its length and hash
-// in FAKEZFS_RECEIVE_LOG, so a test can compare it with what was sent.
+// receive: receive [-d] [-e] [-u] [-F] [-o origin=<snapshot>] <dataset> - consumes the stream,
+// records its length and hash in FAKEZFS_RECEIVE_LOG, and adds the snapshot it carries to
+// FAKEZFS_SNAPSHOTS. A snapshot that is there already is an error, as with real zfs.
 func receive(args []string, stdin io.Reader) error {
-	if len(args) == 0 || strings.HasPrefix(args[len(args)-1], "-") {
+	var fullPath, lastPath bool
+	for len(args) > 1 {
+		switch args[0] {
+		case "-d":
+			fullPath = true
+		case "-e":
+			lastPath = true
+		case "-u", "-F":
+		case "-o":
+			if len(args) < 3 {
+				return errUnexpected
+			}
+			args = args[1:]
+		default:
+			return errUnexpected
+		}
+		args = args[1:]
+	}
+	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
 		return errUnexpected
 	}
 	h := sha256.New()
-	n, err := io.Copy(h, stdin)
+	var head bytes.Buffer
+	n, err := io.Copy(io.MultiWriter(h, &prefixWriter{buf: &head, max: streamHeadBytes}), stdin)
 	if err != nil {
+		return err
+	}
+	sum := h.Sum(nil)
+	if err = recordReceived(args[0], fullPath, lastPath, head.Bytes(), n, sum); err != nil {
 		return err
 	}
 	path := os.Getenv("FAKEZFS_RECEIVE_LOG")
@@ -288,9 +321,167 @@ func receive(args []string, stdin io.Reader) error {
 	if err != nil {
 		return err
 	}
-	if _, err = fmt.Fprintf(f, "%d %s\n", n, hex.EncodeToString(h.Sum(nil))); err != nil {
+	if _, err = fmt.Fprintf(f, "%d %s\n", n, hex.EncodeToString(sum)); err != nil {
 		_ = f.Close()
 		return err
+	}
+	return f.Close()
+}
+
+// streamHeadBytes is how much of a received stream receive compares with each candidate.
+const streamHeadBytes = 64
+
+// prefixWriter keeps the first max bytes written to it.
+type prefixWriter struct {
+	buf *bytes.Buffer
+	max int
+}
+
+func (w *prefixWriter) Write(p []byte) (int, error) {
+	if room := w.max - w.buf.Len(); room > 0 {
+		w.buf.Write(p[:min(room, len(p))])
+	}
+	return len(p), nil
+}
+
+// recordReceived finds the snapshot of the fixture whose stream (full, or incremental from
+// another snapshot or bookmark of its dataset, as `zfs send` names the source) is the n bytes
+// that start with head and hash to sum, and adds it to FAKEZFS_SNAPSHOTS under the dataset
+// zfs receive writes to (receivedDataset).
+func recordReceived(target string, fullPath, lastPath bool, head []byte, n int64, sum []byte) error {
+	path := os.Getenv("FAKEZFS_SNAPSHOTS")
+	if path == "" || n == 0 { // every candidate starts with nothing
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("fakezfs: %v", err)
+	}
+	salt := os.Getenv("FAKEZFS_STREAM_SALT")
+	for _, dataset := range fixtureDatasets(string(data)) {
+		snaps, err := datasetSnapshots(dataset)
+		if err != nil {
+			return err
+		}
+		for _, snap := range snaps {
+			if snap.Bookmark {
+				continue
+			}
+			sent := dataset + "@" + snap.Name
+			sources := []string{""}
+			for _, s := range snaps {
+				switch {
+				case s.Bookmark:
+					sources = append(sources, dataset+"#"+s.Name)
+				case s.Name != snap.Name:
+					sources = append(sources, s.Name)
+				}
+			}
+			for _, source := range sources {
+				if sameStream(StreamSalted(source, sent, salt, n), head, sum) {
+					return addSnapshot(path, data, receivedDataset(target, dataset, fullPath, lastPath), snap)
+				}
+			}
+		}
+	}
+	return receiveUnknown(path, data, target, fullPath, lastPath)
+}
+
+// receiveUnknown adds the snapshot that the first line of FAKEZFS_RECEIVE_UNKNOWN names, and
+// removes that line. Without the variable it does nothing.
+func receiveUnknown(path string, data []byte, target string, fullPath, lastPath bool) error {
+	queue := os.Getenv("FAKEZFS_RECEIVE_UNKNOWN")
+	if queue == "" {
+		return nil
+	}
+	lines, err := os.ReadFile(queue)
+	if err != nil {
+		return fmt.Errorf("fakezfs: %v", err)
+	}
+	first, rest, _ := strings.Cut(string(lines), "\n")
+	dataset, name, ok := strings.Cut(strings.TrimSpace(first), "@")
+	if !ok {
+		return fmt.Errorf("fakezfs: FAKEZFS_RECEIVE_UNKNOWN: want dataset@name, got %q", first)
+	}
+	snaps, err := datasetSnapshots(dataset)
+	if err != nil {
+		return err
+	}
+	snap, err := lookup(dataset, dataset+"@"+name, snaps)
+	if err != nil {
+		return err
+	}
+	if err = os.WriteFile(queue, []byte(rest), 0600); err != nil {
+		return fmt.Errorf("fakezfs: %v", err)
+	}
+	return addSnapshot(path, data, receivedDataset(target, dataset, fullPath, lastPath), snap)
+}
+
+// receivedDataset is the dataset `zfs receive [-d|-e] target` writes a stream of sent to: target,
+// or with -d target plus sent without its pool, or with -e target plus sent's last component.
+func receivedDataset(target, sent string, fullPath, lastPath bool) string {
+	switch {
+	case fullPath:
+		if _, rest, ok := strings.Cut(sent, "/"); ok {
+			return target + "/" + rest
+		}
+	case lastPath:
+		return target + "/" + sent[strings.LastIndex(sent, "/")+1:]
+	}
+	return target
+}
+
+// sameStream returns whether r starts with head and hashes to sum.
+func sameStream(r io.Reader, head, sum []byte) bool {
+	got := make([]byte, len(head))
+	if _, err := io.ReadFull(r, got); err != nil || !bytes.Equal(got, head) {
+		return false
+	}
+	h := sha256.New()
+	_, _ = h.Write(got)
+	if _, err := io.Copy(h, r); err != nil {
+		return false
+	}
+	return bytes.Equal(h.Sum(nil), sum)
+}
+
+// fixtureDatasets returns the datasets the fixture rows name, in order.
+func fixtureDatasets(data string) []string {
+	var datasets []string
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(data, "\n") {
+		line = zfs.StripComment(line)
+		i := strings.IndexAny(line, "@#")
+		if i <= 0 || seen[line[:i]] {
+			continue
+		}
+		seen[line[:i]] = true
+		datasets = append(datasets, line[:i])
+	}
+	return datasets
+}
+
+// addSnapshot appends dataset@snap, with snap's creation time (a received snapshot keeps it), to
+// the fixture at path, whose content is data.
+func addSnapshot(path string, data []byte, dataset string, snap files.SnapshotInfo) error {
+	if snaps, err := datasetSnapshots(dataset); err == nil {
+		for _, s := range snaps {
+			if s.Name == snap.Name && !s.Bookmark {
+				return fmt.Errorf("cannot receive new snapshot: destination '%s@%s' exists", dataset, snap.Name)
+			}
+		}
+	}
+	row := fmt.Sprintf("%s@%s\t%d\tsnapshot\n", dataset, snap.Name, snap.CreationTime.Unix())
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		row = "\n" + row
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("fakezfs: %v", err)
+	}
+	if _, err = f.WriteString(row); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("fakezfs: %v", err)
 	}
 	return f.Close()
 }

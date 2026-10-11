@@ -36,6 +36,9 @@ import (
 type recheckKey struct {
 	class string
 	size  int64 // ContentLength; 0 means 50
+	// archive, if set, is the Intelligent-Tiering ArchiveStatus the object has until a restore
+	// of it finishes.
+	archive string
 	// restoredUntil, if set, is the expiry of the object's restored copy, given the number of
 	// waits that have ended so far. A zero time means the copy is gone (no x-amz-restore header).
 	restoredUntil func(waits int) time.Time
@@ -68,6 +71,11 @@ func (c *recheckS3Client) HeadObjectWithContext(
 		size = 50
 	}
 	out := &s3.HeadObjectOutput{StorageClass: aws.String(k.class), ContentLength: aws.Int64(size)}
+	defer func() {
+		if k.archive != "" && !k.restoreFinished {
+			out.ArchiveStatus = aws.String(k.archive)
+		}
+	}()
 	if k.restoreHeads > 0 {
 		k.restoreHeads++
 		if k.restoreHeads == 2 {

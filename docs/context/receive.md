@@ -6,11 +6,11 @@ Diagrams 7 and 8 in [../architecture.md](../architecture.md).
 
 ## `Receive` (`backup/restore.go`)
 
-1. `readCachedManifest`: read the manifest from the local cache, sync from the destination if missing.
+1. `readCachedManifest`: read the manifest from the local cache, sync from the destination if missing. A manifest that fails keeps its cached copy only when the bytes are fine for a run with other means (`keepsCachedCopy`): over `MaxManifestBytes`, or a `KeyError` with `NeedsSecretKey`. Those errors give the cache path. "Not signed", "not encrypted" and an unknown signer are what a forgery gives too: no copy is kept, and the error says to delete the object if you did not write it.
 2. List the target dataset (the one `-d`/`-e` compute, not `LocalVolume`). Compare with the MANIFEST's snapshots, which carry creation times:
    - The base snapshot is there (name and creation time): Notice "already exists, nothing to do", return nil.
-   - A snapshot with the base's name but another creation time is there: error that names both times (`localSnapshotMismatch`), with or without `--force`. `-F` would destroy the local snapshots.
-   - Explicit receive only: the incremental source must be there. `--auto` checked its chain before.
+   - A snapshot with the base's name but another creation time is there: error that names both times (`localSnapshotMismatch`), with or without `--force`. `-F` would destroy the local snapshots. The log says to `zfs rename` it or receive into another dataset (never destroy: it holds other data).
+   - The incremental source must be there, also in `--auto`: the step before received it, and the listing shows it.
    - A listing error means the dataset is not there yet: an empty list.
 3. `CheckDecompressor`: run only a known decompressor, or the one given by `--compressor` (`JobInfo.TrustedCompressor`). A manifest from an untrusted writer must not pick the binary.
 4. `backend.PreDownload`: S3 Glacier restore and similar.
@@ -27,7 +27,7 @@ Receive flags on `JobInfo`: `Force`, `FullPath`, `LastPath`, `NotMounted`, `Orig
 3. Target = the given snapshot, or the newest backup.
 4. `backupThatApplies` prefers an incremental whose chain reaches a local snapshot, else the full.
 5. Walk `ParentSnap` until the target is local or a full is reached. A loop or a missing parent is an error.
-6. Call `Receive` for each item, oldest first.
+6. Call `Receive` for each item, oldest first. No item (the target is local): Notice "already exists, nothing to do".
 
 ## Tests
 

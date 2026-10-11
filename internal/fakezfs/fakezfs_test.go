@@ -22,6 +22,7 @@ package fakezfs
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -190,5 +191,72 @@ func TestStreamSalt(t *testing.T) {
 	}
 	if bytes.Equal(plain, read(StreamSalted("", "tank/data@a", "x", 1024))) {
 		t.Error("a salt left the stream unchanged")
+	}
+}
+
+// receive adds the snapshot the stream carries, with its creation time, to the dataset zfs
+// receive writes to, and refuses it the second time. A stream from no fixture snapshot adds nothing.
+func TestReceiveAddsSnapshot(t *testing.T) {
+	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+	listOf := func(dataset string) string {
+		t.Helper()
+		_, out, _ := run("list", "-H", "-d", "1", "-p", "-t", "snapshot,bookmark", "-r", "-o", "name,creation,type", "-S", "creation", dataset)
+		return out
+	}
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		dataset string
+	}{
+		{"plain", []string{"receive", "restored/data"}, "restored/data"},
+		{"fullPath", []string{"receive", "-d", "-u", "restored"}, "restored/data"},
+		{"lastPath", []string{"receive", "-e", "-F", "-o", "origin=x@y", "restored"}, "restored/data"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setup(t)
+			_, incr, _ := run("send", "-i", "b", "tank/data@c")
+			var errOut bytes.Buffer
+			if code := Main(tc.args, strings.NewReader(incr), io.Discard, &errOut); code != 0 {
+				t.Fatalf("receive exited %d: %s", code, errOut.String())
+			}
+			if want := tc.dataset + "@c\t300\tsnapshot\n"; !strings.Contains(listOf(tc.dataset), want) {
+				t.Errorf("the listing of %s does not hold %q:\n%s", tc.dataset, want, listOf(tc.dataset))
+			}
+			errOut.Reset()
+			if code := Main(tc.args, strings.NewReader(incr), io.Discard, &errOut); code != 1 ||
+				!strings.Contains(errOut.String(), "destination '"+tc.dataset+"@c' exists") {
+				t.Errorf("a second receive of c: exit %d %q, want 1 and destination exists", code, errOut.String())
+			}
+		})
+	}
+
+	setup(t)
+	before, err := os.ReadFile(os.Getenv("FAKEZFS_SNAPSHOTS"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := Main([]string{"receive", "restored/data"}, bytes.NewReader(make([]byte, 4096)), io.Discard, io.Discard); code != 0 {
+		t.Fatalf("receive of an unknown stream exited %d", code)
+	}
+	if after, _ := os.ReadFile(os.Getenv("FAKEZFS_SNAPSHOTS")); !bytes.Equal(after, before) {
+		t.Errorf("an unknown stream changed the fixture:\n%s", after)
+	}
+
+	// FAKEZFS_RECEIVE_UNKNOWN names what unknown streams carry, one line per receive.
+	queue := filepath.Join(t.TempDir(), "unknown")
+	if err = os.WriteFile(queue, []byte("tank/data@b\ntank/data@c\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKEZFS_RECEIVE_UNKNOWN", queue)
+	for _, want := range []string{"restored/data@b\t200\tsnapshot\n", "restored/data@c\t300\tsnapshot\n"} {
+		if code := Main([]string{"receive", "restored/data"}, bytes.NewReader(make([]byte, 4096)), io.Discard, io.Discard); code != 0 {
+			t.Fatalf("receive of a queued stream exited %d", code)
+		}
+		if out := listOf("restored/data"); !strings.Contains(out, want) {
+			t.Errorf("the listing does not hold %q:\n%s", want, out)
+		}
+	}
+	if rest, _ := os.ReadFile(queue); len(rest) != 0 {
+		t.Errorf("the queue still holds %q", rest)
 	}
 }

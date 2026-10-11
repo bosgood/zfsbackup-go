@@ -40,7 +40,7 @@ This particular repo is a fork of the original at [someone1/zfsbackup-go](https:
   - `AWS_S3_GLACIER_RESTORE_TIER`: `Standard`, `Bulk` or `Expedited`, the restore tier for objects in Glacier (default `Bulk`)
   - `AWS_S3_RESTORE_POLL_INTERVAL`: how often `receive` polls a pending Glacier restore, as a duration such as `30s` (default `1m`)
   - `AWS_S3_RESTORE_DOWNLOAD_RATE`: the download speed, in bytes per second such as `50MiB` (the default), from which `receive` sets how long a Glacier restore stays readable: the days to download the whole set, plus 2, from 3 to 30 days
-  - `AWS_S3_RESTORE_DAYS`: how many days (1 to 30) a Glacier restore stays readable, instead of the days computed from `AWS_S3_RESTORE_DOWNLOAD_RATE`
+  - `AWS_S3_RESTORE_DAYS`: how many days (1 to 30) a Glacier restore stays readable, instead of the days computed from `AWS_S3_RESTORE_DOWNLOAD_RATE`. A bad value of either variable stops every command at an `s3://` destination, `send` too
   - `AWS_S3_ENABLE_DEBUG`: set to `true` to log every request and retry of the AWS SDK. The dump includes the request's `Authorization` header and any `X-Amz-Security-Token`; do not share that log.
 - Any S3 Compatible Storage Provider (e.g. Minio, StorageMadeEasy, Ceph, etc.)
   - Set the `AWS_S3_CUSTOM_ENDPOINT` environment variable to the compatible target API URI

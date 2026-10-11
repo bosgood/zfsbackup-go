@@ -192,6 +192,9 @@ func AutoRestore(pctx context.Context, jobInfo *files.JobInfo) error {
 	}
 
 	log.AppLogger.Infof("Need to restore %d snapshots.", len(jobsToRestore))
+	if len(jobsToRestore) == 0 {
+		log.AppLogger.Noticef("Selected base snapshot %s@%s already exists, nothing to do!", volume, jobInfo.BaseSnapshot.Name)
+	}
 
 	// We have a list of snapshots we need to restore, start at the end and work our way down
 	for i := len(jobsToRestore) - 1; i >= 0; i-- {
@@ -332,13 +335,17 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 	// zfs would refuse it, and with --force a full stream destroys the snapshots there: a name
 	// collision is never what -F is for.
 	if msg := localSnapshotMismatch(volume, &manifest.BaseSnapshot, local); msg != "" {
-		log.AppLogger.Errorf("%s Refusing to receive over it, with or without --force.", msg)
+		log.AppLogger.Errorf(
+			"%s Refusing to receive over it, with or without --force. It holds other data: to restore the backup, "+
+				"rename it (zfs rename %s@%s %s@<another name>) or receive into another dataset, then run again.",
+			msg, volume, manifest.BaseSnapshot.Name, volume,
+		)
 		return fmt.Errorf("the local snapshot %s@%s is not the one backed up", volume, manifest.BaseSnapshot.Name)
 	}
 
-	// Check that we have the parent snapshot this wants to restore from. --auto checked its chain
-	// before, and an earlier step of the chain may have just received it.
-	if manifest.IncrementalSnapshot.Name != "" && !jobInfo.AutoRestore {
+	// Check that we have the parent snapshot this wants to restore from. In --auto, an earlier
+	// step of the chain received it, and the listing above shows it.
+	if manifest.IncrementalSnapshot.Name != "" {
 		source := manifest.IncrementalSnapshot // a copy: the check records whether it matched a bookmark
 		if !validateSnapShotExistsFromSnaps(&source, local, false) {
 			noteLocalSnapshotMismatch(volume, &manifest.IncrementalSnapshot, local)

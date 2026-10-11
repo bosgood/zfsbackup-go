@@ -173,6 +173,17 @@ func (env *e2eEnv) checkRestores(t *testing.T, dest, snap string, streamBytes in
 	t.Helper()
 	receiveLog := filepath.Join(t.TempDir(), "receive.log")
 	t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+	// zfs receive adds restored/data@snap to the pool; take it out again, so that the next check
+	// restores again rather than finding the snapshot there.
+	pool, err := os.ReadFile(env.snapshots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if werr := os.WriteFile(env.snapshots, pool, 0600); werr != nil {
+			t.Error(werr)
+		}
+	}()
 	logs, err := guarded(t, func() (string, error) { return env.receive("tank/data@"+snap, dest, "restored/data") })
 	if err != nil {
 		t.Fatalf("receive: %v\n%s", err, logs)

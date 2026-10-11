@@ -24,7 +24,7 @@ Close() error
 
 | Scheme | File | Notes |
 |---|---|---|
-| `s3://` | `aws_s3_backend.go` | path-style; `AWS_S3_CUSTOM_ENDPOINT` for tests; `PreDownload` restores Glacier objects for `restoreDays` (days to download every key at `AWS_S3_RESTORE_DOWNLOAD_RATE`, default 50 MiB/s, + 2, clamped 3..30; `AWS_S3_RESTORE_DAYS` overrides; a bad value is an error). It HEADs every key before the first restore |
+| `s3://` | `aws_s3_backend.go` | path-style; `AWS_S3_CUSTOM_ENDPOINT` for tests; `PreDownload` restores Glacier objects for `restoreDays` (days to download every key at `AWS_S3_RESTORE_DOWNLOAD_RATE`, default 50 MiB/s, + 2, clamped 3..30; `AWS_S3_RESTORE_DAYS` overrides; a bad value fails `Init`, so every command, and `PreDownload`). It HEADs every key before the first restore |
 | `gs://` | `gcs_backend.go` | |
 | `azure://` | `azure_backend.go` | |
 | `b2://` | `backblaze_b2_backend.go` | |

@@ -21,10 +21,17 @@
 package backends
 
 import (
+	"bytes"
+	"context"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/op/go-logging"
+
+	"github.com/someone1/zfsbackup-go/log"
 )
 
 func TestRestoreDays(t *testing.T) {
@@ -83,20 +90,85 @@ func TestS3PreDownloadRestoreDaysFollowSize(t *testing.T) {
 	}
 }
 
-// A bad AWS_S3_RESTORE_DAYS or AWS_S3_RESTORE_DOWNLOAD_RATE is an error, not a silent default.
+// A bad AWS_S3_RESTORE_DAYS or AWS_S3_RESTORE_DOWNLOAD_RATE is an error, not a silent default:
+// Init fails, before any command does work, and so does a PreDownload that sees it later.
 func TestS3PreDownloadRejectsBadRestoreEnv(t *testing.T) {
 	for _, tc := range []struct{ days, rate string }{
 		{"0", ""}, {"31", ""}, {"x", ""}, {"", "fast"}, {"", "0"},
 	} {
+		c := &recheckS3Client{keys: map[string]*recheckKey{"vol1": deepArchive()}}
 		t.Setenv("AWS_S3_RESTORE_DAYS", tc.days)
 		t.Setenv("AWS_S3_RESTORE_DOWNLOAD_RATE", tc.rate)
-		c := &recheckS3Client{keys: map[string]*recheckKey{"vol1": deepArchive()}}
+		conf := &BackendConfig{TargetURI: AWSS3BackendPrefix + "://goodbucket"}
+		if err := (&AWSS3Backend{}).Init(context.Background(), conf, WithS3Client(c), WithS3Uploader(&mockS3Uploader{})); err == nil {
+			t.Errorf("Init with AWS_S3_RESTORE_DAYS=%q AWS_S3_RESTORE_DOWNLOAD_RATE=%q succeeded", tc.days, tc.rate)
+		}
+
+		t.Setenv("AWS_S3_RESTORE_DAYS", "")
+		t.Setenv("AWS_S3_RESTORE_DOWNLOAD_RATE", "")
 		b := newRecheckBackend(t, c)
+		t.Setenv("AWS_S3_RESTORE_DAYS", tc.days)
+		t.Setenv("AWS_S3_RESTORE_DOWNLOAD_RATE", tc.rate)
 		if err := preDownload(t, b, "vol1"); err == nil {
 			t.Errorf("PreDownload with AWS_S3_RESTORE_DAYS=%q AWS_S3_RESTORE_DOWNLOAD_RATE=%q succeeded", tc.days, tc.rate)
 		}
 		if len(c.restores) != 0 {
 			t.Errorf("PreDownload with a bad setting restored %q", c.restores)
 		}
+	}
+}
+
+// The restore notice says where the days come from, and gives none when only Intelligent-Tiering
+// objects (which take no lifetime) are restored.
+func TestS3PreDownloadRestoreNotice(t *testing.T) {
+	it := func() *recheckKey {
+		return &recheckKey{class: s3.ObjectStorageClassIntelligentTiering, archive: s3.ArchiveStatusArchiveAccess}
+	}
+	for _, tc := range []struct {
+		name, days string
+		keys       map[string]*recheckKey
+		want, not  []string
+	}{
+		{"computed", "", map[string]*recheckKey{"vol1": deepArchive()},
+			[]string{"for 3 days, the time to download", "(AWS_S3_RESTORE_DAYS overrides)"}, []string{"Intelligent-Tiering"}},
+		{"override", "9", map[string]*recheckKey{"vol1": deepArchive()},
+			[]string{"for 9 days, as AWS_S3_RESTORE_DAYS sets"}, []string{"the time to download"}},
+		{"mixed", "", map[string]*recheckKey{"vol1": deepArchive(), "vol2": it()},
+			[]string{"for 3 days", "; the Intelligent-Tiering objects stay restored"}, nil},
+		{"intelligent-tiering", "", map[string]*recheckKey{"vol1": it()},
+			[]string{"restoring 1 objects"}, []string{"days", "Intelligent-Tiering objects stay"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AWS_S3_RESTORE_DAYS", tc.days)
+			buf := new(bytes.Buffer)
+			log.AppLogger.SetBackend(logging.MultiLogger(logging.NewLogBackend(buf, "", 0)))
+			t.Cleanup(func() {
+				log.AppLogger.SetBackend(logging.MultiLogger(logging.NewLogBackend(os.Stderr, "", 0)))
+			})
+			c := &recheckS3Client{keys: tc.keys}
+			keys := make([]string, 0, len(tc.keys))
+			for k := range tc.keys {
+				keys = append(keys, k)
+			}
+			if err := preDownload(t, newRecheckBackend(t, c), keys...); err != nil {
+				t.Fatalf("PreDownload: %v", err)
+			}
+			var notice string
+			for _, line := range strings.Split(buf.String(), "\n") {
+				if strings.Contains(line, "s3 backend: restoring ") {
+					notice = line
+				}
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(notice, want) {
+					t.Errorf("the notice %q lacks %q", notice, want)
+				}
+			}
+			for _, not := range tc.not {
+				if strings.Contains(notice, not) {
+					t.Errorf("the notice %q has %q", notice, not)
+				}
+			}
+		})
 	}
 }

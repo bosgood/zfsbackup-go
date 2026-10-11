@@ -40,6 +40,9 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - `backup/` tests cannot import `files/` test helpers: copy them, and set `EncryptTo` so `StoredManifestObjectName` matches.
 - `files.MaxManifestBytes` is a var: set it small with `setManifestLimit`. `writeTestManifest` uses compression level 0; set `CompressionLevel: 6` when the object must be smaller than its JSON.
 - `receiveStream` runs without ZFS: pass `exec.Command("cat")`.
+- Fake `zfs receive` adds the received snapshot to `FAKEZFS_SNAPSHOTS`. Receiving one snapshot twice into one target: put the fixture back between (`checkRestores`). Shim streams: `FAKEZFS_RECEIVE_UNKNOWN`.
+- Never shape production code around a fake's limit. Fix the fake.
+- Break-the-code check without touching the tree: `rsync -a --exclude .git --exclude tmp ./ /tmp/zb-break/`, edit there, `make -C /tmp/zb-break test-one ...`.
 - Fault injection: upload failure on `file://` = a regular FILE at `<dest>/tank`. ENOSPC = `make test-enospc`. S3 without network = `httptest.Server` + `AWS_S3_CUSTOM_ENDPOINT`, `AWS_REGION`, keys (fake in `clean_s3_test.go`).
 - zfs tests are `package zfs_test` (the fake imports `zfs`).
 - `fmt.Sprintf(w)` with no verb appends `%!(EXTRA ...)`. `fmt.Sprint("a", 1)` is `a1` (space only between two non-strings).
