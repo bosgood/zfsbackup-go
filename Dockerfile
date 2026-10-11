@@ -9,13 +9,14 @@
 #
 #                   docker build -t zfsbackup-test .     (or: make test-docker)
 #                   docker run --rm zfsbackup-test
+#   integration   ZFS + S3 integration test; see integration/README.md.
 #
 # The `test` stage's default command runs the unit tests via `go test ./...`.
 # The ZFS integration tests in integration_test.go are gated behind the
 # `integration` build tag, so they do NOT run here -- they shell out to
 # `zfs`/`zpool` and expect a populated `tank/data@c` dataset, which needs ZFS +
-# root on the host. To run them, build with `-tags integration` in a suitable
-# environment.
+# root on the host. TestIntegrationS3 runs in the `integration` stage below
+# (make integration-docker).
 #
 # The cloud backend tests (backends/) use in-process mocks/servers by default
 # and need no external services -- the ones that DO want a real endpoint
@@ -144,3 +145,28 @@ RUN go build ./... && go test -run '^$' ./... >/dev/null
 
 # Run the unit tests. The integration tests are excluded via build tags.
 CMD ["go", "test", "./..."]
+
+###############################################################################
+# ZFS + S3 integration test (TestIntegrationS3), run by integration/compose.yaml
+# (make integration-docker, make integration-vm). It needs a privileged
+# container and /dev/zfs of a host kernel with the zfs module; see
+# integration/README.md. Ubuntu 24.04, so its zfs userland matches the module
+# of an Ubuntu 24.04 host. A NixOS host sets ZFS_USERLAND to its own userland
+# instead (integration/compose.nixos.yaml).
+#
+# --no-install-recommends keeps zfs-dkms out: it would try to build a module
+# in the image.
+FROM ubuntu:24.04 AS integration
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl diffutils zfsutils-linux \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+COPY --from=toolchain /usr/local/go /usr/local/go
+ENV PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local GOFLAGS=-mod=vendor
+WORKDIR /src
+COPY . .
+# A compile error fails the image build, not the run. The source stays: the
+# test runs from /src.
+RUN go vet -tags integration . \
+    && go test -c -tags integration -o /usr/local/bin/zfsbackup-integration.test .
+COPY integration/entrypoint.sh /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
