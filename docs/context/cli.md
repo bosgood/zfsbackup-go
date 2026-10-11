@@ -12,7 +12,7 @@ Read this when a task adds a flag, a command, or changes exit behavior.
 | `clean` | `cmd/clean.go` | `backup.Clean` |
 | `plan` | `cmd/plan.go` (`runPlan`) | `backup.Scenario.Run` |
 
-`cmd/root.go` holds global flags, keyring loading, the working directory, and the exit-code mapping. `main.go` only calls `cmd.Execute`.
+`cmd/root.go` holds global flags, keyring loading, the working directory, and the exit-code mapping. `main.go` runs `cmd.Execute` under `cmd.SignalContext` (`cmd/signals.go`): the first SIGINT or SIGTERM logs one Notice and cancels the context, a second calls `os.Exit` at once. `cmd.Run` is `Execute` without the exit; the root-package e2e tests call it.
 
 ## Exit codes (`cmd/root.go`)
 
@@ -21,6 +21,7 @@ Read this when a task adds a flag, a command, or changes exit behavior.
 | `0` | success, or nothing new to send (`ErrNoOp`) |
 | `2` | plan checks failed, or the last backup is newer than the pool (`ErrLastBackupInFuture`) |
 | `1` | other plan error |
+| `130`, `143` | stopped by SIGINT or SIGTERM (128 + signal), whatever the error |
 | `255` | any other error |
 
 ## Flags

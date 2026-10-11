@@ -208,7 +208,12 @@ Incremental restore example:
 | `0` | success, or a smart `send` or `plan` found nothing new to back up |
 | `2` | `plan` checks failed, or the last backup at the destination is newer than the pool |
 | `1` | any other `plan` error |
+| `130`, `143` | stopped by SIGINT or SIGTERM |
 | `255` | any other error |
+
+### Stopping a run
+
+SIGINT (Ctrl-C) or SIGTERM stops any command cleanly: it logs `Received SIGTERM; stopping.`, kills `zfs send` or `zfs receive`, aborts open S3 multipart uploads, releases the lock, removes its temp files and uploads no manifest. The exit status is 130 for SIGINT and 143 for SIGTERM. A stopped `send` continues with `--resume` and the same flags, from the last volume that finished; a stopped `receive` starts again from the beginning. A second signal exits at once, without the cleanup.
 
 ### Notes
 

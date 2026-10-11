@@ -261,7 +261,7 @@ A full backup can take hours. Schedule the job an hour or more after sanoid's
 boundary (step 2). If a full outlives the interval, the next run finds the lock
 held and exits non-zero after logging `Another send or a clean of $DS is running
 (pid N holds ...)`; it uploads nothing, and that is the one non-zero status that is
-not a failure. The lock is a file under `--workingDirectory/locks/`, so `send`
+not a failure, apart from 130 and 143 (stopped by SIGINT or SIGTERM, below). The lock is a file under `--workingDirectory/locks/`, so `send`
 and `clean` see each other only with the same working directory; nothing in
 `/tmp` is read, and a file planted there changes nothing. If the full is
 interrupted, rerun it with `--resume`
@@ -299,7 +299,20 @@ What `send` refuses to do:
 
 The exit status is 0 both when it uploads a backup and when there is nothing new
 (`Nothing new to back up.`, the normal case on most runs), so any other status
-is a real failure.
+is a real failure, except 130 and 143.
+
+A SIGTERM (systemd stopping the unit, a shutdown) or SIGINT stops `send`
+cleanly: it logs `Received SIGTERM; stopping.`, kills `zfs send`, aborts the
+open S3 multipart upload, releases the lock, removes its temp files and uploads
+no manifest, then exits 143 (130 for SIGINT). Continue with `--resume`. A
+second signal exits at once, without that cleanup. If a systemd unit runs the
+job, set `TimeoutStopSec=120`: an upload worker in the middle of a request can
+take some seconds to see the stop. The default 90 s is enough in most cases;
+when it runs out, systemd sends SIGKILL and nothing is cleaned up. For SIGKILL
+and an OOM kill, add an S3 lifecycle rule as the backstop: abort incomplete
+multipart uploads (`AbortIncompleteMultipartUpload`) after 1 day. Without it, the
+parts of a killed upload stay in the bucket, and are billed, until a later
+upload or someone aborts them.
 
 A weekly job works the same way with a pool that keeps only three monthlies
 (`monthly=3`): the run on the first day after each 1st sends the new monthly as

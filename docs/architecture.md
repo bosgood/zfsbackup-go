@@ -82,7 +82,7 @@ flowchart TD
 | `clean`          | `backup.Clean` (`backup/clean.go:176`)        | all objects at one destination      | deletes objects, local cache files                   |
 | `plan`           | `cmd.runPlan` (`cmd/plan.go:143`)             | zfs or files, manifests             | stdout only                                          |
 
-Exit codes (`cmd/root.go:94`): `0` = success or nothing new; `2` = plan checks failed or last backup newer than pool; `1` = other plan error; `255` = any other error.
+Exit codes (`cmd/root.go:107`): `0` = success or nothing new; `2` = plan checks failed or last backup newer than pool; `1` = other plan error; `130`/`143` = stopped by SIGINT/SIGTERM (`cmd/signals.go`); `255` = any other error.
 
 ## 3. send: control flow
 
