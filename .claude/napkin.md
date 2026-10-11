@@ -48,6 +48,9 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - zfs tests are `package zfs_test` (the fake imports `zfs`).
 - `fmt.Sprintf(w)` with no verb appends `%!(EXTRA ...)`. `fmt.Sprint("a", 1)` is `a1` (space only between two non-strings).
 - Never put backticks in a cobra/pflag usage string: pflag shows the span as the flag TYPE.
+- In-process cobra runs: a subcommand keeps the context of its FIRST run (cobra sets it only when nil). `cmd.Run` resets it; use it, not `RootCmd.ExecuteContext`.
+- A test that sends a real signal: `cmd.SignalContext` BEFORE `syscall.Kill`, never two signals outside `exitFunc` tests.
+- The file:// backend writes a volume under its final name from the first byte. "Volume done" = a cached partial manifest (`<work>/cache/*/*`), not the object.
 
 ## Git and a shared tree
 - Another session can edit this tree at the same time. Run `git status` right before staging; stage BY NAME, never `git add -A`.
@@ -77,6 +80,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - `dev.nix`: bump `rev`, set `hash = lib.fakeHash`, build, paste the "got:" hash. The user must run nix.
 
 ## Open plans
+- `docs/specs/2026-10-11--sigterm-handling/`: EXECUTED 2026-10-11 (a2c0636..069eeba); notes at the end of its plan.md.
 - `docs/specs/2026-10-11--third-pass-fixes/`: EXECUTED 2026-10-11 (caed77d..525b133); notes at the end of its plan.md.
 - `docs/specs/2026-09-29--pgp-ed25519/`. Unexecuted as of 2026-09-29.
 - `send --dry-run` audit (2026-09-07), items 1-5, 7, 8: status unknown, see the archive.
