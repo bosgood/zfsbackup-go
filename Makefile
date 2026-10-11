@@ -94,6 +94,23 @@ fmt-write:
 	@[ -n "$(FILES)" ] || { echo "fmt-write: set FILES"; exit 1; }
 	docker run --rm -v "$(CURDIR)":/src -w /src $(GO_IMAGE) gofmt -s -w $(FILES)
 
+# Build an older revision (Linux, pinned image) to tmp/zfsbackup-<REV>, e.g. `make build-rev REV=master`.
+# The revision's vendor/ is used, so no network is needed.
+build-rev:
+	@[ -n "$(REV)" ] || { echo "build-rev: set REV"; exit 1; }
+	rm -rf tmp/build-$(REV) && mkdir -p tmp/build-$(REV)
+	git archive $(REV) | tar -x -C tmp/build-$(REV)
+	docker run --rm -v "$(CURDIR)/tmp/build-$(REV)":/src -v "$(GOCACHE_DIR)":/root/.cache/go-build -w /src \
+		-e GOTOOLCHAIN=local -e GOFLAGS=-mod=vendor $(GO_IMAGE) go build -o zfsbackup .
+	cp tmp/build-$(REV)/zfsbackup tmp/zfsbackup-$(REV)
+	rm -rf tmp/build-$(REV)
+
+# Write a destination with the build of REV (see build-rev) to testdata/manifests/<REV>-<short hash>/.
+# Commit the result with a README.md; never regenerate a committed fixture to match new code.
+fixture-old: build-rev
+	docker run --rm -v "$(CURDIR)":/src -w /src $(GO_IMAGE) \
+		sh testdata/manifests/make-fixture.sh tmp/zfsbackup-$(REV) testdata/manifests/$(REV)-$$(git rev-parse --short $(REV))
+
 build:
 	${GOPATH}/bin/gox -ldflags="-w -s -X github.com/someone1/zfsbackup-go/config.GitCommit=${COMMIT_HASH}" -osarch=${TARGETS}
 
