@@ -95,7 +95,9 @@ func setupAzureBucket(t *testing.T) func() {
 	}
 }
 
-func setupS3Bucket(t *testing.T) func() {
+// setupS3Bucket creates bucket at AWS_S3_CUSTOM_ENDPOINT and returns a client
+// and a func that deletes the bucket's objects and the bucket.
+func setupS3Bucket(t *testing.T, bucket string) (*s3.S3, func()) {
 	if os.Getenv("AWS_S3_CUSTOM_ENDPOINT") == "" {
 		t.Skip("No custom S3 Endpoint provided to test against")
 	}
@@ -111,7 +113,7 @@ func setupS3Bucket(t *testing.T) func() {
 
 	client := s3.New(sess)
 	_, err = client.CreateBucket(&s3.CreateBucketInput{
-		Bucket: aws.String(s3TestBucketName),
+		Bucket: aws.String(bucket),
 	})
 	if err != nil {
 		if aerr, ok := err.(awserr.Error); ok {
@@ -121,9 +123,9 @@ func setupS3Bucket(t *testing.T) func() {
 		}
 	}
 
-	return func() {
+	return client, func() {
 		objects, err := client.ListObjects(&s3.ListObjectsInput{
-			Bucket: aws.String(s3TestBucketName),
+			Bucket: aws.String(bucket),
 		})
 		if err != nil {
 			t.Errorf("could not list objects: %v", err)
@@ -138,7 +140,7 @@ func setupS3Bucket(t *testing.T) func() {
 		}
 
 		if _, err := client.DeleteObjects(&s3.DeleteObjectsInput{
-			Bucket: aws.String(s3TestBucketName),
+			Bucket: aws.String(bucket),
 			Delete: &s3.Delete{
 				Objects: objectsToDelete,
 			},
@@ -146,7 +148,7 @@ func setupS3Bucket(t *testing.T) func() {
 			t.Errorf("could not delete objects: %v", err)
 		}
 		if _, err := client.DeleteBucket(&s3.DeleteBucketInput{
-			Bucket: aws.String(s3TestBucketName),
+			Bucket: aws.String(bucket),
 		}); err != nil {
 			t.Errorf("could not delete bucket - %v", err)
 		}
@@ -206,11 +208,10 @@ func compareDirs(t *testing.T, source, dest string) {
 
 	// nolint:gosec // The input is safe
 	diffCmd := exec.Command("diff", "-rq", "--exclude", ".zfs", source, dest)
-	errBuf := bytes.NewBuffer(nil)
-	diffCmd.Stderr = errBuf
 
-	if err := diffCmd.Run(); err != nil {
-		t.Logf("diff output: %s", errBuf.String())
+	// diff names the differences on stdout.
+	if out, err := diffCmd.CombinedOutput(); err != nil {
+		t.Logf("diff output: %s", out)
 		t.Fatalf("unexpected difference comparing %s with %s: %v", source, dest, err)
 	}
 }
@@ -221,7 +222,7 @@ func TestIntegration(t *testing.T) {
 	removeAzureBucket := setupAzureBucket(t)
 	defer removeAzureBucket()
 
-	removeS3Bucket := setupS3Bucket(t)
+	_, removeS3Bucket := setupS3Bucket(t, s3TestBucketName)
 	defer removeS3Bucket()
 
 	s3bucket := fmt.Sprintf("%s://%s", backends.AWSS3BackendPrefix, s3TestBucketName)

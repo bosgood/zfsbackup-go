@@ -1,4 +1,8 @@
 version: "2"
+run:
+  # Lint integration_test.go and integration_s3_test.go too.
+  build-tags:
+    - integration
 linters:
   default: none
   enable:
