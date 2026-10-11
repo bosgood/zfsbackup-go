@@ -72,7 +72,7 @@ var (
 
 // ProcessSmartOptions will compute the snapshots to use
 func ProcessSmartOptions(ctx context.Context, jobInfo *files.JobInfo) error {
-	snapshots, err := zfs.GetSnapshotsAndBookmarks(context.Background(), jobInfo.VolumeName)
+	snapshots, err := zfs.GetSnapshotsAndBookmarks(ctx, jobInfo.VolumeName)
 	if err != nil {
 		return err
 	}

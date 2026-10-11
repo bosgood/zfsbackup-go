@@ -203,7 +203,7 @@ func ResetSendJobInfo() {
 }
 
 // nolint:gocyclo,funlen // Will do later
-func updateJobInfo(args []string) error {
+func updateJobInfo(ctx context.Context, args []string) error {
 	jobInfo.StartTime = time.Now()
 	jobInfo.Version = config.VersionNumber
 
@@ -240,7 +240,7 @@ func updateJobInfo(args []string) error {
 			return errInvalidInput
 		}
 		jobInfo.BaseSnapshot = files.SnapshotInfo{Name: parts[1]}
-		creationTime, err := zfs.GetCreationDate(context.TODO(), args[0])
+		creationTime, err := zfs.GetCreationDate(ctx, args[0])
 		if err != nil {
 			log.AppLogger.Errorf("Error trying to get creation date of specified base snapshot - %v", err)
 			return err
@@ -259,7 +259,7 @@ func updateJobInfo(args []string) error {
 				targetName = fmt.Sprintf("%s@%s", jobInfo.VolumeName, jobInfo.IncrementalSnapshot.Name)
 			}
 
-			creationTime, err = zfs.GetCreationDate(context.TODO(), targetName)
+			creationTime, err = zfs.GetCreationDate(ctx, targetName)
 			if err != nil {
 				log.AppLogger.Errorf("Error trying to get creation date of specified incremental snapshot/bookmark - %v", err)
 				return err
@@ -274,7 +274,7 @@ func updateJobInfo(args []string) error {
 			log.AppLogger.Errorf("When using a smart option, please only specify the volume to backup, do not include any snapshot information.")
 			return errInvalidInput
 		}
-		if err := backup.ProcessSmartOptions(context.Background(), &jobInfo); errors.Is(err, backup.ErrNoOp) {
+		if err := backup.ProcessSmartOptions(ctx, &jobInfo); errors.Is(err, backup.ErrNoOp) {
 			// The normal outcome of most runs with --fullIfOlderThan; Execute exits 0.
 			log.AppLogger.Noticef("Nothing new to back up.")
 			return err
@@ -321,5 +321,5 @@ func validateSendFlags(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	return updateJobInfo(args)
+	return updateJobInfo(cmd.Context(), args)
 }

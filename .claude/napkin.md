@@ -22,6 +22,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - `make test-run` = fast host loop. `make test-one` = Docker, ~10 s (mounts `/tmp/zfsb-gocache`). `make test-race` needs ~20 min (timeout 45m).
 - `make fmt-check` sees TRACKED files only: a new file is not checked until `git add`. Fix with `make fmt-write FILES=...` (pinned image). Trust fmt-check, not a list.
 - `make lint` runs a pinned golangci-lint v2 image. Bump the tag on purpose; a new version adds issues.
+- Try a linter without editing .golangci.yml: `make lint LINT_ARGS="--enable-only X,Y --max-same-issues 0"`. 2026-10-11 probe of 31 extra linters: 1 real bug (ignored ctx), rest noise.
 - `make test-docker` copies the build context in the first ~5 s; after that you can edit the tree.
 - Keep the Dockerfile `GO_VERSION` default in sync with go.mod's `go` line (images set `GOTOOLCHAIN=local`).
 - `go test` without `-v` hides stdout of passing tests.

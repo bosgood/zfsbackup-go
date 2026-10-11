@@ -12,9 +12,10 @@ fmt:
 	git ls-files "*.go" | grep -v ^vendor/ | xargs gofmt -s -l -w
 
 # golangci-lint in Docker, pinned so new linters do not appear by surprise. .golangci.yml is v2 format.
+# LINT_ARGS adds flags, e.g. LINT_ARGS="--enable-only errorlint,nilerr" to try a linter.
 GOLANGCI_LINT_IMAGE=golangci/golangci-lint:v2.12.2
 lint:
-	docker run --rm -v "$(CURDIR)":/src -w /src $(GOLANGCI_LINT_IMAGE) golangci-lint run
+	docker run --rm -v "$(CURDIR)":/src -w /src $(GOLANGCI_LINT_IMAGE) golangci-lint run $(LINT_ARGS)
 
 get:
 	go get -v -d -t ./...
