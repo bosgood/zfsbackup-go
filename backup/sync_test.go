@@ -93,3 +93,27 @@ func TestGetCacheDirAdoptsLegacySpellings(t *testing.T) {
 		})
 	}
 }
+
+// isManifestObject reads a name as ours when our separator follows the prefix, or a run of
+// characters no dataset name holds that appears again in the set part (ours, written with
+// another --separator). A sibling prefix goes on with a dataset character, or with a symbol that
+// never appears again.
+func TestIsManifestObjectSibling(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want bool
+	}{
+		{"manifests|tank/data|a.manifest.gz", true},
+		{"manifests#tank/data#a.manifest.gz", true},
+		{"manifests#tank/data#a|to|b.manifest.gz.pgp", true},
+		{"manifests@v2|tank/data|b.manifest.gz", false},
+		{"manifests-old/manifests|x|y.manifest.gz", false},
+		{"manifests2|tank|a.manifest.gz", false},
+		{"manifests", false},
+		{"manifests#tank", false},
+	} {
+		if got := isManifestObject(tc.name, "manifests", "|"); got != tc.want {
+			t.Errorf("isManifestObject(%q, manifests, |) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

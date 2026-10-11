@@ -247,9 +247,11 @@ func manifestMayBeFor(objectName, manifestPrefix, volume string) bool {
 }
 
 // isManifestObject returns whether name, listed by manifestPrefix, is a manifest rather than an
-// object under a sibling prefix such as "manifests-old/". A manifest's prefix is followed by its
-// separator, which is separator or (written with another --separator) holds a character no ZFS
-// dataset name can, while a sibling's name goes on with one a dataset name can.
+// object under a sibling prefix such as "manifests-old/" or "manifests@v2". A manifest's prefix is
+// followed by its separator: separator, or (written with another --separator) a run of
+// characters no ZFS dataset name can hold, which then separates the parts of the set name too.
+// A sibling's name goes on with a character a dataset name can hold, or with a symbol that does
+// not appear again.
 func isManifestObject(name, manifestPrefix, separator string) bool {
 	rest, ok := strings.CutPrefix(name, manifestPrefix)
 	if !ok || rest == "" {
@@ -258,9 +260,25 @@ func isManifestObject(name, manifestPrefix, separator string) bool {
 	if separator != "" && strings.HasPrefix(rest, separator) {
 		return true
 	}
-	c := rest[0]
-	inDatasetName := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("_-:./", c) >= 0
-	return !inDatasetName
+	n := 0
+	for n < len(rest) && !inDatasetName(rest[n]) {
+		n++
+	}
+	if n == 0 {
+		return false
+	}
+	set := rest[n:]
+	// The last one: a snapshot name may hold ".manifest" too.
+	idx := strings.LastIndex(set, ".manifest")
+	if idx < 0 {
+		return false
+	}
+	return strings.Contains(set[:idx], rest[:n])
+}
+
+// inDatasetName returns whether c can be part of a ZFS dataset or snapshot name.
+func inDatasetName(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("_-:./", c) >= 0
 }
 
 // cachedManifestName is the file name objectName is cached under.

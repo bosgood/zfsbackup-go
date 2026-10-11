@@ -101,7 +101,7 @@ func TestSyncCacheRetriesTruncatedDownload(t *testing.T) {
 	defer func() { config.WorkingDir = oldWorkingDir }()
 	cache := t.TempDir()
 	manifest := bytes.Repeat([]byte{'m'}, 4096)
-	b := &cacheBackend{objects: map[string][]byte{"manifests|x": manifest}, failures: 1}
+	b := &cacheBackend{objects: map[string][]byte{"manifests|tank|x.manifest.gz": manifest}, failures: 1}
 	j := &files.JobInfo{ManifestPrefix: "manifests"}
 
 	if _, _, err := syncCache(context.Background(), j, cache, b); err == nil {

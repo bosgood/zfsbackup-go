@@ -328,6 +328,7 @@ func TestOtherPrefixSets(t *testing.T) {
 		"p2|tank|daily.manifest-1.manifest.gz":              "|tank|daily.manifest-1",
 		"p2|tank|daily.manifest-1|to|d.manifest.gz":         "|tank|daily.manifest-1|to|d",
 		"p.manifest|tank|x.manifest|to|y.manifest.manifest": "|tank|x.manifest|to|y.manifest",
+		"manifests@v2|tank/data|b.manifest.gz":              "|tank/data|b", // a sibling that starts with a symbol
 	} {
 		if got := otherPrefixSets([]string{obj}, "manifests", "|", []string{"|"}); got[want] != obj {
 			t.Errorf("otherPrefixSets(%q) = %v, want key %q", obj, got, want)
@@ -362,5 +363,35 @@ func TestCleanOwnManifestOfAnotherSeparator(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "another --manifestPrefix") {
 		t.Errorf("clean called our own manifest another prefix's:\n%s", logs.String())
+	}
+}
+
+// TestCleanSkipsSiblingPrefixStartingWithSymbol: a sibling job under --manifestPrefix
+// manifests@v2 backs up the same dataset. "@" is no dataset character, but its manifest is not
+// ours written with another separator ("@" never appears again in its name): clean leaves its
+// sets alone, and still deletes an orphan of our own set.
+func TestCleanSkipsSiblingPrefixStartingWithSymbol(t *testing.T) {
+	targetDir, jobInfo := setupCleanTest(t)
+	ourSet, volA := prefixedSet(t, targetDir, "tank/data", "a", "", "manifests", nil, "")
+	sibling, volB := prefixedSet(t, targetDir, "tank/data", "b", "", "manifests@v2", nil, "")
+	siblingManifest := filepath.Join(targetDir, sibling.ManifestObjectName())
+	orphan := writeTestObject(t, targetDir, ourSet.BackupVolumeObjectName(2))
+
+	logs := captureLogs(t)
+	if err := Clean(context.Background(), jobInfo, false, false); err != nil {
+		t.Fatalf("clean: %v\n%s", err, logs.String())
+	}
+	for _, kept := range []string{volA, volB, siblingManifest} {
+		if !exists(t, kept) {
+			t.Errorf("clean deleted %s\n%s", kept, logs.String())
+		}
+	}
+	if exists(t, orphan) {
+		t.Errorf("clean kept the orphan %s of our own set:\n%s", orphan, logs.String())
+	}
+	for _, want := range []string{"Skipping 1 volumes of the backup set tank/data|b", "under another --manifestPrefix"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("want %q in the log\n%s", want, logs.String())
+		}
 	}
 }
