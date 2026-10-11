@@ -66,6 +66,8 @@ var (
 	TestHookStreamFailed func()
 	// TestHookBeforeStreamBytes runs when sendStream is about to record the stream's length.
 	TestHookBeforeStreamBytes func()
+	// TestHookBeforeFinalManifest runs before the final manifest is saved.
+	TestHookBeforeFinalManifest func()
 )
 
 // ProcessSmartOptions will compute the snapshots to use
@@ -632,6 +634,9 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 		manifestmutex.Lock()
 		jobInfo.EndTime = time.Now()
 		manifestmutex.Unlock()
+		if TestHookBeforeFinalManifest != nil {
+			TestHookBeforeFinalManifest()
+		}
 		manifestVol, err := saveManifest(ctx, jobInfo, true)
 		if err != nil {
 			return err

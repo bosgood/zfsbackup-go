@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/someone1/zfsbackup-go/backup"
 	"github.com/someone1/zfsbackup-go/files"
 )
 
@@ -709,5 +710,83 @@ func TestE2EResumeWithEncryptToNeedsSecretRing(t *testing.T) {
 	}
 	if after := destObjects(t, env.dest); len(after) != len(before) {
 		t.Errorf("the refused resume changed the destination: %d objects, had %d", len(after), len(before))
+	}
+}
+
+// A kill between the last volume's cache write and the final save leaves every volume at the
+// destination, a cached manifest that lists them all with no EndTime, and no manifest at the
+// destination. --resume skips the whole stream (whether or not it ends on a volume boundary) and
+// must still finalize and upload the manifest from the kept volumes.
+func TestE2EResumeFinalizesFullyCachedPartial(t *testing.T) {
+	for _, streamBytes := range []int64{3 << 20, 5 << 19} {
+		t.Run(fmt.Sprint(streamBytes), func(t *testing.T) {
+			env := newE2EEnv(t)
+			t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(streamBytes))
+			env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+			dest := "file://" + env.dest
+			args := []string{"--volsize", "1", "--compressor", "", "tank/data@a", dest}
+
+			// The send completes; the hook keeps the cached partial manifest as it was before
+			// the final save, and the state a kill leaves is rebuilt from it below.
+			partial := filepath.Join(t.TempDir(), "partial")
+			var cached string
+			backup.TestHookBeforeFinalManifest = func() {
+				paths, err := filepath.Glob(filepath.Join(env.work, "cache", "*", "*"))
+				if err != nil || len(paths) != 1 {
+					t.Errorf("want one cached manifest before the final save, got %v (%v)", paths, err)
+					return
+				}
+				cached = paths[0]
+				data, err := os.ReadFile(cached)
+				if err == nil {
+					err = os.WriteFile(partial, data, 0600)
+				}
+				if err != nil {
+					t.Error(err)
+				}
+			}
+			t.Cleanup(func() { backup.TestHookBeforeFinalManifest = nil })
+			env.sendOK(t, args...)
+			backup.TestHookBeforeFinalManifest = nil
+			if cached == "" {
+				t.Fatal("the hook did not run")
+			}
+			for _, name := range manifestNames(destObjects(t, env.dest)) {
+				if err := os.Remove(filepath.Join(env.dest, name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			data, err := os.ReadFile(partial)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(cached, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			before := destObjects(t, env.dest)
+
+			logs, err := guarded(t, func() (string, error) { return env.send(append([]string{"--resume"}, args...)...) })
+			if err != nil {
+				t.Fatalf("resume: %v\n%s", err, logs)
+			}
+			if want := "Resuming from volume 4: 3 of 3 cached volumes verified"; !strings.Contains(logs, want) {
+				t.Errorf("want %q in the log\n%s", want, logs)
+			}
+			var added []string
+			for name, data := range destObjects(t, env.dest) {
+				if old, ok := before[name]; !ok {
+					added = append(added, name)
+				} else if !bytes.Equal(old, data) {
+					t.Errorf("%s changed", name)
+				}
+			}
+			if len(added) != 1 || !strings.HasPrefix(added[0], "manifests|") {
+				t.Errorf("the resume added %q, want only the manifest", added)
+			}
+			if got := newestBackup(t, "tank/data", dest); len(got.Volumes) != 3 || got.EndTime.IsZero() {
+				t.Errorf("the published manifest has %d volumes and EndTime %v, want 3 and a time", len(got.Volumes), got.EndTime)
+			}
+			env.checkRestores(t, dest, "a", streamBytes)
+		})
 	}
 }
