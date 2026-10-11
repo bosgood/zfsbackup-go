@@ -14,6 +14,7 @@ Read this before you run anything. All repeatable work goes through the Makefile
 | `make test-enospc` | full-disk tests on a 40 KiB tmpfs |
 | `make lint` | golangci-lint v2, pinned image |
 | `make fmt-check` | `gofmt -s -l` in the pinned image. `make fmt` is broken (undefined `DIRS`). |
+| `make fmt-write FILES="a.go b.go"` | `gofmt -s -w` on those files in the pinned image. `fmt-check` sees tracked files only: check a new file after `git add`. |
 | `make integration` | needs a real ZFS host and `tank/data@c`; build tag `integration` |
 | `make plan ARGS="..."` | run `plan` with the working tree |
 

@@ -88,6 +88,12 @@ fmt-check:
 	docker run --rm -v "$(CURDIR)":/src -w /src $(GO_IMAGE) \
 		sh -c 'files=$$(git -c safe.directory=/src ls-files "*.go" | grep -v ^vendor/); [ -n "$$files" ] || { echo "fmt-check: no .go files listed (a git worktree? its .git link does not resolve in the container)"; exit 1; }; out=$$(echo "$$files" | xargs gofmt -s -l) || { echo "$$out"; echo "^ gofmt failed (a file that does not parse?)"; exit 1; }; [ -z "$$out" ] || { echo "$$out"; echo "^ gofmt -s would rewrite these files"; exit 1; }'
 
+# Rewrite files in place with `gofmt -s`, using the pinned toolchain, e.g.
+#   make fmt-write FILES="backup/sync.go e2e_list_test.go"
+fmt-write:
+	@[ -n "$(FILES)" ] || { echo "fmt-write: set FILES"; exit 1; }
+	docker run --rm -v "$(CURDIR)":/src -w /src $(GO_IMAGE) gofmt -s -w $(FILES)
+
 build:
 	${GOPATH}/bin/gox -ldflags="-w -s -X github.com/someone1/zfsbackup-go/config.GitCommit=${COMMIT_HASH}" -osarch=${TARGETS}
 
