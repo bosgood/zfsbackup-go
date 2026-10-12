@@ -288,19 +288,23 @@ func snapshot(t *testing.T, dataset, kind string) string {
 // creation second, as sanoid's monthly, daily and hourly tie on the 1st. It
 // returns the names in the order of kinds. zfs takes one snapshot of a dataset
 // per call (and per channel program), so it takes them one by one right after
-// a second starts, and starts again if the second rolled over meanwhile.
+// a second starts, and starts again if the second rolled over meanwhile (each
+// call waits for a txg sync, which on the VM can take half a second).
 func snapshotTie(t *testing.T, dataset string, kinds ...string) []string {
 	t.Helper()
-	for try := 0; try < 3; try++ {
+	var took []time.Duration
+	for try := 0; try < 10; try++ {
 		time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second)))
 		now := time.Now().UTC()
 		lastSnapshot = now
 		names := make([]string, 0, len(kinds))
+		start := time.Now()
 		for _, kind := range kinds {
 			name := "autosnap_" + now.Format("2006-01-02_15:04:05") + "_" + kind
 			zfsRun(t, "snapshot", dataset+"@"+name)
 			names = append(names, name)
 		}
+		took = append(took, time.Since(start).Round(time.Millisecond))
 		created := zfsGet(t, dataset+"@"+names[0], "creation")
 		tie := true
 		for _, n := range names[1:] {
@@ -313,7 +317,7 @@ func snapshotTie(t *testing.T, dataset string, kinds ...string) []string {
 			zfsRun(t, "destroy", dataset+"@"+n)
 		}
 	}
-	t.Fatalf("could not take %v of %s in one second", kinds, dataset)
+	t.Fatalf("could not take %v of %s in one second; the tries took %v", kinds, dataset, took)
 	return nil
 }
 

@@ -959,3 +959,8 @@ Findings for follow-up (not fixed here, as the plan says):
 Plan facts corrected: 1 (deleted manifest), 4 (ties), 9 (out-of-sync before
 noop); plan step expectations corrected: task 7 (volume names hold no prefix).
 
+Final VM runs: run 2 of the first pair failed `ProdShape`: 3 tries of a
+2-snapshot tie all crossed a second (a `zfs snapshot` waits for a txg sync,
+up to about half a second on the VM). `snapshotTie` now tries 10 times and
+reports how long each try took.
+
