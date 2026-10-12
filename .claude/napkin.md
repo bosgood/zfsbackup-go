@@ -5,7 +5,7 @@ Project history, review facts and defect lists go in `docs/specs/`, not here.
 Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`.
 
 ## Bash tool and host
-- Call #1 of a session is `cat .claude/napkin.md` ALONE. No chain, no separator. (Broken 9 times by chaining, last 2026-10-11, six times that day.)
+- Call #1 of a session is `cat .claude/napkin.md` ALONE. No chain, no separator. (Broken 10 times by chaining, last 2026-10-12.)
 - zsh expands a leading `=word`: `echo ======` aborts the whole chain. Use `echo '-----'`. Quote globs too: `--include='*.go'`.
 - `grep` here is ugrep: it ignores `--` as end of options. Use `/usr/bin/grep` or `-e PATTERN` when it matters.
 - macOS has no `timeout`. Put it inside the container command.
@@ -27,7 +27,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - MinIO publishes no Docker images any more (quay.io and Docker Hub). `pgsty/minio` is a community build; pinned in `integration/compose.yaml`.
 
 ## Build, test, lint
-- Makefile only, also for VERIFICATION. No target? Add one. Targets: `docs/context/testing.md`.
+- Makefile only, also for VERIFICATION. No target? Add one. Targets: `docs/context/testing.md`. (Broke it with an ad-hoc `go vet -tags integration` 2026-10-12; `make vet` now.)
 - `make test-run` = fast host loop. `make test-one` = Docker, ~10 s (mounts `/tmp/zfsb-gocache`). `make test-race` needs ~20 min (timeout 45m).
 - `make fmt-check` sees TRACKED files only: a new file is not checked until `git add`. Fix with `make fmt-write FILES=...` (pinned image). Trust fmt-check, not a list.
 - `make lint` runs a pinned golangci-lint v2 image. Bump the tag on purpose; a new version adds issues.
@@ -43,7 +43,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - pgzip v1.2.6/v1.2.7 panic in `Reader.WriteTo` after a `Read` (klauspost/pgzip#74). `files.VerifyEnd` hits it; `TestUnknownSignerErrorDoesNotAdviseTrust` catches it. Fix commit e1b5b318 (2026-10-09) is untagged.
 - pkg/sftp >= 1.13.6: `Server.Serve` returns nil on EOF, not io.EOF. The fake sshd in `ssh_backend_test.go` must `channel.Close()` after Serve, or the client's `Close` waits forever.
 - `go test` without `-v` hides stdout of passing tests.
-- After a flag help change, check with `make help CMD=<cmd>`.
+- After a flag help change, check with `make help CMD=<cmd>`. It also proves the vendor dir is consistent (`go run .` uses `-mod=vendor`); a cheap build check on the host.
 
 ## Writing tests
 - Only `TestIntegrationS3Large` sends objects over s3manager's 5 MiB multipart threshold (every other test: `--volsize 1`, 3 MiB). It proves multipart by the ETag `<md5>-<parts>`; 1 GiB takes 15 s on the VM. The pool file is 8 GiB (`integration/entrypoint.sh`).
@@ -79,8 +79,9 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - `syncCache` downloads only manifests whose md5(name) is NOT in the cache; it never re-reads a cached name. A receive that shares `work` with the send reads the sender's cache, not the destination. To prove a restore from the destination alone, receive with `t.TempDir()` as `--workingDirectory`.
 - `snapshot()` in the integration tests avoids ties on purpose. For a tie use `snapshotTie`: zfs takes ONE snapshot of a dataset per `zfs snapshot` call ("multiple snapshots of same fs not allowed") and per channel program (EAGAIN), so it is separate calls in one second, checked, retried.
 - A test that restores with the sender's `work` proves nothing about the manifest at the destination. But a manifest DELETED at the destination fails both: receive takes names from the listing, only a cached name's CONTENT from the cache.
-- Explicit `receive` of an incremental needs `-i <source>`, else it looks for a full set and S3 says `NotFound: Not Found`.
-- `receive --origin` of an incremental is refused by `Receive` (it lists only the target). A `--properties` stream received without `--unmounted` mounts over the live source. Both red in `TestIntegrationS3ReceiveSafety`.
+- Explicit `receive` of an incremental needs `-i <source>`, else it looks for a full set; since 2026-10-12 the error lists the backups of that snapshot and the flags for each.
+- `receive --origin` of an incremental and the `--properties` mount-over-source trap are fixed (2026-10-12); `TestIntegrationS3ReceiveSafety` is green on both. The fake's `zfs get mountpoint` source comes from `FAKEZFS_MOUNTPOINTS`.
+- zfs sync tasks in flight together share one txg sync: `snapshotTie` takes its snapshots in goroutines (one `zfs snapshot` per kind), which cuts a 3-snapshot tie from ~1.5 s to ~0.5 s on the VM.
 - Volume names hold no `--manifestPrefix`: two prefixes that send one snapshot share its objects, and clean spares orphans of a set both name.
 - Smart send to out-of-sync destinations errors before it looks for anything newer (never a noop).
 - `t.Cleanup` is LIFO: a cleanup that must run BEFORE `destroyAfter` is registered AFTER it.
@@ -106,6 +107,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - cobra `PersistentPostRun` does not run when PreRunE/RunE fail; `Execute` cleans the temp dir on error.
 - Receive pipe mode: ONE VolumeInfo has a writer (processSequence) and a reader (Extract). The writer's Close must not touch reader layers (`rw`, `cmd`); `extracted` marks them (fix 5cfb96d).
 - Pipe mode (`--maxFileBuffer 0`): either side that fails must `vol.Abort(err)`. An errgroup ctx is also canceled when `Wait` succeeds, so do not abort on it. Do not `Close` a pipe volume after a failed upload.
+- `Receive` reassigns `ctx` to the errgroup's: anything that runs zfs after `wg.Wait()` must use `pctx`, or `exec.CommandContext` fails at once and silently (bitten 2026-10-12, mountpoint Notice).
 - `sortBackupsNewestFirst` is THE manifest order. `backends.RedactURI` is THE redaction helper.
 - `send` locks `<workingDirectory>/locks/<md5(dataset)>.lck`. Same host only; invisible across users and working dirs.
 - On the 1st, sanoid takes monthly, daily, hourly in that order, same second. Selection must not depend on tie order.

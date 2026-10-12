@@ -454,6 +454,11 @@ reboot, before anyone ran `zfs load-key`).
   with the sender's key: `zfs load-key -L file://<key file> <restored>`, then
   `zfs mount <restored>`. Receive raw backups with `--unmounted`. Keep the key
   file with the backup key from step 0: without it a raw backup is lost.
+- A stream sent with `--properties` or `--replication` carries the source's
+  `mountpoint`. On the host that still has the source, receive it into another
+  dataset with `--unmounted` (without it the receive is refused: the restore
+  would mount over the live data), then `zfs set mountpoint=<another path>
+  <restored>` before a reboot or `zfs mount -a` mounts it at the source's path.
 - `receive --auto` refuses a chain whose links differ in `--raw` (an older
   version may have written one).
 

@@ -18,7 +18,11 @@ Diagrams 7 and 8 in [../architecture.md](../architecture.md).
 6. Orderer emits volumes in order to `receiveStream`.
 7. `VolumeInfo.Extract` reverses the writer layers: pgp verify or decrypt, then decompress. Output goes to `zfs receive` stdin.
 
-An explicit receive of an incremental needs `-i <source>`; without it `Receive` builds the FULL set's manifest name and the backend says not found. `Origin` is passed to `zfs receive -o origin=`, but `Receive`'s check that the incremental source is local lists only the target dataset, so `--origin` of an incremental into a new dataset is refused (`TestIntegrationS3ReceiveSafety/Origin`, red).
+An explicit receive names its set with the flags: `-i <source>` for an incremental, none for a full. When the backend has no manifest of that name (`fs.ErrNotExist`; the S3 backend wraps both GetObject's `NoSuchKey` and HeadObject's `NotFound`), `explainMissingManifest` syncs the cache, reads this dataset's manifests, and names each backup of the snapshot with the flags that select it, or says there is none.
+
+`--origin <dataset@snapshot>`: `originSnapshot` lists it (name and creation time), and the incremental source check accepts it next to the target's snapshots. `zfs receive -o origin=` then clones it and applies the stream, so the target need not exist. `AutoRestore` does the same (`TestE2EReceiveIncrementalWithOrigin`, `TestIntegrationS3ReceiveSafety/Origin`).
+
+Mount guard (`refuseMountOverSource`, before any download): a stream sent with `--properties` or `--replication` carries the source's `mountpoint`. When the source dataset is on this host with a mountpoint of its own (`zfs get -o value,source mountpoint`: `local` or `received`, not `none`, `legacy` or a zvol's `-`), the target is another dataset, and `--unmounted` is not set, the receive is refused: it would mount the restore over the live data. Only `--unmounted` lifts it; `-F` is a rollback and does not. After an `--unmounted` receive of such a stream, `noteReceivedMountpoint` (with `pctx`: the errgroup canceled `ctx`) says where the dataset mounts at the next `zfs mount -a` or import, since `-u` skips one mount and does not change the property (`TestE2EReceivePropertiesMountGuard`, `TestIntegrationS3ReceiveSafety/Mounted`).
 
 Receive flags on `JobInfo`: `Force`, `FullPath`, `LastPath`, `NotMounted`, `Origin`, `LocalVolume`, `AutoRestore`.
 

@@ -964,3 +964,14 @@ Final VM runs: run 2 of the first pair failed `ProdShape`: 3 tries of a
 up to about half a second on the VM). `snapshotTie` now tries 10 times and
 reports how long each try took.
 
+### Follow-up (2026-10-12)
+
+Findings 1-3 fixed on `clean-dry-run`: `refuseMountOverSource` and
+`noteReceivedMountpoint` (1), `originSnapshot` in `Receive` (2),
+`explainMissingManifest` plus the S3 HeadObject `NotFound` wrap (3). E2E
+tests on the fake: `TestE2EReceivePropertiesMountGuard`,
+`TestE2EReceiveIncrementalWithOrigin`,
+`TestE2EReceiveMissingManifestSaysWhatIsThere`. `ReceiveSafety/Mounted` now
+requires the refusal. `snapshotTie` takes its snapshots in parallel, so the
+calls share one txg sync. Findings 4 and 5 stay open.
+
