@@ -1,5 +1,6 @@
 # CHANGELOG
 
+* [ADD] test: the six TestIntegrationS3* tests restore from an empty cache, check the guid of every received snapshot, check that GPG volumes and manifests are ciphertext, resume with the default compressor, and filter list across two datasets
 * [ADD] docs: spec 2026-10-11--integration-test-more: audit of the six TestIntegrationS3* tests and the plan that closes their holes (every restore read the manifest from the sender's cache, never from S3; the encrypted test checked only object names; no guid check; no production flags, ties, deep dataset names, window-elapsed full, --fullPath/--lastPath, --unmounted, --origin, two destinations, --manifestPrefix, or ZFS native encryption). Decided: a chain keeps one stream kind; an incremental whose --raw differs from its source backup's will be refused by send, plan and receive --auto (task 9; today nothing checks it outside --resume)
 * [ADD] test: TestIntegrationS3Resume: a zfs send cut mid-stream on real zfs + S3; clean spares the uploaded volumes; --resume after the cut, a lost volume, a lost manifest
 * [ADD] test: TestIntegrationS3ListClean: list filters; clean dry-run, an orphan volume, an unrecognized object, --force on a broken set, against S3

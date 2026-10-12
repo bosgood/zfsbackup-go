@@ -32,6 +32,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -40,10 +41,10 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"golang.org/x/crypto/openpgp/packet"
 
 	"github.com/someone1/zfsbackup-go/backup"
 	"github.com/someone1/zfsbackup-go/cmd"
-	"github.com/someone1/zfsbackup-go/config"
 	"github.com/someone1/zfsbackup-go/files"
 )
 
@@ -113,17 +114,20 @@ func TestIntegrationS3(t *testing.T) {
 	// the host's mount namespace, which a container does not see.
 	itReceive(t, work, "-F", src+"@"+monthly, target, restored)
 	wantSnapshots(t, restored, monthly)
+	wantGUIDs(t, src, restored, monthly)
 	zfsRun(t, "clone", "-o", "mountpoint=/"+monthlyClone, src+"@"+monthly, monthlyClone)
 	compareDirs(t, "/"+monthlyClone, "/"+restored)
 
 	// receive --auto: monthly is there, so one incremental step.
 	itReceive(t, work, "--auto", "-F", src, target, restored)
 	wantSnapshots(t, restored, monthly, daily2)
+	wantGUIDs(t, src, restored, monthly, daily2)
 	compareDirs(t, "/"+src, "/"+restored)
 
 	// receive --auto into nothing: the full, then the incremental.
 	itReceive(t, work, "--auto", "-F", src, target, restored2)
 	wantSnapshots(t, restored2, monthly, daily2)
+	wantGUIDs(t, src, restored2, monthly, daily2)
 	compareDirs(t, "/"+src, "/"+restored2)
 
 	// Pipe mode: volumes stream to S3 multipart uploads and back, never to disk.
@@ -137,6 +141,9 @@ func TestIntegrationS3(t *testing.T) {
 			t.Fatalf("send: %v\n%s", err, logs)
 		}
 		itReceive(t, work, "--maxFileBuffer", "0", "--auto", "-F", src, target, restored3)
+		sent := newestBackup(t, src, target).BaseSnapshot.Name
+		wantSnapshots(t, restored3, sent)
+		wantGUIDs(t, src, restored3, sent)
 		compareDirs(t, "/"+src, "/"+restored3)
 	})
 }
@@ -276,6 +283,80 @@ func snapshot(t *testing.T, dataset, kind string) string {
 	return name
 }
 
+// snapshotTie takes one sanoid-style snapshot of dataset per kind in ONE zfs
+// snapshot call, so they share one creation second, as sanoid's monthly, daily
+// and hourly do on the 1st. It returns the names in the order of kinds.
+func snapshotTie(t *testing.T, dataset string, kinds ...string) []string {
+	t.Helper()
+	now := time.Now().UTC()
+	for now.Unix() == lastSnapshot.Unix() {
+		time.Sleep(50 * time.Millisecond)
+		now = time.Now().UTC()
+	}
+	lastSnapshot = now
+	names := make([]string, 0, len(kinds))
+	args := []string{"snapshot"}
+	for _, kind := range kinds {
+		name := "autosnap_" + now.Format("2006-01-02_15:04:05") + "_" + kind
+		names = append(names, name)
+		args = append(args, dataset+"@"+name)
+	}
+	zfsRun(t, args...)
+	return names
+}
+
+// zfsGet returns the parsable value of property of a dataset, snapshot or bookmark.
+func zfsGet(t *testing.T, name, property string) string {
+	t.Helper()
+	return strings.TrimSpace(zfsRun(t, "get", "-H", "-p", "-o", "value", property, name))
+}
+
+// wantGUIDs fails unless each snapshot of restored has the guid of the
+// snapshot of that name on src: a received snapshot keeps the sender's guid
+// when the stream arrived intact. Where src has only a bookmark of the name
+// (the snapshot was destroyed after the backup), it compares the bookmark's.
+func wantGUIDs(t *testing.T, src, restored string, snaps ...string) {
+	t.Helper()
+	for _, s := range snaps {
+		from := src + "@" + s
+		if exec.Command("zfs", "list", "-t", "snapshot", from).Run() != nil {
+			from = src + "#" + s
+		}
+		if got, want := zfsGet(t, restored+"@"+s, "guid"), zfsGet(t, from, "guid"); got != want {
+			t.Fatalf("%s@%s has guid %s, %s has %s", restored, s, got, from, want)
+		}
+	}
+}
+
+// objectBytes returns the object at key in bucket.
+func objectBytes(t *testing.T, client *s3.S3, bucket, key string) []byte {
+	t.Helper()
+	out, err := client.GetObject(&s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+	if err != nil {
+		t.Fatalf("could not get s3://%s/%s: %v", bucket, key, err)
+	}
+	defer out.Body.Close()
+	data, err := io.ReadAll(out.Body)
+	if err != nil {
+		t.Fatalf("could not read s3://%s/%s: %v", bucket, key, err)
+	}
+	return data
+}
+
+// wantPGPVolume fails unless data starts with a public-key encrypted session
+// key: the first packet openpgp.Encrypt writes. A signed-only object starts
+// with a one-pass signature instead.
+func wantPGPVolume(t *testing.T, name string, data []byte) {
+	t.Helper()
+	p, err := packet.NewReader(bytes.NewReader(data)).Next()
+	if err != nil {
+		t.Fatalf("%s: no OpenPGP packet: %v", name, err)
+	}
+	if _, ok := p.(*packet.EncryptedKey); !ok {
+		t.Fatalf("%s starts with a %T, want a *packet.EncryptedKey", name, p)
+	}
+}
+
 // wantSnapshots fails unless dataset has these snapshots, oldest first, and no others.
 func wantSnapshots(t *testing.T, dataset string, want ...string) {
 	t.Helper()
@@ -388,15 +469,13 @@ func cloneOf(t *testing.T, pool, src, snap, name string) string {
 	return "/" + clone
 }
 
-// manifestFor returns the backup of src@snap at target, as the smart options
-// read it with work as the working directory. It fails the test if there is none.
-func manifestFor(t *testing.T, work, src, target, snap string) *files.JobInfo {
+// manifestFor returns the backup of src@snap at target, as list reads it with
+// work as the working directory. extra goes to list: the rings of an encrypted
+// backup, a --manifestPrefix. It fails the test if there is none.
+func manifestFor(t *testing.T, work, src, target, snap string, extra ...string) *files.JobInfo {
 	t.Helper()
-	old := config.WorkingDir
-	config.WorkingDir = work
-	defer func() { config.WorkingDir = old }()
 	var names []string
-	for _, b := range backupsAt(t, src, target) {
+	for _, b := range itList(t, work, append(slices.Clone(extra), target)...)[src] {
 		if b.BaseSnapshot.Name == snap {
 			return b
 		}

@@ -20,7 +20,8 @@ import (
 // call goes to the real zfs. The real zfs send gets SIGPIPE when head exits:
 // the intended death. The stall lets the volumes cut before it finish their
 // uploads: a failed stream cancels the uploads still in flight, and a send
-// that dies within milliseconds leaves nothing to resume.
+// that dies within milliseconds leaves nothing to resume. The stall is a timing
+// guess: a stalled VM fails the "same volumes" check; rerun before you debug.
 func flakyZFS(t *testing.T, cutBytes int64, stall int) (path string, arm func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -96,24 +97,17 @@ func TestIntegrationS3Resume(t *testing.T) {
 	if err == nil || !strings.Contains(logs, "flaky zfs") {
 		t.Fatalf("send through the flaky zfs: got %v, want its failure in the log:\n%s", err, logs)
 	}
-	var partial []string
 	for _, m := range (&e2eEnv{work: work}).cachedManifests(t) {
-		if m.BaseSnapshot.Name != snap {
-			continue
-		}
 		for _, v := range m.Volumes {
-			if v.ZFSStreamBytes < 1<<20-50<<10 {
+			if m.BaseSnapshot.Name == snap && v.ZFSStreamBytes < 1<<20-50<<10 {
 				t.Errorf("cached manifest lists %s with only %d stream bytes: the truncated tail", v.ObjectName, v.ZFSStreamBytes)
 			}
-			partial = append(partial, v.ObjectName)
 		}
 	}
+	partial := cutPartial(t, work, snap, before, objectNames(t, client, bucket, prefix), logs)
 	afterKill := objectNames(t, client, bucket, prefix)
-	added := slices.DeleteFunc(slices.Clone(afterKill), func(n string) bool { return slices.Contains(before, n) })
-	sort.Strings(partial)
-	if len(partial) != 2 || strings.Join(added, " ") != strings.Join(partial, " ") {
-		t.Fatalf("after the kill the cached partial manifest lists %v and the destination got %v; want the same 2 volumes:\n%s",
-			partial, added, logs)
+	if len(partial) != 2 {
+		t.Fatalf("after the kill the cached partial manifest lists %v, want 2 volumes:\n%s", partial, logs)
 	}
 
 	// The cache protects the partial's volumes; without it they are orphans.
@@ -147,10 +141,11 @@ func TestIntegrationS3Resume(t *testing.T) {
 		}
 		return logs
 	}
-	restore := func(dataset string) {
+	restore := func(work, dataset string) {
 		t.Helper()
 		itReceive(t, work, "-F", src+"@"+snap, target, dataset)
 		wantSnapshots(t, dataset, snap)
+		wantGUIDs(t, src, dataset, snap)
 		compareDirs(t, "/"+src, "/"+dataset)
 	}
 
@@ -158,7 +153,7 @@ func TestIntegrationS3Resume(t *testing.T) {
 	if got := manifests(objectNames(t, client, bucket, prefix)); len(got) != 2 {
 		t.Fatalf("after the resume the destination holds manifests %v, want 2", got)
 	}
-	restore(restoredRes)
+	restore(work, restoredRes)
 
 	// The destination lost volume 1 and the manifest: all is sent again.
 	m := manifestFor(t, work, src, target, snap)
@@ -179,7 +174,8 @@ func TestIntegrationS3Resume(t *testing.T) {
 	if got := objectNames(t, client, bucket, prefix); strings.Join(got, " ") != strings.Join(complete, " ") {
 		t.Fatalf("after the resume the destination holds %v, want %v", got, complete)
 	}
-	restore(restoredRes2)
+	// From an empty cache: the restore reads the re-sent manifest at the destination.
+	restore(t.TempDir(), restoredRes2)
 
 	// The destination lost only the manifest: the volumes stay, the manifest comes back.
 	deleteObject(t, client, bucket, prefix+manifest)
@@ -189,4 +185,64 @@ func TestIntegrationS3Resume(t *testing.T) {
 	if got := objectNames(t, client, bucket, prefix); strings.Join(got, " ") != strings.Join(complete, " ") {
 		t.Fatalf("after the resume the destination holds %v, want %v", got, complete)
 	}
+	// The default compressor: pgzip holds several MiB in its blocks, so the cut
+	// leaves some number of complete volumes, not a known one.
+	t.Run("Gzip", func(t *testing.T) {
+		client, bucket, prefix := itBucket(t, "zfsbackup-it-resgz")
+		target := "s3://" + bucket + "/" + prefix
+		src := pool + "/srcresgz"
+		restored := pool + "/restoredResGz"
+		destroyAfter(t, src, restored)
+		work := t.TempDir()
+		flaky, arm := flakyZFS(t, 12<<20, 5)
+		zfsRun(t, "create", "-o", "mountpoint=/"+src, src)
+		writeFile(t, "/"+src, "a.bin", 16<<20)
+		snap := snapshot(t, src, "daily")
+		args := []string{"--volsize", "1", src + "@" + snap, target}
+
+		arm()
+		_, logs, err := itRunOut(cmd.ResetSendJobInfo, "send", work, flaky, args...)
+		if err == nil || !strings.Contains(logs, "flaky zfs") {
+			t.Fatalf("send through the flaky zfs: got %v, want its failure in the log:\n%s", err, logs)
+		}
+		partial := cutPartial(t, work, snap, nil, objectNames(t, client, bucket, prefix), logs)
+		if len(partial) == 0 {
+			t.Fatalf("after the kill the cached partial manifest lists no volume:\n%s", logs)
+		}
+
+		_, logs, err = itRunOut(cmd.ResetSendJobInfo, "send", work, "zfs", append([]string{"--resume"}, args...)...)
+		if err != nil {
+			t.Fatalf("send --resume: %v\n%s", err, logs)
+		}
+		if want := fmt.Sprintf("Resuming from volume %d: %d of", len(partial)+1, len(partial)); !strings.Contains(logs, want) {
+			t.Errorf("want %q in the log:\n%s", want, logs)
+		}
+		itReceive(t, t.TempDir(), "-F", src+"@"+snap, target, restored)
+		wantSnapshots(t, restored, snap)
+		wantGUIDs(t, src, restored, snap)
+		compareDirs(t, "/"+src, "/"+restored)
+	})
+}
+
+// cutPartial returns the volumes the cached partial manifest of snap in work
+// lists, sorted, and fails unless they are exactly the names in after that are
+// not in before: what the destination got from the cut send.
+func cutPartial(t *testing.T, work, snap string, before, after []string, logs string) []string {
+	t.Helper()
+	var partial []string
+	for _, m := range (&e2eEnv{work: work}).cachedManifests(t) {
+		if m.BaseSnapshot.Name != snap {
+			continue
+		}
+		for _, v := range m.Volumes {
+			partial = append(partial, v.ObjectName)
+		}
+	}
+	added := slices.DeleteFunc(slices.Clone(after), func(n string) bool { return slices.Contains(before, n) })
+	sort.Strings(partial)
+	if strings.Join(added, " ") != strings.Join(partial, " ") {
+		t.Fatalf("after the kill the cached partial manifest lists %v and the destination got %v; want the same volumes:\n%s",
+			partial, added, logs)
+	}
+	return partial
 }

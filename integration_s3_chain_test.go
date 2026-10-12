@@ -99,16 +99,20 @@ func TestIntegrationS3Chain(t *testing.T) {
 	// --auto walks back to the full and stops at the snapshot asked for.
 	itReceive(t, work, "--auto", "-F", c.src+"@"+c.daily2, target, restoredMid)
 	wantSnapshots(t, restoredMid, c.monthly, c.daily2)
+	wantGUIDs(t, c.src, restoredMid, c.monthly, c.daily2)
 	compareDirs(t, c.daily2Clone, "/"+restoredMid)
 
 	// On to the newest: one more step.
 	itReceive(t, work, "--auto", "-F", c.src, target, restoredMid)
 	wantSnapshots(t, restoredMid, c.monthly, c.daily2, c.daily3)
+	wantGUIDs(t, c.src, restoredMid, c.monthly, c.daily2, c.daily3)
 	compareDirs(t, "/"+c.src, "/"+restoredMid)
 
-	// The whole chain into an empty dataset.
-	itReceive(t, work, "--auto", "-F", c.src, target, restoredAll)
+	// The whole chain into an empty dataset, on a host with an empty cache:
+	// the manifests come from the destination, not from the sender's cache.
+	itReceive(t, t.TempDir(), "--auto", "-F", c.src, target, restoredAll)
 	wantSnapshots(t, restoredAll, c.monthly, c.daily2, c.daily3)
+	wantGUIDs(t, c.src, restoredAll, c.monthly, c.daily2, c.daily3)
 	compareDirs(t, "/"+c.src, "/"+restoredAll)
 
 	if logs, err := itSend(t, work, append(c.smart, c.src, target)...); !errors.Is(err, backup.ErrNoOp) {
@@ -140,6 +144,19 @@ func TestIntegrationS3EncryptedChain(t *testing.T) {
 			t.Errorf("object %s is not encrypted; all objects: %v", n, names)
 		}
 	}
+	// The bytes too: a volume and a manifest start with an encrypted session key.
+	vol1 := manifestFor(t, work, c.src, target, c.daily3, rings...).Volumes[0].ObjectName
+	wantPGPVolume(t, vol1, objectBytes(t, client, bucket, prefix+vol1))
+	var manifest string
+	for _, n := range names {
+		if strings.Contains(n, ".manifest") && strings.Contains(n, c.daily3) {
+			manifest = n
+		}
+	}
+	if manifest == "" {
+		t.Fatalf("no manifest of %s in %v", c.daily3, names)
+	}
+	wantPGPVolume(t, manifest, objectBytes(t, client, bucket, prefix+manifest))
 
 	got := chainNames(itList(t, work, append(rings, target)...)[c.src])
 	if want := []string{c.monthly + "<-", c.daily2 + "<-" + c.monthly, c.daily3 + "<-" + c.daily2}; strings.Join(got, " ") != strings.Join(want, " ") {
@@ -162,11 +179,14 @@ func TestIntegrationS3EncryptedChain(t *testing.T) {
 	}
 	wantNoDataset(t, restoredEnc)
 
-	itReceive(t, work, append(rings, "--auto", "-F", c.src, target, restoredEnc)...)
+	// From an empty cache: the encrypted manifests come from the destination.
+	itReceive(t, t.TempDir(), append(rings, "--auto", "-F", c.src, target, restoredEnc)...)
 	wantSnapshots(t, restoredEnc, c.monthly, c.daily2, c.daily3)
+	wantGUIDs(t, c.src, restoredEnc, c.monthly, c.daily2, c.daily3)
 	compareDirs(t, "/"+c.src, "/"+restoredEnc)
 
 	itReceive(t, work, append(rings, "--auto", "-F", c.src+"@"+c.daily2, target, restoredEncMid)...)
 	wantSnapshots(t, restoredEncMid, c.monthly, c.daily2)
+	wantGUIDs(t, c.src, restoredEncMid, c.monthly, c.daily2)
 	compareDirs(t, c.daily2Clone, "/"+restoredEncMid)
 }

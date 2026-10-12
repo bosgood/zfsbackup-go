@@ -81,8 +81,11 @@ func TestIntegrationS3Bookmark(t *testing.T) {
 		t.Fatalf("noop: got %v, want %v\n%s", err, backup.ErrNoOp, logs)
 	}
 
-	itReceive(t, work, "--auto", "-F", src, target, restoredBm)
+	// From an empty cache: the manifests come from the destination.
+	itReceive(t, t.TempDir(), "--auto", "-F", src, target, restoredBm)
 	wantSnapshots(t, restoredBm, monthly, daily2, daily3, daily4)
+	// daily2 and daily3 are bookmarks on src now: wantGUIDs compares those.
+	wantGUIDs(t, src, restoredBm, monthly, daily2, daily3, daily4)
 	compareDirs(t, "/"+src, "/"+restoredBm)
 
 	got := chainNames(itList(t, work, target)[src])

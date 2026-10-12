@@ -774,3 +774,27 @@ the compile check between VM runs.
 
 (Fill in as you go: the outcome of A1 to A5 with zfs output, where the code
 differs from the plan, and the break-proof results.)
+
+### Task 1 (2026-10-11)
+
+All six pass in the VM (zfs 2.4.4, MinIO); the Gzip resume cut left 3 volumes.
+
+- `manifestFor` reads through `itList` now and takes `extra ...string` (rings,
+  `--manifestPrefix`): `backupsAt` has no keys and opens no encrypted manifest.
+- `wantGUIDs` compares the bookmark `src#name` when `src@name` is gone
+  (`TestIntegrationS3Bookmark`: daily2 and daily3 are bookmarks on src).
+- `wantPGPVolume` takes the object name too, for the message.
+- `cutPartial` (resume file) holds the cached-partial vs. bucket comparison;
+  the plain test keeps its stream-bytes check and `len == 2`.
+- **Fact 1 is half right.** With the daily3 manifest DELETED at S3, the
+  shared-`work` restore fails too (`could not find snapshot provided`):
+  receive takes manifest NAMES from the destination listing. Only the CONTENT
+  of a name already cached comes from the cache. Proof used instead: the
+  daily3 manifest OVERWRITTEN with garbage at S3. Fresh work → `could not read
+  the manifest ... unexpected EOF`; shared work → success.
+
+Break proofs (scratch copy, all failed as planned): garbage manifest (above);
+signed-only volumes → `starts with a *packet.OnePassSignature`; a new
+`restoredAll@daily3` → guid mismatch; Gzip without `--resume` → no `Resuming
+from volume 4: 3 of`; no `srcops2` send → the `nil`, `s*` and `--before`
+rows fail.

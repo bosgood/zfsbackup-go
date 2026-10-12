@@ -3,8 +3,10 @@
 package main
 
 import (
+	"maps"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -26,24 +28,44 @@ func TestIntegrationS3ListClean(t *testing.T) {
 	c := buildChain(t, pool, work, target, "ops")
 	chain := strings.Join([]string{c.monthly + "<-", c.daily2 + "<-" + c.monthly, c.daily3 + "<-" + c.daily2}, " ")
 
+	// A second dataset with one full, so the filters have something to drop.
+	src2 := pool + "/srcops2"
+	destroyAfter(t, src2)
+	zfsRun(t, "create", "-o", "mountpoint=/"+src2, src2)
+	writeFile(t, "/"+src2, "a.bin", 64<<10)
+	monthly2 := snapshot(t, src2, "monthly")
+	if logs, err := itSend(t, work, append(c.smart, src2, target)...); err != nil {
+		t.Fatalf("send %s: %v\n%s", src2, err, logs)
+	}
+	full2 := monthly2 + "<-"
+
+	// --before is strict and reads the base snapshot's creation time, in the
+	// local zone (UTC in the container).
+	created, err := strconv.ParseInt(zfsGet(t, c.src+"@"+c.daily3, "creation"), 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeDaily3 := time.Unix(created, 0).UTC().Format("2006-01-02T15:04:05")
 	hourLater := time.Now().Add(time.Hour).Format("2006-01-02T15:04:05")
 	for _, tc := range []struct {
 		args []string
-		want string // the chain of c.src, "" = no datasets at all
+		want map[string]string // dataset -> its chain
 	}{
-		{nil, chain},
-		{[]string{"--volumeName", c.src}, chain},
-		{[]string{"--volumeName", pool + "/s*"}, chain},
-		{[]string{"--volumeName", pool + "/nothing"}, ""},
-		{[]string{"--after", hourLater}, ""},
-		{[]string{"--before", hourLater}, chain},
+		{nil, map[string]string{c.src: chain, src2: full2}},
+		{[]string{"--volumeName", c.src}, map[string]string{c.src: chain}},
+		{[]string{"--volumeName", pool + "/s*"}, map[string]string{c.src: chain, src2: full2}},
+		{[]string{"--volumeName", pool + "/nothing"}, nil},
+		{[]string{"--after", hourLater}, nil},
+		{[]string{"--before", hourLater}, map[string]string{c.src: chain, src2: full2}},
+		{[]string{"--before", beforeDaily3}, map[string]string{c.src: c.monthly + "<- " + c.daily2 + "<-" + c.monthly}},
 	} {
 		got := itList(t, work, append(tc.args, target)...)
-		switch {
-		case tc.want == "" && len(got) != 0:
-			t.Errorf("list %v: got %d datasets, want none", tc.args, len(got))
-		case tc.want != "" && (len(got) != 1 || strings.Join(chainNames(got[c.src]), " ") != tc.want):
-			t.Errorf("list %v: got %d datasets, %s holds %v; want 1, %s", tc.args, len(got), c.src, chainNames(got[c.src]), tc.want)
+		gotChains := map[string]string{}
+		for ds, backups := range got {
+			gotChains[ds] = strings.Join(chainNames(backups), " ")
+		}
+		if !maps.Equal(gotChains, tc.want) {
+			t.Errorf("list %v: got %v, want %v", tc.args, gotChains, tc.want)
 		}
 	}
 
@@ -97,6 +119,7 @@ func TestIntegrationS3ListClean(t *testing.T) {
 	}
 	itReceive(t, work, "--auto", "-F", c.src, target, restoredOps)
 	wantSnapshots(t, restoredOps, c.monthly, c.daily2, c.daily3)
+	wantGUIDs(t, c.src, restoredOps, c.monthly, c.daily2, c.daily3)
 	compareDirs(t, "/"+c.src, "/"+restoredOps)
 
 	// A broken set: clean keeps it unless --force.
@@ -125,6 +148,7 @@ func TestIntegrationS3ListClean(t *testing.T) {
 	}
 	itReceive(t, work, "--auto", "-F", c.src, target, restoredOps2)
 	wantSnapshots(t, restoredOps2, c.monthly, c.daily2)
+	wantGUIDs(t, c.src, restoredOps2, c.monthly, c.daily2)
 	compareDirs(t, c.daily2Clone, "/"+restoredOps2)
 }
 
