@@ -2,6 +2,7 @@ package backends
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
@@ -13,7 +14,6 @@ import (
 	"testing"
 
 	"github.com/pkg/sftp"
-	"golang.org/x/crypto/ed25519"
 	"golang.org/x/crypto/ssh"
 )
 
