@@ -22,6 +22,10 @@ Read this before you run anything. All repeatable work goes through the Makefile
 | `make integration-vm` | the same in a NixOS Lima VM: the way on a Mac. `integration-vm-up`, `-shell`, `-down`, `-delete`. See `integration/README.md` |
 | `make integration-image` | only build the `integration` image (compiles and vets the tagged test) |
 | `make plan ARGS="..."` | run `plan` with the working tree |
+| `make mod-update` | upgrade every module in the pinned image (the host cannot reach `proxy.golang.org`), keep the `go` line two-part. Then `make mod-vendor` |
+| `make mod-get MOD=path@version` | one module at one version, in the pinned image |
+| `make mod-vendor` | `go mod tidy`, `go mod vendor`, `go mod verify` in the pinned image |
+| `make vulncheck` | `govulncheck@latest ./...` in the pinned image |
 
 Deps are vendored. Go version comes from `go.mod` and must match the Dockerfile default. Nix is not on this host.
 

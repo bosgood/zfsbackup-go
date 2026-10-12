@@ -17,9 +17,6 @@ GOLANGCI_LINT_IMAGE=golangci/golangci-lint:v2.12.2
 lint:
 	docker run --rm -v "$(CURDIR)":/src -w /src $(GOLANGCI_LINT_IMAGE) golangci-lint run $(LINT_ARGS)
 
-get:
-	go get -v -d -t ./...
-
 test:
 	go test ./...
 
@@ -121,6 +118,35 @@ GOCACHE_DIR?=/tmp/zfsb-gocache
 test-one:
 	mkdir -p "$(GOCACHE_DIR)"
 	docker run --rm -v "$(CURDIR)":/src -v "$(GOCACHE_DIR)":/root/.cache/go-build -w /src $(GO_IMAGE) go test $(TESTFLAGS) -run '$(RUN)' -v $(PKG)
+
+# Module maintenance in the pinned image (the host cannot reach proxy.golang.org).
+# MODCACHE_DIR holds the module cache between runs.
+MODCACHE_DIR?=/tmp/zfsb-modcache
+GO_MOD_RUN = docker run --rm -v "$(CURDIR)":/src -w /src -v "$(GOCACHE_DIR)":/root/.cache/go-build \
+	-v "$(MODCACHE_DIR)":/go/pkg/mod -e GOTOOLCHAIN=local -e GOFLAGS=-mod=mod $(GO_IMAGE)
+
+# Upgrade every module, then keep the go line two-part so GO_IMAGE stays golang:X.Y-bookworm.
+# The first `go get` avoids "ambiguous import cloud.google.com/go/compute/metadata".
+mod-update:
+	mkdir -p "$(GOCACHE_DIR)" "$(MODCACHE_DIR)"
+	$(GO_MOD_RUN) sh -c 'go get cloud.google.com/go/storage@latest google.golang.org/api@latest cloud.google.com/go/compute@latest \
+		&& go get -u -t ./... && go mod tidy && go mod edit -go=$(GO_VERSION)'
+
+# One module at a specific version, e.g. make mod-get MOD=github.com/klauspost/pgzip@e1b5b318410c
+mod-get:
+	@[ -n "$(MOD)" ] || { echo "mod-get: set MOD=path@version"; exit 1; }
+	mkdir -p "$(GOCACHE_DIR)" "$(MODCACHE_DIR)"
+	$(GO_MOD_RUN) sh -c 'go get $(MOD) && go mod tidy && go mod edit -go=$(GO_VERSION)'
+
+# Rebuild vendor/ from go.mod and check the sums.
+mod-vendor:
+	mkdir -p "$(GOCACHE_DIR)" "$(MODCACHE_DIR)"
+	$(GO_MOD_RUN) sh -c 'go mod tidy && go mod vendor && go mod verify'
+
+# Known vulnerabilities reached by our code (govulncheck@latest needs Go 1.26).
+vulncheck:
+	mkdir -p "$(GOCACHE_DIR)" "$(MODCACHE_DIR)"
+	$(GO_MOD_RUN) go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 # Report files that `gofmt -s` would rewrite, using the pinned toolchain.
 # Checks every tracked .go file outside vendor/ (so not the tmp/ scratch clones) with the pinned toolchain.
