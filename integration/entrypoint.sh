@@ -32,7 +32,7 @@ fi
 # path on both sides; a path only the container has fails with "cannot
 # create 'zbtest': no such pool or dataset".
 IMG=/var/tmp/zfsbackup-it/$POOL.img
-truncate -s 2G "$IMG"
+truncate -s 8G "$IMG"
 zpool create -f -O mountpoint="/$POOL" -O compression=off "$POOL" "$IMG"
 # Without this the pool stays imported in the host kernel after the container
 # exits, and the next run stops at the check above.

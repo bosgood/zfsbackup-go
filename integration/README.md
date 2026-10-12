@@ -30,6 +30,7 @@ The other `TestIntegrationS3*` tests run in the same environment:
 | `TestIntegrationS3TwoDestinations` | one send to two S3 prefixes; `complete-partial` without re-upload; out-of-sync destinations refused; each restores alone |
 | `TestIntegrationS3ManifestPrefix` | two `--manifestPrefix` jobs in one bucket: `list` and `clean` keep to their prefix |
 | `TestIntegrationS3NativeEncryption` | ZFS native encryption: a `--raw` chain with the key unloaded, a raw restore that opens only with the sender's key, a raw incremental from a bookmark, a forgotten `--raw` refused, a plaintext send, raw + GPG |
+| `TestIntegrationS3Large` | 1 GiB with the default flags (`--volsize 200`, `--maxFileBuffer 5`, `--maxParallelUploads 4`, gzip): six volumes, each a multipart upload of 10 MiB parts (checked by ETag), file-buffered and in pipe mode; restores of each; subtest `Replication`: `send -R` of a parent with two children, received as a tree |
 
 Every restore of a whole chain runs with an empty working directory, so the
 manifests come from S3, and every restored snapshot must keep the sender's
@@ -49,7 +50,7 @@ What the VM showed (zfs 2.4.4), as assumed by
 - zfs takes one snapshot of a dataset per `zfs snapshot` call (and per channel program): a tie takes separate calls in one second (`snapshotTie`).
 
 The S3 server is MinIO in a second container. Each test makes its own bucket
-and deletes it. All tests together take about a minute; the test binary runs
+and deletes it. All tests together take a few minutes (`TestIntegrationS3Large` moves gigabytes); the test binary runs
 with `-test.timeout 45m`.
 
 ## The host needs the zfs kernel module

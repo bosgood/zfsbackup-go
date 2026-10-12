@@ -271,7 +271,8 @@ var lastSnapshot time.Time
 // snapshot takes a sanoid-style snapshot of kind (monthly, daily, hourly) and
 // returns its name. It first waits for a new second: two snapshots in one
 // second tie on creation time, and selection must not depend on tie order.
-func snapshot(t *testing.T, dataset, kind string) string {
+// flags go to zfs snapshot ("-r" for a snapshot of every descendant too).
+func snapshot(t *testing.T, dataset, kind string, flags ...string) string {
 	t.Helper()
 	now := time.Now().UTC()
 	for now.Unix() == lastSnapshot.Unix() {
@@ -280,7 +281,7 @@ func snapshot(t *testing.T, dataset, kind string) string {
 	}
 	lastSnapshot = now
 	name := "autosnap_" + now.Format("2006-01-02_15:04:05") + "_" + kind
-	zfsRun(t, "snapshot", dataset+"@"+name)
+	zfsRun(t, append(append([]string{"snapshot"}, flags...), dataset+"@"+name)...)
 	return name
 }
 

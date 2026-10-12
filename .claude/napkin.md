@@ -46,6 +46,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - After a flag help change, check with `make help CMD=<cmd>`.
 
 ## Writing tests
+- Only `TestIntegrationS3Large` sends objects over s3manager's 5 MiB multipart threshold (every other test: `--volsize 1`, 3 MiB). It proves multipart by the ETag `<md5>-<parts>`; 1 GiB takes 15 s on the VM. The pool file is 8 GiB (`integration/entrypoint.sh`).
 - A test that passes the first time proves nothing. Break the code in a scratch copy (`git archive HEAD | tar -x -C /tmp/x`) and see it fail. Bitten 4 times (lock pid, cached-manifest protection, `filepath.Base` name, dry-run globals).
 - In-process cobra runs leak: flag values are package globals (`cleanDryRun`, `cleanLocal`, `workingDirectory`, `zfs.ZFSPath`, `jobInfo`) and `RootCmd.SetArgs` persists. Pass bool flags explicitly (`--dry-run=false`); after each run `RootCmd.SetArgs(nil); cmd.ResetSendJobInfo()`. Run the whole package (`PKG=.`) before you trust green: a leak can `os.Exit(255)` the binary silently.
 - Helpers that create volumes outside a cobra run set `config.BackupTempdir = t.TempDir()` and restore it.
