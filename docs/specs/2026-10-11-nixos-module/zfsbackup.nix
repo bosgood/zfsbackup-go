@@ -26,7 +26,11 @@ let
   # Build zfsbackup-go from our fork. The source is pinned by `source.rev`
   # alone: builtins.fetchGit derives the content hash from the commit, so no
   # separate source hash is needed. To update, just bump `mine.zfsbackup.source.rev`.
-  zfsbackup = pkgs.buildGoModule {
+  # go.mod requires go >= 1.26 and the build sandbox has no network, so
+  # GOTOOLCHAIN cannot fetch one: the toolchain must come from nixpkgs. Falls
+  # back to the default `go` on a channel whose buildGoModule is new enough.
+  # Mirrors dev.nix in the fork.
+  zfsbackup = (pkgs.buildGoModule.override { go = pkgs.go_1_26 or pkgs.go; }) {
     pname = "zfsbackup-go";
     version = "unstable-${cfg.source.rev}";
 
@@ -244,13 +248,19 @@ in
 
           secretKeyFile = mkOption {
             description = ''
-              ASCII-armored GPG secret keyring used for signing, passed to
-              zfsbackup-go as --secretKeyRingPath. Accepts either form: a path
-              literal, which Nix copies into the store; or an absolute string
-              path, which is used verbatim. WARNING: the Nix store is
-              world-readable, so a private key should be referenced as an
-              out-of-band string path (e.g. "/usr/keys/zfs/backups.sec.asc"),
-              not a path literal.
+              ASCII-armored GPG secret keyring, passed to zfsbackup-go as
+              --secretKeyRingPath. Needed for signing (signFrom) and also
+              whenever encryptTo is set: every run here is a smart send
+              (--fullIfOlderThan), and a smart send reads the encrypted
+              manifests at the destination to pick its incremental base.
+              Accepts either form: a path literal, which Nix copies into the
+              store; or an absolute string path, which is used verbatim.
+              WARNING: the Nix store is world-readable, so a private key should
+              be referenced as an out-of-band string path (e.g.
+              "/usr/keys/zfs/backups.sec.asc"), not a path literal. The key
+              must have no passphrase, or PGP_PASSPHRASE must be in the unit's
+              environment: without it zfsbackup-go prompts on a terminal and
+              fails under systemd.
             '';
             type = lib.types.nullOr lib.types.path;
             example = "/usr/keys/zfs/backups.sec.asc";
@@ -272,7 +282,20 @@ in
           };
 
           raw = mkOption {
-            description = "Use zfs-send --raw option. This allows sending of encrypted datasets in their cyphertext form, preserving the encryption";
+            description = ''
+              Use zfs-send --raw option. This allows sending of encrypted
+              datasets in their cyphertext form, preserving the encryption.
+
+              A backup chain keeps one stream kind: zfsbackup-go refuses an
+              incremental whose --raw differs from the backup it continues, and
+              only a full starts a new chain. Flipping this on a dataset that
+              already has backups therefore makes every scheduled run fail
+              (exit 255) until the fullIfOlderThan window elapses and a full is
+              sent. To switch at once, run one manual full with the new setting
+              and the same key flags:
+
+                zfsbackup-go send --full [--raw] ... <dataset> <s3Destination>
+            '';
             type = types.bool;
             default = false;
           };
@@ -464,11 +487,17 @@ in
 
     # zfsbackup-go's --encryptTo needs a public keyring containing the
     # recipient, and --signFrom needs a secret keyring containing the signer.
-    # Fail the build early rather than at timer-fire time if either is missing.
+    # A smart send (every run here passes --fullIfOlderThan) with --encryptTo
+    # also needs the secret keyring, to read the encrypted manifests at the
+    # destination. Fail the build early rather than at timer-fire time.
     assertions = lib.flatten (map (d: [
       {
         assertion = d.encryptTo == null || d.publicKeyFile != null;
         message = "mine.zfsbackup: dataset ${d.dataset} sets encryptTo but no publicKeyFile; --encryptTo requires a public keyring.";
+      }
+      {
+        assertion = d.encryptTo == null || d.secretKeyFile != null;
+        message = "mine.zfsbackup: dataset ${d.dataset} sets encryptTo but no secretKeyFile; a smart send with --encryptTo requires a secret keyring to read the encrypted manifests at the destination.";
       }
       {
         assertion = d.signFrom == null || d.secretKeyFile != null;
@@ -535,9 +564,10 @@ in
             # send (and pruned before the next run) is covered too.
             bookmark_all
           ''}
-          # zfsbackup-go's smart (incremental) send exits non-zero with
-          # "nothing new to sync" when there are no new snapshots to upload.
-          # That is a normal no-op, not a failure, so map it to success.
+          # The output is captured for the byte count below. Exit codes: a smart
+          # send with nothing new to upload prints "Nothing new to back up." and
+          # exits 0; the last backup newer than the pool exits 2; a mixed
+          # raw/plaintext chain exits 255; SIGTERM (systemctl stop) exits 143.
           out="$(${pkgs.coreutils}/bin/mktemp)"
           trap '${pkgs.coreutils}/bin/rm -f "$out"' EXIT
           set +e
@@ -566,18 +596,14 @@ in
           ''}
           ${lib.optionalString d.metrics.enable ''
             # Record bytes uploaded for statusScript. zfsbackup-go prints e.g.
-            # "Total Bytes Written: 763 (763 B)"; absent (e.g. nothing new to
-            # sync) means 0 bytes uploaded.
+            # "Total Bytes Written: 763 (763 B)"; absent (nothing new to back
+            # up, or a failed run) means 0 bytes uploaded.
             bytes="$(${pkgs.gnugrep}/bin/grep "Total Bytes Written:" "$out" \
               | ${pkgs.coreutils}/bin/tail -n1 \
               | ${pkgs.gnused}/bin/sed -E 's/.*Total Bytes Written:[[:space:]]*([0-9]+).*/\1/' || true)"
             case "$bytes" in ""|*[!0-9]*) bytes=0 ;; esac
             printf '%s' "$bytes" > "${bytesFileOf d}"
           ''}
-          if [ "$rc" -ne 0 ] && ${pkgs.gnugrep}/bin/grep -q "nothing new to sync" "$out"; then
-            echo "zfsbackup: nothing new to sync for ${d.dataset}; treating as success"
-            exit 0
-          fi
           exit "$rc"
         '';
       };
