@@ -2,7 +2,8 @@ TARGETS="freebsd/amd64 linux/amd64"
 COMMIT_HASH=`git rev-parse --short HEAD 2>/dev/null`
 # Go toolchain for the Docker images, taken from go.mod's `go` directive so the
 # images cannot drift from the module (see the GO_VERSION note in Dockerfile).
-GO_VERSION := $(shell sed -nE 's/^go ([0-9]+(\.[0-9]+)*).*/\1/p' go.mod)
+# Only X.Y: `go mod tidy` writes `go 1.26.0`, and golang:1.26.0-bookworm would pin the first patch release.
+GO_VERSION := $(shell sed -nE 's/^go ([0-9]+\.[0-9]+).*/\1/p' go.mod)
 DOCKER_BUILD = docker build --build-arg GO_VERSION=$(GO_VERSION)
 
 check: lint test test-race e2e
@@ -125,18 +126,18 @@ MODCACHE_DIR?=/tmp/zfsb-modcache
 GO_MOD_RUN = docker run --rm -v "$(CURDIR)":/src -w /src -v "$(GOCACHE_DIR)":/root/.cache/go-build \
 	-v "$(MODCACHE_DIR)":/go/pkg/mod -e GOTOOLCHAIN=local -e GOFLAGS=-mod=mod $(GO_IMAGE)
 
-# Upgrade every module, then keep the go line two-part so GO_IMAGE stays golang:X.Y-bookworm.
+# Upgrade every module.
 # The first `go get` avoids "ambiguous import cloud.google.com/go/compute/metadata".
 mod-update:
 	mkdir -p "$(GOCACHE_DIR)" "$(MODCACHE_DIR)"
 	$(GO_MOD_RUN) sh -c 'go get cloud.google.com/go/storage@latest google.golang.org/api@latest cloud.google.com/go/compute@latest \
-		&& go get -u -t ./... && go mod tidy && go mod edit -go=$(GO_VERSION)'
+		&& go get -u -t ./... && go mod tidy'
 
 # One module at a specific version, e.g. make mod-get MOD=github.com/klauspost/pgzip@e1b5b318410c
 mod-get:
 	@[ -n "$(MOD)" ] || { echo "mod-get: set MOD=path@version"; exit 1; }
 	mkdir -p "$(GOCACHE_DIR)" "$(MODCACHE_DIR)"
-	$(GO_MOD_RUN) sh -c 'go get $(MOD) && go mod tidy && go mod edit -go=$(GO_VERSION)'
+	$(GO_MOD_RUN) sh -c 'go get $(MOD) && go mod tidy'
 
 # Rebuild vendor/ from go.mod and check the sums.
 mod-vendor:
