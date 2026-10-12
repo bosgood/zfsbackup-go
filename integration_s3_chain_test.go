@@ -1,0 +1,117 @@
+//go:build integration
+
+package main
+
+import (
+	"errors"
+	"os/exec"
+	"strings"
+	"testing"
+
+	"github.com/someone1/zfsbackup-go/backup"
+	"github.com/someone1/zfsbackup-go/cmd"
+)
+
+// chain is what buildChain made: a dataset with three backups at a target,
+// full -> incremental -> incremental.
+type chain struct {
+	src                     string   // <pool>/src<suffix>
+	monthly, daily2, daily3 string   // snapshot names, oldest first
+	daily2Clone             string   // mount path of a clone of src@daily2
+	smart                   []string // the send flags of every link, extra included
+}
+
+// buildChain makes <pool>/src<suffix> and sends three smart backups of it to
+// target: a full of monthly, daily2 from monthly, daily3 from daily2. extra
+// goes to every send and list (key flags). It clones src@daily2 before daily3
+// changes the files, and destroys the clone and src when the test ends.
+func buildChain(t *testing.T, pool, work, target, suffix string, extra ...string) chain {
+	t.Helper()
+	c := chain{src: pool + "/src" + suffix}
+	clone := c.src + "d2"
+	destroyAfter(t, clone, c.src)
+	// No compressor: the volume counter sees compressed bytes; see TestIntegrationS3.
+	c.smart = append([]string{
+		"--fullIfOlderThan", "4320h", "--fullSnapshotSuffix", "_monthly",
+		"--incrementalSnapshotSuffix", "_daily", "--volsize", "1", "--compressor", "",
+	}, extra...)
+
+	zfsRun(t, "create", "-o", "mountpoint=/"+c.src, c.src)
+	writeFile(t, "/"+c.src, "a.bin", 3<<20)
+	c.monthly = snapshot(t, c.src, "monthly")
+	snapshot(t, c.src, "daily")
+	snapshot(t, c.src, "hourly")
+	c.sendLink(t, work, target, extra, c.monthly+"<-")
+
+	writeFile(t, "/"+c.src, "b.bin", 1<<20)
+	c.daily2 = snapshot(t, c.src, "daily")
+	snapshot(t, c.src, "hourly")
+	c.sendLink(t, work, target, extra, c.monthly+"<-", c.daily2+"<-"+c.monthly)
+	c.daily2Clone = cloneOf(t, pool, c.src, c.daily2, strings.TrimPrefix(clone, pool+"/"))
+
+	writeFile(t, "/"+c.src, "c.bin", 1<<20)
+	c.daily3 = snapshot(t, c.src, "daily")
+	snapshot(t, c.src, "hourly")
+	c.sendLink(t, work, target, extra, c.monthly+"<-", c.daily2+"<-"+c.monthly, c.daily3+"<-"+c.daily2)
+	return c
+}
+
+// sendLink runs the smart send and fails unless target then lists the backups
+// of c.src as want ("base<-source", oldest first).
+func (c chain) sendLink(t *testing.T, work, target string, extra []string, want ...string) {
+	t.Helper()
+	if logs, err := itSend(t, work, append(c.smart, c.src, target)...); err != nil {
+		t.Fatalf("send: %v\n%s", err, logs)
+	}
+	got := chainNames(itList(t, work, append(extra, target)...)[c.src])
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("after the send %s holds %v, want %v", target, got, want)
+	}
+}
+
+// wantNoDataset fails if dataset exists.
+func wantNoDataset(t *testing.T, dataset string) {
+	t.Helper()
+	if exec.Command("zfs", "list", dataset).Run() == nil {
+		t.Fatalf("%s exists, want none", dataset)
+	}
+}
+
+// TestIntegrationS3Chain restores a chain of three backups: the middle link
+// into an empty dataset (only with --auto), then on to the newest, and the
+// whole chain at once.
+func TestIntegrationS3Chain(t *testing.T) {
+	pool := testPool(t)
+	_, bucket, prefix := itBucket(t, "zfsbackup-it-chain")
+	target := "s3://" + bucket + "/" + prefix
+	restoredMid := pool + "/restoredMid"
+	restoredAll := pool + "/restoredAll"
+	destroyAfter(t, restoredMid, restoredAll)
+	work := t.TempDir()
+	c := buildChain(t, pool, work, target, "")
+
+	// The middle link alone needs its source, monthly, on the receiving side.
+	if logs, err := itRun(cmd.ResetReceiveJobInfo, "receive", work, "-F", c.src+"@"+c.daily2, target, restoredMid); err == nil {
+		t.Fatalf("receive of %s into an empty dataset succeeded, want an error:\n%s", c.daily2, logs)
+	}
+	wantNoDataset(t, restoredMid)
+
+	// --auto walks back to the full and stops at the snapshot asked for.
+	itReceive(t, work, "--auto", "-F", c.src+"@"+c.daily2, target, restoredMid)
+	wantSnapshots(t, restoredMid, c.monthly, c.daily2)
+	compareDirs(t, c.daily2Clone, "/"+restoredMid)
+
+	// On to the newest: one more step.
+	itReceive(t, work, "--auto", "-F", c.src, target, restoredMid)
+	wantSnapshots(t, restoredMid, c.monthly, c.daily2, c.daily3)
+	compareDirs(t, "/"+c.src, "/"+restoredMid)
+
+	// The whole chain into an empty dataset.
+	itReceive(t, work, "--auto", "-F", c.src, target, restoredAll)
+	wantSnapshots(t, restoredAll, c.monthly, c.daily2, c.daily3)
+	compareDirs(t, "/"+c.src, "/"+restoredAll)
+
+	if logs, err := itSend(t, work, append(c.smart, c.src, target)...); !errors.Is(err, backup.ErrNoOp) {
+		t.Fatalf("noop: got %v, want %v\n%s", err, backup.ErrNoOp, logs)
+	}
+}
