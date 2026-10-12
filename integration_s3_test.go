@@ -36,6 +36,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -228,14 +229,24 @@ func countObjects(t *testing.T, client *s3.S3, bucket, prefix string) (volumes, 
 // zfsRun runs zfs and returns its stdout; it fails the test with zfs's stderr.
 func zfsRun(t *testing.T, args ...string) string {
 	t.Helper()
+	out, err := zfsTry(args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// zfsTry runs zfs and returns what it printed, or an error that holds its stderr. For
+// goroutines, which must not call t.Fatal.
+func zfsTry(args ...string) (string, error) {
 	var stderr strings.Builder
 	c := exec.Command("zfs", args...)
 	c.Stderr = &stderr
 	out, err := c.Output()
 	if err != nil {
-		t.Fatalf("zfs %s: %v: %s", strings.Join(args, " "), err, stderr.String())
+		return "", fmt.Errorf("zfs %s: %v: %s", strings.Join(args, " "), err, stderr.String())
 	}
-	return string(out)
+	return string(out), nil
 }
 
 // destroyAfter destroys the datasets that exist when the test ends.
@@ -288,9 +299,10 @@ func snapshot(t *testing.T, dataset, kind string, flags ...string) string {
 // snapshotTie takes one sanoid-style snapshot of dataset per kind, all in one
 // creation second, as sanoid's monthly, daily and hourly tie on the 1st. It
 // returns the names in the order of kinds. zfs takes one snapshot of a dataset
-// per call (and per channel program), so it takes them one by one right after
-// a second starts, and starts again if the second rolled over meanwhile (each
-// call waits for a txg sync, which on the VM can take half a second).
+// per call (and per channel program), so it runs one call per kind, all at
+// once right after a second starts: each call waits for a txg sync (half a
+// second on the VM), and calls in flight together share one. It starts again
+// if the second rolled over meanwhile.
 func snapshotTie(t *testing.T, dataset string, kinds ...string) []string {
 	t.Helper()
 	var took []time.Duration
@@ -298,12 +310,23 @@ func snapshotTie(t *testing.T, dataset string, kinds ...string) []string {
 		time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second)))
 		now := time.Now().UTC()
 		lastSnapshot = now
-		names := make([]string, 0, len(kinds))
+		names := make([]string, len(kinds))
+		errs := make([]error, len(kinds))
 		start := time.Now()
-		for _, kind := range kinds {
-			name := "autosnap_" + now.Format("2006-01-02_15:04:05") + "_" + kind
-			zfsRun(t, "snapshot", dataset+"@"+name)
-			names = append(names, name)
+		var wg sync.WaitGroup
+		for i, kind := range kinds {
+			names[i] = "autosnap_" + now.Format("2006-01-02_15:04:05") + "_" + kind
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, errs[i] = zfsTry("snapshot", dataset+"@"+names[i])
+			}()
+		}
+		wg.Wait()
+		for _, err := range errs {
+			if err != nil {
+				t.Fatal(err)
+			}
 		}
 		took = append(took, time.Since(start).Round(time.Millisecond))
 		created := zfsGet(t, dataset+"@"+names[0], "creation")
