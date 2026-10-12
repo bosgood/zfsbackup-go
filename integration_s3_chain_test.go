@@ -115,3 +115,58 @@ func TestIntegrationS3Chain(t *testing.T) {
 		t.Fatalf("noop: got %v, want %v\n%s", err, backup.ErrNoOp, logs)
 	}
 }
+
+// TestIntegrationS3EncryptedChain is TestIntegrationS3Chain with every send
+// encrypted to and signed with one key: list and receive work with that key's
+// rings, and fail with another key's or with none.
+func TestIntegrationS3EncryptedChain(t *testing.T) {
+	pool := testPool(t)
+	client, bucket, prefix := itBucket(t, "zfsbackup-it-enc")
+	target := "s3://" + bucket + "/" + prefix
+	restoredEnc := pool + "/restoredEnc"
+	restoredEncMid := pool + "/restoredEncMid"
+	destroyAfter(t, restoredEnc, restoredEncMid)
+	work := t.TempDir()
+	rings := writeRings(t, newKey(t))
+	c := buildChain(t, pool, work, target, "enc", rings...)
+
+	// Volumes are .pgp.vol<n>, manifests .manifest.gz.pgp.
+	names := objectNames(t, client, bucket, prefix)
+	if len(names) == 0 {
+		t.Fatalf("no objects at %s", target)
+	}
+	for _, n := range names {
+		if !strings.Contains(n, ".pgp") {
+			t.Errorf("object %s is not encrypted; all objects: %v", n, names)
+		}
+	}
+
+	got := chainNames(itList(t, work, append(rings, target)...)[c.src])
+	if want := []string{c.monthly + "<-", c.daily2 + "<-" + c.monthly, c.daily3 + "<-" + c.daily2}; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("list holds %v, want %v", got, want)
+	}
+
+	// Another key's rings: the manifests do not open. The advice is to pass the
+	// right ring, never to delete the manifest.
+	wrong := writeRings(t, newKey(t))
+	_, logs, err := itRunOut(cmd.ResetListJobInfo, "list", t.TempDir(), "zfs", append(append([]string{"--jsonOutput"}, wrong...), target)...)
+	if err == nil {
+		t.Fatalf("list with another key's rings succeeded, want an error:\n%s", logs)
+	}
+	if !strings.Contains(logs, "--secretKeyRingPath") || strings.Contains(logs, "delete that object") {
+		t.Errorf("list with another key's rings: want advice to pass --secretKeyRingPath and none to delete:\n%s", logs)
+	}
+
+	if logs, err := itRun(cmd.ResetReceiveJobInfo, "receive", work, "--auto", "-F", c.src, target, restoredEnc); err == nil {
+		t.Fatalf("receive without rings succeeded, want an error:\n%s", logs)
+	}
+	wantNoDataset(t, restoredEnc)
+
+	itReceive(t, work, append(rings, "--auto", "-F", c.src, target, restoredEnc)...)
+	wantSnapshots(t, restoredEnc, c.monthly, c.daily2, c.daily3)
+	compareDirs(t, "/"+c.src, "/"+restoredEnc)
+
+	itReceive(t, work, append(rings, "--auto", "-F", c.src+"@"+c.daily2, target, restoredEncMid)...)
+	wantSnapshots(t, restoredEncMid, c.monthly, c.daily2)
+	compareDirs(t, c.daily2Clone, "/"+restoredEncMid)
+}

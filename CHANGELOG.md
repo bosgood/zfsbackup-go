@@ -1,5 +1,6 @@
 # CHANGELOG
 
+* [ADD] test: TestIntegrationS3EncryptedChain: the chain encrypted and signed; list and receive with the right key, another key, no key
 * [ADD] test: TestIntegrationS3Chain: a 3-link chain on real zfs + S3; restore of the middle link (only with --auto), then of the newest, and of the whole chain
 * [CHANGE] deps: every Go module upgraded (2022 -> 2026); govulncheck goes from 26 reachable vulnerabilities to 1 (x/crypto/openpgp, replaced by the pgp-ed25519 spec); Go 1.26
 * [FIX] test: the fake sshd closes its channel after the sftp session ends (pkg/sftp >= 1.13.6 no longer returns io.EOF from Serve)
