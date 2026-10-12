@@ -1,5 +1,10 @@
 # CHANGELOG
 
+* [CHANGE] deps: every Go module upgraded (2022 -> 2026); govulncheck goes from 26 reachable vulnerabilities to 1 (x/crypto/openpgp, replaced by the pgp-ed25519 spec); Go 1.26
+* [FIX] test: the fake sshd closes its channel after the sftp session ends (pkg/sftp >= 1.13.6 no longer returns io.EOF from Serve)
+* [FIX] send: the manifest size estimate counts every time at full length; it could count a few hundred bytes low (TestManifestCostCountsHigh failed about 1 run in 11)
+* [ADD] dev: make mod-update, mod-get, mod-vendor, vulncheck run module maintenance in the pinned image; the image tag takes only X.Y of go.mod's go line; dependabot re-vendors
+
 * [FIX] receive: --maxFileBuffer 0 no longer hangs on volumes compressed with the internal compressor (the default); the download closed the decompressor while the restore still read it
 * [ADD] test: ZFS + S3 integration test in Docker (TestIntegrationS3, make integration-docker; make integration-vm boots a NixOS Lima VM with the zfs module on macOS; INTEGRATION_AWS=1 for real AWS S3); sanoid-style snapshots, full, incremental, noop, receive, receive --auto, pipe mode
 * [ADD] dev: make lint covers the integration build tag; make test-one takes TESTFLAGS (e.g. -race)
