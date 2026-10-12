@@ -1127,7 +1127,9 @@ func manifestCost(j *files.JobInfo, volumes, volumeBytes uint64) (base, perVolum
 		return 0, 0, err
 	}
 	base = uint64(len(data)) + 1 // Encode's newline
-	now := time.Now()
+	// JSON drops the trailing zeros of the nanoseconds and writes UTC as "Z": count all nine
+	// digits and an offset, or a time.Now() that ends in 0 counts low.
+	longest := time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.FixedZone("", -12*3600))
 	data, err = json.Marshal(&files.VolumeInfo{
 		ObjectName:     j.BackupVolumeObjectName(int64(volumes)),
 		VolumeNumber:   int64(volumes),
@@ -1137,8 +1139,8 @@ func manifestCost(j *files.JobInfo, volumes, volumeBytes uint64) (base, perVolum
 		Size:           volumeBytes,
 		ZFSStreamBytes: volumeBytes,
 		StreamSHA256:   strings.Repeat("f", 2*sha256.Size),
-		CreateTime:     now,
-		CloseTime:      now,
+		CreateTime:     longest,
+		CloseTime:      longest,
 	})
 	if err != nil {
 		return 0, 0, err
