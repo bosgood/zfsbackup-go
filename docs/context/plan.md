@@ -17,7 +17,8 @@ Diagram 11 in [../architecture.md](../architecture.md). Design: [../specs/2026-0
 ## Inputs
 
 - Snapshots from `zfs list`, or a `--snapshots` text file.
-- Manifests from the destination, a `--manifests` file, or none.
+- Manifests from the destination, a `--manifests` file, or none. In a manifests file a trailing word `raw` marks a backup sent with `--raw`.
+- `--raw` on `plan` (and in a scenario's `flags`): plan as `send --raw` would. An incremental onto a chain of the other kind is an error.
 - `--schedule` spec. Without `until=` the plan is one step. With it, each cron run advances the schedule, plans, and adds a fake manifest.
 
 `plan` never writes to a destination. Violations exit 2.

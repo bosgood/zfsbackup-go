@@ -18,6 +18,8 @@ Diagrams 7 and 8 in [../architecture.md](../architecture.md).
 6. Orderer emits volumes in order to `receiveStream`.
 7. `VolumeInfo.Extract` reverses the writer layers: pgp verify or decrypt, then decompress. Output goes to `zfs receive` stdin.
 
+An explicit receive of an incremental needs `-i <source>`; without it `Receive` builds the FULL set's manifest name and the backend says not found. `Origin` is passed to `zfs receive -o origin=`, but `Receive`'s check that the incremental source is local lists only the target dataset, so `--origin` of an incremental into a new dataset is refused (`TestIntegrationS3ReceiveSafety/Origin`, red).
+
 Receive flags on `JobInfo`: `Force`, `FullPath`, `LastPath`, `NotMounted`, `Origin`, `LocalVolume`, `AutoRestore`.
 
 ## `AutoRestore` (`receive --auto`)
@@ -26,7 +28,7 @@ Receive flags on `JobInfo`: `Force`, `FullPath`, `LastPath`, `NotMounted`, `Orig
 2. `linkManifests` (`backup/list.go`) sets `ParentSnap` on each incremental. A full is the preferred parent.
 3. Target = the given snapshot, or the newest backup.
 4. `backupThatApplies` prefers an incremental whose chain reaches a local snapshot, else the full.
-5. Walk `ParentSnap` until the target is local or a full is reached. A loop or a missing parent is an error.
+5. Walk `ParentSnap` until the target is local or a full is reached. A loop or a missing parent is an error. So is a link whose `Raw` differs from its parent's (`mix raw and plaintext`); nothing is received before the walk ends.
 6. Call `Receive` for each item, oldest first. No item (the target is local): Notice "already exists, nothing to do".
 
 ## Tests

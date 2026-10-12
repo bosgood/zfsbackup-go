@@ -19,10 +19,34 @@ The other `TestIntegrationS3*` tests run in the same environment:
 |---|---|
 | `TestIntegrationS3` | the steps above (`integration_s3_test.go`) |
 | `TestIntegrationS3Chain` | full, then 2 incrementals; restore of the middle link (fails without `--auto`), then of the newest; the whole chain into an empty dataset |
-| `TestIntegrationS3EncryptedChain` | the same chain, encrypted and signed; `list` and `receive` with the right key, another key, no key |
+| `TestIntegrationS3EncryptedChain` | the same chain, encrypted and signed; volume and manifest bytes are ciphertext; `list` and `receive` with the right key, another key, no key |
 | `TestIntegrationS3Bookmark` | an incremental from a bookmark, found by the smart options and named with `-i dataset#name`; restore of the chain |
-| `TestIntegrationS3ListClean` | `list` filters; `clean` dry-run, an orphan volume, an unrecognized object, `--force` on a broken set |
-| `TestIntegrationS3Resume` | a `zfs send` cut mid-stream (a bash wrapper as `--zfsPath`); `clean` spares the uploaded volumes; `--resume` after the cut, after a lost volume, after a lost manifest |
+| `TestIntegrationS3ListClean` | `list` filters over two datasets (a strict `--before`); `clean` dry-run, an orphan volume, an unrecognized object, `--force` on a broken set |
+| `TestIntegrationS3Resume` | a `zfs send` cut mid-stream (a bash wrapper as `--zfsPath`); `clean` spares the uploaded volumes; `--resume` after the cut, after a lost volume, after a lost manifest; subtest `Gzip` with the default compressor |
+| `TestIntegrationS3Rollover` | a `--fullIfOlderThan` window elapses for real; new and old chains restore; a receiver on the old chain is refused by zfs; `clean` retires the old chain |
+| `TestIntegrationS3ProdShape` | production flags, monthly/daily/hourly tied on one second, a 5-part dataset name, `--snapshotPrefix`, `receive --fullPath` and `--lastPath` |
+| `TestIntegrationS3EncryptedResume` | `--resume` with GPG rings; re-sent volumes get new ciphertext; a tampered volume fails the restore; an encrypted incremental from a bookmark |
+| `TestIntegrationS3ReceiveSafety` | receive without `-F` onto a changed dataset; `--properties` with `--unmounted`; subtests `Mounted` and `Origin` are RED on purpose (findings, below) |
+| `TestIntegrationS3TwoDestinations` | one send to two S3 prefixes; `complete-partial` without re-upload; out-of-sync destinations refused; each restores alone |
+| `TestIntegrationS3ManifestPrefix` | two `--manifestPrefix` jobs in one bucket: `list` and `clean` keep to their prefix |
+| `TestIntegrationS3NativeEncryption` | ZFS native encryption: a `--raw` chain with the key unloaded, a raw restore that opens only with the sender's key, a raw incremental from a bookmark, a forgotten `--raw` refused, a plaintext send, raw + GPG |
+
+Every restore of a whole chain runs with an empty working directory, so the
+manifests come from S3, and every restored snapshot must keep the sender's
+`guid`.
+
+What the VM showed (zfs 2.4.4), as assumed by
+`docs/specs/2026-10-11--integration-test-more/plan.md`:
+
+- A1: a full stream into a dataset with snapshots fails (`destination has snapshots`) and destroys nothing.
+- A2: `zfs receive -d` creates the parent datasets.
+- A3: `zfs receive` without `-F` into a changed dataset fails (`destination ... has been modified`) and keeps the change.
+- A4: a `-p` stream carries the source's local `mountpoint`. Without `--unmounted` the restored dataset mounts OVER the live one and hides its files (`ReceiveSafety/Mounted`, red).
+- A5: not checked: `receive --origin` of an incremental is refused by the program before zfs runs (`ReceiveSafety/Origin`, red).
+- A6: `zfs load-key -L file://<key>` opens a raw-received dataset with the sender's key.
+- A7: retired: `send` and `receive --auto` refuse a chain that mixes raw and plaintext.
+- A8: a plaintext stream received under an encryption root inherits its encryption.
+- zfs takes one snapshot of a dataset per `zfs snapshot` call (and per channel program): a tie takes separate calls in one second (`snapshotTie`).
 
 The S3 server is MinIO in a second container. Each test makes its own bucket
 and deletes it. All tests together take about a minute; the test binary runs

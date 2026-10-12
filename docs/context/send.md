@@ -19,7 +19,7 @@ Diagrams 3, 4, 5 in [../architecture.md](../architecture.md).
 
 ## Smart selection (`planSmartSnapshots`)
 
-Pure function. No ZFS or backend I/O. Unit-test it directly (`TestSelectSmartSnapshots`, `backup/plan*_test.go`).
+Pure function. It reads the smart options, `Raw` and `VolumeName` from `jobInfo`. No ZFS or backend I/O. Unit-test it directly (`TestSelectSmartSnapshots`, `backup/plan*_test.go`).
 
 Outcomes, in order of checks:
 
@@ -34,11 +34,14 @@ Outcomes, in order of checks:
 | last full older than `--fullIfOlderThan` | full `window-elapsed` |
 | incremental source pruned from pool | full `source-pruned` |
 | newer `*IncrSuffix` snapshot | incremental `newer-candidate` |
+| an incremental (explicit or `newer-candidate`) whose `--raw` differs from the newest backup at a destination | error: would mix raw and plaintext streams (`sameStreamKind`) |
 | nothing newer | noop `nothing-newer` |
 
 Snapshot suffixes: `--fullSnapshotSuffix _monthly` anchors fulls; `--incrementalSnapshotSuffix _daily` anchors incrementals. Sanoid names put the type at the end. `--snapshotPrefix` filters only the base snapshot in `newestMatchingSnapshot`. It does not scope manifests.
 
 The lagging destination decides. The full window compares with the destination furthest behind.
+
+A chain keeps one stream kind: an incremental must carry the same `--raw` as the backup it continues from; a full starts a new chain and may change it. Explicit `-i` sends check it too (`refuseMixedChain` in `Backup`, after the incremental snapshot is validated; a destination with no backup of the source is skipped with an Info line). `--dry-run` does not check it. `complete-partial` and `--resume` are covered by `sameStream`. The error text holds `mix raw and plaintext` (`MixedChainError`).
 
 ## Pipeline (`sendStream`, `backup/backup.go`)
 

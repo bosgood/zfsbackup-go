@@ -18,7 +18,7 @@ Read this before you run anything. All repeatable work goes through the Makefile
 | `make build-rev REV=master` | build an older revision (its `vendor/`, pinned image, Linux) to `tmp/zfsbackup-<REV>` (a `/` in REV becomes `-`) |
 | `make fixture-old REV=master` | `build-rev`, then write a destination with it to `testdata/manifests/<REV>-<hash>/` (`testdata/manifests/make-fixture.sh`, a `zfs` shim). Never regenerate a committed fixture to match new code |
 | `make integration` | needs a real ZFS host and `tank/data@c`; build tag `integration` |
-| `make integration-docker` | the six `TestIntegrationS3*` tests: real zfs + MinIO in Docker (`integration/compose.yaml`). Needs a Linux host with the zfs module. `RUN=TestIntegrationS3Resume` picks one, `RUN=TestIntegrationS3/Pipe` a subtest |
+| `make integration-docker` | the thirteen `TestIntegrationS3*` tests: real zfs + MinIO in Docker (`integration/compose.yaml`). Needs a Linux host with the zfs module. `RUN=TestIntegrationS3Resume` picks one, `RUN=TestIntegrationS3/Pipe` a subtest |
 | `make integration-vm` | the same in a NixOS Lima VM: the way on a Mac. `integration-vm-up`, `-shell`, `-down`, `-delete`. See `integration/README.md` |
 | `make integration-image` | only build the `integration` image (compiles and vets the tagged test) |
 | `make plan ARGS="..."` | run `plan` with the working tree |
@@ -34,7 +34,7 @@ Deps are vendored. Go version comes from `go.mod` (`X.Y` only: `go 1.26.0` gives
 1. **Pure unit tests.** `planSmartSnapshots` and friends in `backup/plan*_test.go`. No ZFS, no network.
 2. **Package tests with `file://`.** `backup/clean_test.go`, `restore_test.go`. Set `config.WorkingDir` to a temp dir.
 3. **E2E** in the root package (`e2e_*_test.go`). `newE2EEnv(t)` builds a `file://` destination and a working dir. `env.send(...)`, `env.plan(...)`. The test binary is the `zfs` binary.
-4. **Integration** behind the build tag: six `TestIntegrationS3*` tests run real zfs in Docker against MinIO (`make integration-docker`); on a Mac, `make integration-vm`. They cover send/receive with pipe mode, a 3-link chain and its middle link, the same chain encrypted and signed, bookmarks as the incremental source, `list` and `clean`, and `--resume` after a cut `zfs send` (see `integration/README.md`). `TestIntegration` (Azure + S3) still needs Azurite and `tank/data@c`. Lint covers the tag (`.golangci.yml` `build-tags`).
+4. **Integration** behind the build tag: thirteen `TestIntegrationS3*` tests run real zfs in Docker against MinIO (`make integration-docker`); on a Mac, `make integration-vm`. Plaintext volumes: send/receive with pipe mode, a 3-link chain, bookmarks, `list` and `clean`, `--resume` after a cut `zfs send`, a window-elapsed full, the production flags with creation-time ties and `--fullPath`/`--lastPath`, receive safety (`-F`, `--unmounted`, `--origin`), two destinations, two `--manifestPrefix` jobs. GPG volumes: the chain encrypted and signed, `--resume` with rings. ZFS native encryption: a `--raw` chain, the key unloaded, raw restores, a forgotten `--raw` refused, raw + GPG. Whole-chain restores use an empty working directory and check each snapshot's `guid`. `TestIntegrationS3ReceiveSafety/Mounted` and `/Origin` are red on purpose (findings; see `integration/README.md`). `TestIntegration` (Azure + S3) still needs Azurite and `tank/data@c`. Lint covers the tag (`.golangci.yml` `build-tags`).
 
 ## `internal/fakezfs`
 

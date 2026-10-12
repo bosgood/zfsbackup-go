@@ -5,7 +5,7 @@ Project history, review facts and defect lists go in `docs/specs/`, not here.
 Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`.
 
 ## Bash tool and host
-- Call #1 of a session is `cat .claude/napkin.md` ALONE. No chain, no separator. (Broken 8 times by chaining, last 2026-10-11, five times that day.)
+- Call #1 of a session is `cat .claude/napkin.md` ALONE. No chain, no separator. (Broken 9 times by chaining, last 2026-10-11, six times that day.)
 - zsh expands a leading `=word`: `echo ======` aborts the whole chain. Use `echo '-----'`. Quote globs too: `--include='*.go'`.
 - `grep` here is ugrep: it ignores `--` as end of options. Use `/usr/bin/grep` or `-e PATTERN` when it matters.
 - macOS has no `timeout`. Put it inside the container command.
@@ -76,7 +76,13 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - clean refuses a destination with objects but 0 manifests even when the cache holds a partial. To test that the partial protects its volumes, put a complete backup there first.
 - Smart send, last backup's snapshot destroyed with no bookmark, no newer `_monthly`: a NOOP (`source-pruned`), not a full.
 - `syncCache` downloads only manifests whose md5(name) is NOT in the cache; it never re-reads a cached name. A receive that shares `work` with the send reads the sender's cache, not the destination. To prove a restore from the destination alone, receive with `t.TempDir()` as `--workingDirectory`.
-- `snapshot()` in the integration tests avoids ties on purpose. For a tie (prod: monthly+daily+hourly in one second on the 1st) take them in ONE `zfs snapshot a@x b@y c@z` call.
+- `snapshot()` in the integration tests avoids ties on purpose. For a tie use `snapshotTie`: zfs takes ONE snapshot of a dataset per `zfs snapshot` call ("multiple snapshots of same fs not allowed") and per channel program (EAGAIN), so it is separate calls in one second, checked, retried.
+- A test that restores with the sender's `work` proves nothing about the manifest at the destination. But a manifest DELETED at the destination fails both: receive takes names from the listing, only a cached name's CONTENT from the cache.
+- Explicit `receive` of an incremental needs `-i <source>`, else it looks for a full set and S3 says `NotFound: Not Found`.
+- `receive --origin` of an incremental is refused by `Receive` (it lists only the target). A `--properties` stream received without `--unmounted` mounts over the live source. Both red in `TestIntegrationS3ReceiveSafety`.
+- Volume names hold no `--manifestPrefix`: two prefixes that send one snapshot share its objects, and clean spares orphans of a set both name.
+- Smart send to out-of-sync destinations errors before it looks for anything newer (never a noop).
+- `t.Cleanup` is LIFO: a cleanup that must run BEFORE `destroyAfter` is registered AFTER it.
 
 ## Git and a shared tree
 - Another session can edit this tree at the same time. Run `git status` right before staging; stage BY NAME, never `git add -A`.
@@ -107,8 +113,8 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - `dev.nix`: bump `rev`, set `hash = lib.fakeHash`, build, paste the "got:" hash. The user must run nix.
 
 ## Open plans
-- `docs/specs/2026-10-11--integration-test-more/`: UNEXECUTED (written 2026-10-11). Hardens the six TestIntegrationS3* tests, adds seven more (incl. ZFS native encryption: prod `backup3/enc` IS an encryption root). Assumptions A1-A8 must be verified on the VM; a failed one is a finding, not a test defect.
-- `--raw` is a send flag only; nothing after the send reads `JobInfo.Raw`, and the planner never checks that a chain's links agree on it. A forgotten `--raw` sends a plaintext incremental on a raw full, silently. Task 9 of `2026-10-11--integration-test-more` closes it (rule: a chain keeps one stream kind; a full starts a new chain). Resume/complete-partial already catch it via `sameStream`'s command-line compare.
+- `docs/specs/2026-10-11--integration-test-more/`: EXECUTED 2026-10-11 (01e927f..); thirteen TestIntegrationS3* tests; `ReceiveSafety/Mounted` and `/Origin` red on purpose (findings); notes at the end of its plan.md.
+- A chain keeps one stream kind: send (smart and `-i`), plan and `receive --auto` refuse an incremental whose `--raw` differs from its source's backup (`MixedChainError`, 0c038d2). A full starts a new chain.
 - `docs/specs/2026-10-11--integration-test-inc/`: EXECUTED 2026-10-11; five more TestIntegrationS3* tests; notes at the end of its plan.md.
 - `docs/specs/2026-10-11--deps-upgrade/`: EXECUTED 2026-10-11 (0671ffd..), Go 1.26; notes at the end of its plan.md.
 - `docs/specs/2026-10-11--integration-test-env/`: EXECUTED 2026-10-11 (d426bec..); NixOS VM instead of Ubuntu; notes at the end of its plan.md.

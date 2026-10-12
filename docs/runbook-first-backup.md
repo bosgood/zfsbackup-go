@@ -437,3 +437,23 @@ mismatch: signFrom differs`. Rotate between runs, or rerun that send without
 Turning on `--signFrom` for a destination whose manifests are unsigned is not a
 rotation: those manifests stay rejected. Start a new chain at a new destination
 prefix (or `--manifestPrefix`) instead.
+
+## 8. A natively encrypted dataset (`--raw`)
+
+A dataset under a ZFS native encryption root (production's `backup3/enc`) is
+best sent raw: `zfs send -w` ships ZFS's own ciphertext, so the destination
+never holds plaintext, and the send works with the key unloaded (after a
+reboot, before anyone ran `zfs load-key`).
+
+- Pass `--raw` on EVERY run of a raw chain, in `$FLAGS`. A run without it is
+  refused ("would mix raw and plaintext streams") before anything is
+  uploaded; so is `plan` without it.
+- To change the kind, start a new chain: `send --full` with or without
+  `--raw`.
+- A raw restore lands with `keystatus=unavailable` and does not mount. Open it
+  with the sender's key: `zfs load-key -L file://<key file> <restored>`, then
+  `zfs mount <restored>`. Receive raw backups with `--unmounted`. Keep the key
+  file with the backup key from step 0: without it a raw backup is lost.
+- `receive --auto` refuses a chain whose links differ in `--raw` (an older
+  version may have written one).
+

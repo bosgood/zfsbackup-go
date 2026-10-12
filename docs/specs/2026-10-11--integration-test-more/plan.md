@@ -822,3 +822,140 @@ Proofs on the old behavior (scratch copies, the three checks off, fixtures
 kept): the unit test fails 4 ways, `raw-chain-flag-forgotten` differs from its
 golden, both e2e tests fail (the mixed send and the mixed receive succeed).
 With only `refuseMixedChain` off, the explicit `-i` case fails by itself.
+
+### Task 2 (2026-10-11)
+
+PASS in the VM. **A1 holds.** zfs: `cannot receive new filesystem stream:
+destination has snapshots (eg. zbtest/restoredOld@autosnap_..._monthly)`;
+restoredOld keeps m1, m2. `zfsLine` (helper file) puts zfs's line in the test
+log. Break proofs: step 3 with `long` → m3 sent from m2 and no
+`window-elapsed`; R3 expecting success → fails.
+
+### Task 3 (2026-10-11)
+
+PASS in the VM. **A2 holds**: `receive -d` made `restoredD/plain/user/app`.
+
+- **Fact 4 is wrong.** `zfs snapshot ds@a ds@b` → `cannot create snapshots :
+  multiple snapshots of same fs not allowed`. A channel program cannot either
+  (`zfs.sync.snapshot` of one dataset twice → error 11, EAGAIN). sanoid takes
+  them in separate calls in one second, so `snapshotTie` does that: it starts
+  right after a second boundary, one `zfs snapshot` per kind, checks the
+  creation times, and on a rolled-over second destroys them and tries again
+  (3 tries).
+
+Break proofs: no `--snapshotPrefix` on the step 3 send → it sent
+`pre-upgrade_monthly` instead of a noop; three `snapshot()` calls → `not a
+tie` (the creation assertion is the proof that the tie is real).
+
+### Task 4 (2026-10-11)
+
+PASS in the VM. The cached partial manifest is encrypted and
+`cachedManifests` has no keys (loading rings into the `pgp/` globals from a
+test would leak between in-process runs). The test checks instead: the bucket
+got exactly 2 new volumes, `--resume` logs `Resuming from volume 3: 2 of 2
+cached volumes`, and those 2 are volumes 1 and 2 of the final manifest.
+`manifestFor` reads the re-sent manifest from a fresh work. Break proofs:
+equal hash asserted → fails; no byte flipped → the tampered receive succeeds
+and the test fails.
+
+### Task 5 (2026-10-11): two findings, the test stays RED
+
+S1 and S2 step 5 pass. **A3 holds**: `cannot receive incremental stream:
+destination zbtest/restoredS has been modified`; `local.txt` kept; `-F`
+removes it. **A4 holds**: `-p` carries `mountpoint=/zbtest/srcsafe` (source
+`received`); with `--unmounted`, `mounted=no`.
+
+- An explicit receive of an incremental needs `-i <source>`: without it,
+  receive builds the FULL set's manifest name and fails with the bare S3
+  error `NotFound: Not Found`. A poor message (candidate follow-up).
+- **Finding 1 (`Mounted`, red):** `receive` WITHOUT `--unmounted` of a stream
+  sent with `--properties` mounts the restored dataset at the SOURCE's
+  mountpoint, over the live dataset: `restoredP2 mountpoint /zbtest/srcsafe,
+  mounted yes`, and `/zbtest/srcsafe/after.bin` is hidden. On the backup host
+  itself this hides live data. Out of scope here (plan): `receive` defaulting
+  to `-u` or warning.
+- **Finding 2 (`Origin`, red):** `receive --origin X` of an incremental into
+  a new dataset always fails with `selected incremental snapshot does not
+  exist`. `Receive` (`backup/restore.go`, the source check before the zfs
+  receive) lists only the target's own snapshots and ignores
+  `jobInfo.Origin`; `AutoRestore` adds the origin to its list, but calls
+  `Receive`, which refuses. A5 cannot be checked until that is fixed.
+- The `mountpoint=none` cleanup is registered AFTER `destroyAfter`: cleanups
+  run LIFO, so it runs first (the plan said before).
+
+Break proofs: S1 step 2 with `-F` → the receive succeeds and the test fails;
+S2 step 5 without `--unmounted` → `mounted is yes` and `after.bin` hidden.
+
+### Task 6 (2026-10-11)
+
+PASS in the VM. Destinations are `<target>d1/` and `<target>d2/` (the backend
+normalizes a prefix to end in `/`). LastModified is compared after a 1 s
+sleep (second precision).
+
+- **Fact 9 is half wrong.** With destinations out of sync, the planner errors
+  BEFORE it looks for anything newer (`lastNotEqual` at `plan.go:250`, the
+  noop at `:253`): without a new monthly the error is the same, not a noop.
+  The break proof "step 4 without the M3 snapshot" therefore PASSED. The test
+  keeps the new monthly (a real cron run has one); the order does not matter.
+
+Break proof: a volume deleted too at step 3 → no `complete-partial`; the send
+fails with the out-of-sync error.
+
+### Task 7 (2026-10-11)
+
+PASS in the VM. Where the code differs from the plan:
+
+- **Volume names hold no `--manifestPrefix`** (`volumeNameParts`): jobA's and
+  jobB's m1 sets are ONE set of objects. clean matches the other prefix's
+  sets by name only (rule 7), so an orphan in a set both prefixes name is
+  spared by BOTH cleans, forever. The test asserts that (`orphanShared`).
+- So that each clean has an orphan of its own to delete, jobB also sends a
+  full of m2 (a set only jobB names): 4 manifests, not 3. jobB's restore is
+  `--auto <ds>@m1` → m1.
+- `list` with the default prefix: no error, `{}` (objects but no manifests).
+- `clean` with the default prefix refuses and deletes nothing: an assertion
+  in the test now, not only a break proof.
+
+Break proof: jobB's orphan deleted by hand before `clean jobA` → `clean jobA
+deleted ... an object of a set jobB names`.
+
+### Task 8 (2026-10-11)
+
+PASS in the VM on the first run. **A6 holds** (`load-key -L file://<key>`
+opens the raw-received dataset). **A8 holds** (a plaintext stream under
+`<pool>/enc` gets `aes-256-gcm` and encryptionroot `<pool>/enc`). A7 retired
+(task 9). With the key unloaded, `send --raw` works and a plaintext `-i` send
+fails with nothing uploaded. A raw restore: `keystatus unavailable`, and
+`zfs mount` says `encryption key not loaded`.
+
+- `--full` of M4 to the fourth bucket passes `--fullSnapshotSuffix _monthly`:
+  M4 is a tie, and `--full` alone picks the newest snapshot, one of three.
+
+Break proofs (each failed): N2 key loaded first → the plaintext send
+succeeds; task 9's checks off → the plain smart send onto the raw chain
+succeeds (N6); N8 with another key's rings → receive fails; N1 without
+`--raw` → fails already at N1's `Raw` check (the plan expected N3's mount).
+
+### Task 10 and summary (2026-10-11)
+
+Docs: README table (thirteen tests, A1-A8 outcomes), `testing.md`, `send.md`
+(planner row, the one-kind rule), `receive.md` (step 5; `-i` and `--origin`
+notes), `plan.md` (`raw` word, `--raw`), runbook section 8 (native
+encryption), napkin.
+
+Findings for follow-up (not fixed here, as the plan says):
+
+1. `receive` without `--unmounted` of a `--properties` stream mounts over the
+   live source dataset (`ReceiveSafety/Mounted`, red).
+2. `receive --origin` of an incremental is always refused: `Receive` ignores
+   `Origin` in its source check (`ReceiveSafety/Origin`, red).
+3. An explicit receive of an incremental without `-i` fails with the bare
+   backend error `NotFound: Not Found`.
+4. zfs's "destination has snapshots" is the only message when `--auto` meets
+   a receiver on an old chain (task 2 R3).
+5. An orphan in a set two `--manifestPrefix` jobs both name is never deleted
+   (by design of rule 7; worth a doc line or a smarter match).
+
+Plan facts corrected: 1 (deleted manifest), 4 (ties), 9 (out-of-sync before
+noop); plan step expectations corrected: task 7 (volume names hold no prefix).
+
