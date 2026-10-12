@@ -2,6 +2,8 @@ version: 2
 updates:
 - package-ecosystem: gomod
   directory: "/"
+  # Re-vendor in its PRs: the Docker test image and Nix build offline from vendor/.
+  vendor: true
   schedule:
     interval: daily
   open-pull-requests-limit: 10
