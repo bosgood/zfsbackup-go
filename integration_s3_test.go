@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 
 	"github.com/someone1/zfsbackup-go/backup"
@@ -47,8 +48,8 @@ import (
 // with the zfs module) or make integration-vm (a Mac); see integration/README.md.
 func TestIntegrationS3(t *testing.T) {
 	pool := testPool(t)
-	client, bucket := itBucket(t, "zfsbackup-it")
-	target := "s3://" + bucket + "/"
+	client, bucket, prefix := itBucket(t, "zfsbackup-it")
+	target := "s3://" + bucket + "/" + prefix
 	src := pool + "/src"
 	restored := pool + "/restored"
 	restored2 := pool + "/restored2"
@@ -80,7 +81,7 @@ func TestIntegrationS3(t *testing.T) {
 	if got.BaseSnapshot.Name != monthly || got.IncrementalSnapshot.Name != "" {
 		t.Fatalf("full: sent %s from %q, want %s full", got.BaseSnapshot.Name, got.IncrementalSnapshot.Name, monthly)
 	}
-	volumes, manifests, list := countObjects(t, client, bucket)
+	volumes, manifests, list := countObjects(t, client, bucket, prefix)
 	if volumes < 3 || manifests != 1 {
 		t.Fatalf("full: bucket holds %d volumes and %d manifests, want 3+ and 1:\n%s\n%s", volumes, manifests, list, logs)
 	}
@@ -122,8 +123,8 @@ func TestIntegrationS3(t *testing.T) {
 
 	// Pipe mode: volumes stream to S3 multipart uploads and back, never to disk.
 	t.Run("Pipe", func(t *testing.T) {
-		_, bucket := itBucket(t, "zfsbackup-it-pipe")
-		target := "s3://" + bucket + "/"
+		_, bucket, prefix := itBucket(t, "zfsbackup-it-pipe")
+		target := "s3://" + bucket + "/" + prefix
 		restored3 := pool + "/restored3"
 		destroyAfter(t, restored3)
 		work := t.TempDir()
@@ -149,21 +150,51 @@ func testPool(t *testing.T) string {
 	return pool
 }
 
-// itBucket creates a bucket named <name>-<unix seconds> and deletes it after the test.
-func itBucket(t *testing.T, name string) (client *s3.S3, bucket string) {
+// itBucket returns where the test writes: a new bucket <name>-<unix seconds>,
+// deleted after the test, or with ZFSBACKUP_IT_BUCKET set (real AWS S3) the
+// prefix <name>-<unix seconds>/ in that bucket, whose objects are deleted
+// after the test. The SDK's usual chain gives the credentials.
+func itBucket(t *testing.T, name string) (client *s3.S3, bucket, prefix string) {
 	t.Helper()
-	bucket = fmt.Sprintf("%s-%d", name, time.Now().Unix())
-	client, cleanup := setupS3Bucket(t, bucket)
-	t.Cleanup(cleanup)
-	return client, bucket
+	unique := fmt.Sprintf("%s-%d", name, time.Now().Unix())
+	bucket = os.Getenv("ZFSBACKUP_IT_BUCKET")
+	if bucket == "" {
+		var cleanup func()
+		client, cleanup = setupS3Bucket(t, unique)
+		t.Cleanup(cleanup)
+		return client, unique, ""
+	}
+	sess, err := session.NewSession(aws.NewConfig().
+		WithS3ForcePathStyle(true).
+		WithEndpoint(os.Getenv("AWS_S3_CUSTOM_ENDPOINT")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client = s3.New(sess)
+	prefix = unique + "/"
+	t.Cleanup(func() {
+		err := client.ListObjectsV2Pages(&s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String(prefix)},
+			func(page *s3.ListObjectsV2Output, _ bool) bool {
+				for _, o := range page.Contents {
+					if _, derr := client.DeleteObject(&s3.DeleteObjectInput{Bucket: aws.String(bucket), Key: o.Key}); derr != nil {
+						t.Errorf("could not delete s3://%s/%s: %v", bucket, aws.StringValue(o.Key), derr)
+					}
+				}
+				return true
+			})
+		if err != nil {
+			t.Errorf("could not list s3://%s/%s: %v", bucket, prefix, err)
+		}
+	})
+	return client, bucket, prefix
 }
 
-// countObjects counts the volumes and the manifests in bucket, and lists them
-// with their sizes.
-func countObjects(t *testing.T, client *s3.S3, bucket string) (volumes, manifests int, list string) {
+// countObjects counts the volumes and the manifests under prefix in bucket,
+// and lists them with their sizes.
+func countObjects(t *testing.T, client *s3.S3, bucket, prefix string) (volumes, manifests int, list string) {
 	t.Helper()
 	var b strings.Builder
-	err := client.ListObjectsV2Pages(&s3.ListObjectsV2Input{Bucket: aws.String(bucket)},
+	err := client.ListObjectsV2Pages(&s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String(prefix)},
 		func(page *s3.ListObjectsV2Output, _ bool) bool {
 			for _, o := range page.Contents {
 				fmt.Fprintf(&b, "%10d %s\n", aws.Int64Value(o.Size), aws.StringValue(o.Key))

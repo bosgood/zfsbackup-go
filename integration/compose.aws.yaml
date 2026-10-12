@@ -1,0 +1,13 @@
+# Added to compose.yaml for real AWS S3 (make integration-docker INTEGRATION_AWS=1):
+# no custom endpoint, your credentials, and an existing bucket. The test writes
+# under the prefix zfsbackup-it-<unix seconds>/ and deletes what it wrote.
+# MinIO still starts; nothing uses it.
+services:
+  zfs:
+    environment:
+      AWS_S3_CUSTOM_ENDPOINT: ""
+      AWS_REGION: "${AWS_REGION:?set AWS_REGION}"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY}"
+      AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN:-}"
+      ZFSBACKUP_IT_BUCKET: "${ZFSBACKUP_IT_BUCKET:?set ZFSBACKUP_IT_BUCKET}"

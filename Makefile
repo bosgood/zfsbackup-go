@@ -44,7 +44,10 @@ integration-image:
 # Linux host whose kernel has the zfs module (see integration/README.md); on a
 # Mac use integration-vm. RUN picks tests, e.g. RUN=TestIntegrationS3/Pipe.
 # `down -v` runs when the test fails too; the target keeps the test's status.
-INTEGRATION_COMPOSE ?= -f integration/compose.yaml
+# INTEGRATION_AWS=1 runs against real AWS S3 instead of MinIO (integration/compose.aws.yaml):
+# set AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and ZFSBACKUP_IT_BUCKET.
+INTEGRATION_AWS_COMPOSE = $(if $(INTEGRATION_AWS),-f integration/compose.aws.yaml)
+INTEGRATION_COMPOSE ?= -f integration/compose.yaml $(INTEGRATION_AWS_COMPOSE)
 INTEGRATION_RUN = $(if $(filter .,$(RUN)),TestIntegrationS3,$(RUN))
 integration-docker:
 	GO_VERSION=$(GO_VERSION) RUN='$(INTEGRATION_RUN)' docker compose $(INTEGRATION_COMPOSE) up \
@@ -59,9 +62,10 @@ LIMA_VM ?= zfsbackup
 integration-vm-up:
 	integration/vm-up.sh '$(LIMA_VM)'
 
+# With INTEGRATION_AWS=1 the shell gets this environment (--preserve-env), for the AWS variables.
 integration-vm: integration-vm-up
-	limactl shell '$(LIMA_VM)' -- bash -c 'cd "$(CURDIR)" && make integration-docker RUN="$(RUN)" \
-		INTEGRATION_COMPOSE="-f integration/compose.yaml -f integration/compose.nixos.yaml" \
+	limactl shell $(if $(INTEGRATION_AWS),--preserve-env) '$(LIMA_VM)' -- bash -c 'cd "$(CURDIR)" && make integration-docker RUN="$(RUN)" \
+		INTEGRATION_COMPOSE="-f integration/compose.yaml -f integration/compose.nixos.yaml $(INTEGRATION_AWS_COMPOSE)" \
 		ZFS_USERLAND="$$(dirname "$$(readlink -f "$$(command -v zfs)")")"'
 
 integration-vm-shell: integration-vm-up
