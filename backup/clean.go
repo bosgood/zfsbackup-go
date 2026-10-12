@@ -244,7 +244,7 @@ const cleanReadRounds = 3
 // The volumes of a set that a manifest under another manifest prefix at the destination is for
 // are never deleted either. jobInfo.Force also deletes broken backup sets at the destination
 // (manifest included), but never a local-only manifest. With dryRun, Clean only logs what it
-// would delete.
+// would delete; it still syncs the cache and holds the locks, so the answer is the real run's.
 // nolint:funlen,gocyclo // Difficult to break this up
 func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool) error {
 	ctx, cancel := context.WithCancel(pctx)
@@ -389,15 +389,11 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 		)
 	}
 	// Removed only once their volumes are gone: a local manifest is how a later clean finds
-	// volumes a failed delete left behind.
+	// volumes a failed delete left behind. A dry run lists them after the objects, in that order.
 	var localDeletes []string
 	for _, local := range localOnlyManifests {
 		if !cleanLocal || local.foreign || (local.manifest != nil && busy[local.manifest.VolumeName]) {
 			decodedManifests = append(decodedManifests, local) // live: its volumes stay
-			continue
-		}
-		if dryRun {
-			log.AppLogger.Noticef("Would delete local manifest %s.", local.path)
 			continue
 		}
 		localDeletes = append(localDeletes, local.path)
@@ -533,16 +529,13 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 		// Its volumes are not kept, so the ones that are there are deleted with the
 		// orphans. The manifest deleted is the object read, not a name computed from its
 		// content, which nothing has checked.
-		log.AppLogger.Warningf(
-			"The following backup set is missing volume %s. Removing entire backupset:\n\n%s",
-			missing, manifest.String(),
-		)
-		forcedManifests = append(forcedManifests, m.object)
+		action := "Removing entire backupset"
 		if dryRun {
-			log.AppLogger.Noticef("Would delete local cached manifest %s.", m.path)
-		} else {
-			localDeletes = append(localDeletes, m.path)
+			action = "Dry-run: would remove the entire backup set"
 		}
+		log.AppLogger.Warningf("The following backup set is missing volume %s. %s:\n\n%s", missing, action, manifest.String())
+		forcedManifests = append(forcedManifests, m.object)
+		localDeletes = append(localDeletes, m.path)
 	}
 	deletes := make([]string, 0, len(candidates)+len(forcedManifests))
 	for _, obj := range candidates {
@@ -556,6 +549,12 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 		log.AppLogger.Noticef("Dry-run: would delete %d objects in destination.", len(deletes))
 		for _, obj := range deletes {
 			log.AppLogger.Noticef("Would delete %s.", joinURI(target, obj))
+		}
+		if len(localDeletes) > 0 {
+			log.AppLogger.Noticef("Dry-run: would delete %d local manifests from the cache.", len(localDeletes))
+			for _, path := range localDeletes {
+				log.AppLogger.Noticef("Would delete local manifest %s.", path)
+			}
 		}
 		log.AppLogger.Noticef("Done.")
 		return nil

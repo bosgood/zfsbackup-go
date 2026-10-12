@@ -27,7 +27,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - MinIO publishes no Docker images any more (quay.io and Docker Hub). `pgsty/minio` is a community build; pinned in `integration/compose.yaml`.
 
 ## Build, test, lint
-- Makefile only, also for VERIFICATION. No target? Add one. Targets: `docs/context/testing.md`. (Broke it with an ad-hoc `go vet -tags integration` 2026-10-12; `make vet` now.)
+- Makefile only, also for VERIFICATION. No target? Add one. Targets: `docs/context/testing.md`. (Broke it with an ad-hoc `go vet -tags integration` 2026-10-12, and again with `go test` in a /tmp scratch copy the same day; `make vet`, `make -C /tmp/copy test-run`.)
 - `make test-run` = fast host loop. `make test-one` = Docker, ~10 s (mounts `/tmp/zfsb-gocache`). `make test-race` needs ~20 min (timeout 45m).
 - `make fmt-check` sees TRACKED files only: a new file is not checked until `git add`. Fix with `make fmt-write FILES=...` (pinned image). Trust fmt-check, not a list.
 - `make lint` runs a pinned golangci-lint v2 image. Bump the tag on purpose; a new version adds issues.

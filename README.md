@@ -414,12 +414,16 @@ volumes are missing. It leaves cached manifests that are not at the destination 
 volumes at the destination; those manifests are what --resume continues from. Cached
 manifests of another --manifestPrefix are never deleted.
 
+--dry-run deletes nothing at the destination and logs what a real run would delete. It
+still syncs the manifest cache (downloads manifests not cached yet, drops a cached copy it
+cannot read) and holds the send lock of every dataset it judges, as a real run does.
+
 Usage:
   zfsbackup clean [flags] uri
 
 Flags:
       --cleanLocal   Delete cached manifests that are not at the destination, and delete their volumes at the destination.
-  -n, --dry-run      Do not delete anything; only log what would be deleted.
+  -n, --dry-run      Do not delete anything at the destination; only log what would be deleted. The manifest cache is still synced and the send locks are still taken.
       --force        Also delete broken backup sets at the destination (sets where volumes expected in the manifest file are not found), manifest included. Cached manifests that are not at the destination are left alone; see --cleanLocal. Use with caution.
   -h, --help         help for clean
 

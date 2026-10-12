@@ -380,3 +380,113 @@ func TestCleanLocalSparesRunningSendState(t *testing.T) {
 		t.Errorf("clean --cleanLocal left the abandoned partial's volume, stat error - %v", serr)
 	}
 }
+
+// wantLogOrder fails unless every want is in logs, in that order.
+func wantLogOrder(t *testing.T, logs string, wants ...string) {
+	t.Helper()
+	at := 0
+	for _, want := range wants {
+		idx := strings.Index(logs[at:], want)
+		if idx < 0 {
+			t.Fatalf("log lacks %q after offset %d:\n%s", want, at, logs)
+		}
+		at += idx + len(want)
+	}
+}
+
+// TestCleanDryRunForce: a dry run with --force leaves a broken set's manifest, its volumes and
+// its cached copy alone, names them under "Would delete" (the local manifest after the objects),
+// and says it would remove the set, not that it is removing it. The real run then removes them.
+func TestCleanDryRunForce(t *testing.T) {
+	targetDir, jobInfo := setupCleanTest(t)
+	jobInfo.Force = true
+	set := &files.JobInfo{VolumeName: "tank/data", BaseSnapshot: files.SnapshotInfo{Name: "a"},
+		ManifestPrefix: "manifests", Separator: "|", Compressor: files.InternalCompressor}
+	set.Volumes = []*files.VolumeInfo{
+		{ObjectName: set.BackupVolumeObjectName(1), VolumeNumber: 1},
+		{ObjectName: set.BackupVolumeObjectName(2), VolumeNumber: 2},
+	}
+	writeTestManifest(t, targetDir, set)
+	vol1 := writeTestObject(t, targetDir, set.BackupVolumeObjectName(1)) // vol2 is missing
+	manifestObject := set.StoredManifestObjectName(jobInfo.ManifestPrefix)
+	manifestPath := filepath.Join(targetDir, manifestObject)
+	localCachePath, err := getCacheDir(jobInfo, jobInfo.Destinations[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached := filepath.Join(localCachePath, cachedManifestName(manifestObject))
+
+	logs := captureLogs(t)
+	if err = Clean(context.Background(), jobInfo, false, true); err != nil {
+		t.Fatalf("dry-run clean --force: %v", err)
+	}
+	if strings.Contains(logs.String(), "Removing entire backupset") {
+		t.Errorf("dry run says it is removing the set:\n%s", logs.String())
+	}
+	wantLogOrder(t, logs.String(),
+		"Dry-run: would remove the entire backup set",
+		"Dry-run: would delete 2 objects in destination.",
+		"Would delete "+joinURI(jobInfo.Destinations[0], set.BackupVolumeObjectName(1))+".",
+		"Would delete "+joinURI(jobInfo.Destinations[0], manifestObject)+".",
+		"Dry-run: would delete 1 local manifests from the cache.",
+		"Would delete local manifest "+cached+".",
+		"Done.",
+	)
+	for _, p := range []string{vol1, manifestPath, cached} {
+		if _, serr := os.Stat(p); serr != nil {
+			t.Fatalf("dry-run clean --force deleted %s, stat error - %v", p, serr)
+		}
+	}
+
+	logs.Reset()
+	if err = Clean(context.Background(), jobInfo, false, false); err != nil {
+		t.Fatalf("clean --force: %v", err)
+	}
+	if !strings.Contains(logs.String(), "Removing entire backupset") {
+		t.Errorf("real run does not say it is removing the set:\n%s", logs.String())
+	}
+	for _, p := range []string{vol1, manifestPath, cached} {
+		if _, serr := os.Stat(p); !os.IsNotExist(serr) {
+			t.Fatalf("clean --force left %s, stat error - %v", p, serr)
+		}
+	}
+}
+
+// TestCleanDryRunCleanLocal: a dry run with --cleanLocal leaves an abandoned partial manifest
+// and its volume alone and names both under "Would delete", the local manifest after the
+// objects. The real run then removes them.
+func TestCleanDryRunCleanLocal(t *testing.T) {
+	targetDir, jobInfo := setupCleanTest(t)
+	cleanTestSet(t, targetDir, "tank/data", "a", "manifests")
+	partial := &files.JobInfo{VolumeName: "tank/data", BaseSnapshot: files.SnapshotInfo{Name: "b"},
+		ManifestPrefix: "manifests", Separator: "|", Compressor: files.InternalCompressor}
+	partial.Volumes = []*files.VolumeInfo{{ObjectName: partial.BackupVolumeObjectName(1), VolumeNumber: 1}}
+	inFlight := writeTestObject(t, targetDir, partial.BackupVolumeObjectName(1))
+	state := cachePartialManifest(t, jobInfo, partial)
+
+	logs := captureLogs(t)
+	if err := Clean(context.Background(), jobInfo, true, true); err != nil {
+		t.Fatalf("dry-run clean --cleanLocal: %v", err)
+	}
+	wantLogOrder(t, logs.String(),
+		"Dry-run: would delete 1 objects in destination.",
+		"Would delete "+joinURI(jobInfo.Destinations[0], partial.BackupVolumeObjectName(1))+".",
+		"Dry-run: would delete 1 local manifests from the cache.",
+		"Would delete local manifest "+state+".",
+		"Done.",
+	)
+	for _, p := range []string{inFlight, state} {
+		if _, serr := os.Stat(p); serr != nil {
+			t.Fatalf("dry-run clean --cleanLocal deleted %s, stat error - %v", p, serr)
+		}
+	}
+
+	if err := Clean(context.Background(), jobInfo, true, false); err != nil {
+		t.Fatalf("clean --cleanLocal: %v", err)
+	}
+	for _, p := range []string{inFlight, state} {
+		if _, serr := os.Stat(p); !os.IsNotExist(serr) {
+			t.Fatalf("clean --cleanLocal left %s, stat error - %v", p, serr)
+		}
+	}
+}
