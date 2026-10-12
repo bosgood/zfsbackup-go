@@ -36,7 +36,10 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - Keep the Dockerfile `GO_VERSION` default in sync with go.mod's `go` line (images set `GOTOOLCHAIN=local`).
 - Newest `golang.org/x/*` and Google modules need go 1.26 (Go 1.25 is out of support since 2026-08). With `GOTOOLCHAIN=local` on 1.25, `go get -u ./...` aborts as a whole; it never picks an older version.
 - `go get -u ./...` stops with "ambiguous import cloud.google.com/go/compute/metadata": first `go get cloud.google.com/go/storage@latest google.golang.org/api@latest cloud.google.com/go/compute@latest`.
-- `go get` writes `go 1.26.0`; the Makefile then builds `golang:1.26.0-bookworm`. Run `go mod edit -go=1.26` after.
+- `go mod tidy` writes `go 1.26.0` when a dep declares it; `go mod edit -go=1.26` does not survive the next tidy. The Makefile takes only X.Y for the image tag.
+- Right after `sed -i` on go.mod, a container can read a stale, cut file ("unterminated block"). Rerun before you debug.
+- cenkalti/backoff v4 is NOT a drop-in for v2: on a canceled ctx v4's Retry returns ctx.Err(), v2 the last operation error. Kept v2 (2026-10-11).
+- Module work: `make mod-update`, `mod-get MOD=p@v`, `mod-vendor`, `vulncheck` (pinned image, cache in /tmp/zfsb-modcache).
 - pgzip v1.2.6/v1.2.7 panic in `Reader.WriteTo` after a `Read` (klauspost/pgzip#74). `files.VerifyEnd` hits it; `TestUnknownSignerErrorDoesNotAdviseTrust` catches it. Fix commit e1b5b318 (2026-10-09) is untagged.
 - pkg/sftp >= 1.13.6: `Server.Serve` returns nil on EOF, not io.EOF. The fake sshd in `ssh_backend_test.go` must `channel.Close()` after Serve, or the client's `Close` waits forever.
 - `go test` without `-v` hides stdout of passing tests.
@@ -103,7 +106,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 
 ## Open plans
 - `docs/specs/2026-10-11--integration-test-inc/`: EXECUTED 2026-10-11; five more TestIntegrationS3* tests; notes at the end of its plan.md.
-- `docs/specs/2026-10-11--deps-upgrade/`: plan written 2026-10-11, unexecuted. Blocked on one answer: does the user's nixpkgs have `go_1_26`?
+- `docs/specs/2026-10-11--deps-upgrade/`: EXECUTED 2026-10-11 (0671ffd..), Go 1.26; notes at the end of its plan.md.
 - `docs/specs/2026-10-11--integration-test-env/`: EXECUTED 2026-10-11 (d426bec..); NixOS VM instead of Ubuntu; notes at the end of its plan.md.
 - `docs/specs/2026-10-11--sigterm-handling/`: EXECUTED 2026-10-11 (a2c0636..069eeba); notes at the end of its plan.md.
 - `docs/specs/2026-10-11--third-pass-fixes/`: EXECUTED 2026-10-11 (caed77d..525b133); notes at the end of its plan.md.

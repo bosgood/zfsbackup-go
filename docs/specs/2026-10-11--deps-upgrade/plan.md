@@ -318,4 +318,79 @@ run `make test-run RUN=TestAzureBackend PKG=./backends/` on the host.
 
 ## Execution notes
 
-(empty until executed)
+Executed 2026-10-11 on `clean-dry-run`, Path A (the user's nixpkgs has `go_1_26`).
+
+Commits: 0671ffd (step 1), 6229ae9 (step 2), 9d625b0 (fix of 2.6, below),
+0b4956d (step 3), 94e8274 and 086b3b8 (step 5), 79a7302 (flaky test, below),
+c290b77 (dependabot, section 7). Step 4 had no diff: `--help` of all six
+commands matches the README, and `make scenarios` passes with no golden change.
+The CHANGELOG lines landed in 1940208 (another session staged them).
+
+Changes from the plan:
+
+- **2.6 was wrong.** `go mod edit -go=1.26` does not hold: the next
+  `go mod tidy` writes `go 1.26.0` again, because the new deps declare
+  `go 1.26.0` and `1.26` sorts lower. Fix: the Makefile takes only `X.Y` of
+  the `go` line for `GO_VERSION`. `go.mod` now says `go 1.26.0`; the targets
+  no longer run `go mod edit`.
+- **`integration/compose.yaml`** also had a `1.25` default; bumped in step 2.
+- **Step 5, backoff v4: skipped.** It is not only an import path change. On a
+  canceled context v4's `Retry` returns `ctx.Err()`; v2 returns the last
+  operation error. After SIGTERM or a sibling failure the log would say
+  "context canceled" in place of the real error. v2 has no known
+  vulnerability. Do it later with a test for the error that a canceled
+  retry returns.
+- **Flaky test found, older than this work.** `TestManifestCostCountsHigh`
+  failed 27/300 on 74b50b1 (Go 1.25) and 23/300 after the upgrade.
+  `manifestCost` counted `time.Now()`, whose JSON drops trailing zeros.
+  It now counts the longest time (nine digits and an offset): 0/300.
+- Step 1 check: `vulncheck` on the old tree needs
+  `GO_IMAGE=golang:1.26-bookworm` (govulncheck@latest needs 1.26). 26 found.
+- One `mod-vendor` run read a cut go.mod right after `sed -i`
+  ("unterminated block"); the rerun passed.
+- One Docker e2e run stalled in `TestE2EResumeCompletesManifestAtOneDestination`
+  for 10+ min. Not reproduced: the test alone and two full runs pass.
+
+Success check (intent.md), final tree:
+
+```
+make test-docker   all packages ok (root 101 s, backup 74 s, backends 3.7 s)
+make lint          0 issues.
+make fmt-check     clean
+make vulncheck     Vulnerability #1: GO-2026-5932 (only one)
+make e2e           host: TestE2EPlanManifestsFileAdoptsCreationTimes fails (EDT, known);
+                   Docker (make test-one RUN=TestE2E PKG=.): ok 98 s
+make test-race     run in Docker (UTC) as make test-one TESTFLAGS="-race -timeout 45m":
+                   all packages ok, root 1707 s, no DATA RACE
+```
+
+Final `go.mod` direct block:
+
+```
+go 1.26.0
+
+require (
+	cloud.google.com/go/storage v1.69.0
+	github.com/Azure/azure-sdk-for-go v68.0.0+incompatible
+	github.com/Azure/azure-storage-blob-go v0.15.0
+	github.com/aws/aws-sdk-go v1.55.8
+	github.com/cenkalti/backoff v2.2.1+incompatible
+	github.com/dustin/go-humanize v1.1.0
+	github.com/juju/ratelimit v1.0.2
+	github.com/klauspost/pgzip v1.2.8-0.20261009133145-e1b5b318410c // klauspost/pgzip#74 fix, not yet tagged; move to v1.2.8 when released
+	github.com/kurin/blazer v0.5.3
+	github.com/miolini/datacounter v1.0.3
+	github.com/nightlyone/lockfile v1.0.0
+	github.com/op/go-logging v0.0.0-20160315200505-970db520ece7
+	github.com/pkg/sftp v1.13.11
+	github.com/spf13/cobra v1.10.2
+	github.com/spf13/pflag v1.0.10
+	golang.org/x/crypto v0.58.0
+	golang.org/x/sync v0.24.0
+	golang.org/x/term v0.47.0
+	google.golang.org/api v0.301.0
+)
+```
+
+Not done: section 6 (emulators; optional). Azure has an API change and no
+Azurite run yet.

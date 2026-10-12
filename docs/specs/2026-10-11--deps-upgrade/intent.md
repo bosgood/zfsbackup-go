@@ -2,7 +2,7 @@
 
 Date: 2026-10-11
 Branch: `clean-dry-run` at `10fcf0c`
-Status: plan written, not executed
+Status: executed 2026-10-11 (Path A, Go 1.26); see the notes at the end of plan.md
 
 ## Why now
 
