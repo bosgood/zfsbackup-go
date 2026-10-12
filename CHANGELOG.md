@@ -1,5 +1,6 @@
 # CHANGELOG
 
+* [ADD] test: TestIntegrationS3Resume: a zfs send cut mid-stream on real zfs + S3; clean spares the uploaded volumes; --resume after the cut, a lost volume, a lost manifest
 * [ADD] test: TestIntegrationS3ListClean: list filters; clean dry-run, an orphan volume, an unrecognized object, --force on a broken set, against S3
 * [ADD] test: TestIntegrationS3Bookmark: incrementals from a bookmark on real zfs (smart, and -i dataset#name); the restored dataset gets the snapshots
 * [ADD] test: TestIntegrationS3EncryptedChain: the chain encrypted and signed; list and receive with the right key, another key, no key
