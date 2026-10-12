@@ -27,6 +27,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -34,7 +35,6 @@ import (
 	"sync"
 
 	"github.com/Azure/azure-storage-blob-go/azblob"
-	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/someone1/zfsbackup-go/files"
@@ -97,7 +97,7 @@ func (a *AzureBackend) Init(ctx context.Context, conf *BackendConfig, opts ...Op
 	if a.containersas != "" {
 		parsedsas, perr := url.Parse(a.containersas)
 		if perr != nil {
-			return errors.Wrap(perr, "failed to parse SAS URI")
+			return fmt.Errorf("failed to parse SAS URI: %w", perr)
 		}
 		pipeline := azblob.NewPipeline(azblob.NewAnonymousCredential(), pipelineOpts)
 		sasParts := azblob.NewBlobURLParts(*parsedsas)
@@ -108,11 +108,11 @@ func (a *AzureBackend) Init(ctx context.Context, conf *BackendConfig, opts ...Op
 	} else {
 		credential, cerr := azblob.NewSharedKeyCredential(a.accountName, a.accountKey)
 		if cerr != nil {
-			return errors.Wrap(cerr, "failed to initilze Azure credential")
+			return fmt.Errorf("failed to initilze Azure credential: %w", cerr)
 		}
 		destURL, uerr := url.Parse(a.azureURL)
 		if uerr != nil {
-			return errors.Wrap(uerr, "failed to construct Azure API URL")
+			return fmt.Errorf("failed to construct Azure API URL: %w", uerr)
 		}
 		pipeline := azblob.NewPipeline(credential, pipelineOpts)
 		svcURL := azblob.NewServiceURL(*destURL, pipeline)
@@ -280,7 +280,7 @@ func (a *AzureBackend) List(ctx context.Context, prefix string) ([]string, error
 			MaxResults: 5000,
 		})
 		if err != nil {
-			return nil, errors.Wrap(err, "error while listing blobs from container")
+			return nil, fmt.Errorf("error while listing blobs from container: %w", err)
 		}
 
 		for idx := range resp.Segment.BlobItems {
