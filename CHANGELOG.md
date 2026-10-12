@@ -1,5 +1,9 @@
 # CHANGELOG
 
+* [FIX] receive: --maxFileBuffer 0 no longer hangs on volumes compressed with the internal compressor (the default); the download closed the decompressor while the restore still read it
+* [ADD] test: ZFS + S3 integration test in Docker (TestIntegrationS3, make integration-docker; make integration-vm boots a NixOS Lima VM with the zfs module on macOS; INTEGRATION_AWS=1 for real AWS S3); sanoid-style snapshots, full, incremental, noop, receive, receive --auto, pipe mode
+* [ADD] dev: make lint covers the integration build tag; make test-one takes TESTFLAGS (e.g. -race)
+
 * [ADD] signals: SIGINT or SIGTERM stops any command cleanly (lock released, temp files removed, no manifest written, S3 multipart upload aborted); exit 130 or 143; a second signal exits at once
 * [FIX] receive: a snapshot that is already on the target is a no-op (receive --auto says so too); a local snapshot with the backed-up name but another creation time is refused, with or without --force, and the error says to rename it or receive elsewhere; receive --auto checks the source of each incremental step, as an explicit receive does
 * [FIX] errors: a manifest encrypted to a secret key this run lacks names the key problem, never advises deleting the object, and keeps its cached copy (the error names it); one not signed or not encrypted as asked, or signed by an unknown key, keeps no copy and says to delete the object if you did not write it

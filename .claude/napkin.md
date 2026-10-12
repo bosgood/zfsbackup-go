@@ -5,7 +5,7 @@ Project history, review facts and defect lists go in `docs/specs/`, not here.
 Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`.
 
 ## Bash tool and host
-- Call #1 of a session is `cat .claude/napkin.md` ALONE. No chain, no separator. (Broken 3 times by chaining.)
+- Call #1 of a session is `cat .claude/napkin.md` ALONE. No chain, no separator. (Broken 7 times by chaining, last 2026-10-11, four times that day.)
 - zsh expands a leading `=word`: `echo ======` aborts the whole chain. Use `echo '-----'`. Quote globs too: `--include='*.go'`.
 - `grep` here is ugrep: it ignores `--` as end of options. Use `/usr/bin/grep` or `-e PATTERN` when it matters.
 - macOS has no `timeout`. Put it inside the container command.
@@ -16,6 +16,14 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - Host Go 1.26 is for throwaway checks in /tmp only. Nix is not installed.
 - Docker containers cannot reach api.anthropic.com from this Mac; the host cannot reach proxy.golang.org. Query the proxy from a container: `docker run --rm golang:1.25-bookworm bash -c 'cd /tmp && go mod init probe >/dev/null 2>&1; go list -m -versions <module>'`.
 - Host load varies a lot (e2e 7 s -> 43 s, no code change). Compare against the old tree in the same minute.
+- Docker here is OrbStack (arm64). Its kernel has NO zfs module and no `/lib/modules`; the maintainer will not ship one. Real `zfs` runs in the NixOS Lima VM: `make integration-vm` (see `integration/README.md`).
+- OrbStack NixOS + ZFS IS possible (laris/orbstack-nixos-openzfs): build OpenZFS 2.4.1 against `/sys/kernel/kheaders.tar.xz` with 5 patches, load with a systemd unit. Rebuild after every OrbStack kernel update. Rejected for the test env 2026-10-11 (fragile); Lima VM instead.
+- A privileged container sees the HOST's zpools. A test entrypoint must refuse an existing pool name and destroy only the pool it made.
+- The zfs module opens a file vdev by its path in the HOST's mount namespace: a pool file only the container has gives "cannot create 'zbtest': no such pool or dataset". Bind-mount the dir at the same path. Same for `.zfs/snapshot` automount (a host helper mounts it): in a container compare with a `zfs clone` instead.
+- The Lima VM sees only `~`, read-only. Scratch copies for VM runs go under `~/.cache/`, then `make -C <copy> integration-vm`.
+- `limactl shell` reuses one ssh connection: a group added later does not apply. The VM's Docker socket group is wheel for that reason.
+- A VM run can stall when the Mac sleeps (compile 12 s -> 34 min) and DNS can fail right after. Rerun before you debug.
+- MinIO publishes no Docker images any more (quay.io and Docker Hub). `pgsty/minio` is a community build; pinned in `integration/compose.yaml`.
 
 ## Build, test, lint
 - Makefile only, also for VERIFICATION. No target? Add one. Targets: `docs/context/testing.md`.
@@ -33,6 +41,8 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - In-process cobra runs leak: flag values are package globals (`cleanDryRun`, `cleanLocal`, `workingDirectory`, `zfs.ZFSPath`, `jobInfo`) and `RootCmd.SetArgs` persists. Pass bool flags explicitly (`--dry-run=false`); after each run `RootCmd.SetArgs(nil); cmd.ResetSendJobInfo()`. Run the whole package (`PKG=.`) before you trust green: a leak can `os.Exit(255)` the binary silently.
 - Helpers that create volumes outside a cobra run set `config.BackupTempdir = t.TempDir()` and restore it.
 - Two sends that must give identical volumes: `--compressor ""` (pgzip boundaries are timing-dependent).
+- `--volsize` counts COMPRESSED bytes and pgzip holds several MiB of blocks: with gzip a 3 MiB stream is one volume at `--volsize 1`. Assert volume counts with `--compressor ""`.
+- A test of `io.Copy(vol, buf)` from a `bytes.Buffer` skips the volume's bufio (WriterTo, one big Write). Copy as production does: `io.LimitReader(buf, n+1)` gives 32 KiB writes.
 - No `,` in a subtest name when `t.TempDir()` is a destination: destinations are comma-separated.
 - Root-package e2e: assert only on Notice+ log lines. go-logging checks the DEFAULT backend level, which `processFlags` sets to NOTICE.
 - Lock tests: a live holder must be a pid this user can signal (`os.Getppid()` or a `sleep` child). `lockfile.isRunning` treats EPERM (pid 1 as uid 501) as dead.
@@ -71,6 +81,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 ## Code facts that are easy to get wrong
 - `files.SnapshotInfo.Equal` = name + creation time (to the second), never GUID. `zfs list` has no GUID.
 - cobra `PersistentPostRun` does not run when PreRunE/RunE fail; `Execute` cleans the temp dir on error.
+- Receive pipe mode: ONE VolumeInfo has a writer (processSequence) and a reader (Extract). The writer's Close must not touch reader layers (`rw`, `cmd`); `extracted` marks them (fix 5cfb96d).
 - Pipe mode (`--maxFileBuffer 0`): either side that fails must `vol.Abort(err)`. An errgroup ctx is also canceled when `Wait` succeeds, so do not abort on it. Do not `Close` a pipe volume after a failed upload.
 - `sortBackupsNewestFirst` is THE manifest order. `backends.RedactURI` is THE redaction helper.
 - `send` locks `<workingDirectory>/locks/<md5(dataset)>.lck`. Same host only; invisible across users and working dirs.
@@ -80,6 +91,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - `dev.nix`: bump `rev`, set `hash = lib.fakeHash`, build, paste the "got:" hash. The user must run nix.
 
 ## Open plans
+- `docs/specs/2026-10-11--integration-test-env/`: EXECUTED 2026-10-11 (d426bec..); NixOS VM instead of Ubuntu; notes at the end of its plan.md.
 - `docs/specs/2026-10-11--sigterm-handling/`: EXECUTED 2026-10-11 (a2c0636..069eeba); notes at the end of its plan.md.
 - `docs/specs/2026-10-11--third-pass-fixes/`: EXECUTED 2026-10-11 (caed77d..525b133); notes at the end of its plan.md.
 - `docs/specs/2026-09-29--pgp-ed25519/`. Unexecuted as of 2026-09-29.

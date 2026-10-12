@@ -18,6 +18,9 @@ Read this before you run anything. All repeatable work goes through the Makefile
 | `make build-rev REV=master` | build an older revision (its `vendor/`, pinned image, Linux) to `tmp/zfsbackup-<REV>` (a `/` in REV becomes `-`) |
 | `make fixture-old REV=master` | `build-rev`, then write a destination with it to `testdata/manifests/<REV>-<hash>/` (`testdata/manifests/make-fixture.sh`, a `zfs` shim). Never regenerate a committed fixture to match new code |
 | `make integration` | needs a real ZFS host and `tank/data@c`; build tag `integration` |
+| `make integration-docker` | `TestIntegrationS3`: real zfs + MinIO in Docker (`integration/compose.yaml`). Needs a Linux host with the zfs module. `RUN=TestIntegrationS3/Pipe` picks a subtest |
+| `make integration-vm` | the same in a NixOS Lima VM: the way on a Mac. `integration-vm-up`, `-shell`, `-down`, `-delete`. See `integration/README.md` |
+| `make integration-image` | only build the `integration` image (compiles and vets the tagged test) |
 | `make plan ARGS="..."` | run `plan` with the working tree |
 
 Deps are vendored. Go version comes from `go.mod` and must match the Dockerfile default. Nix is not on this host.
@@ -27,7 +30,7 @@ Deps are vendored. Go version comes from `go.mod` and must match the Dockerfile 
 1. **Pure unit tests.** `planSmartSnapshots` and friends in `backup/plan*_test.go`. No ZFS, no network.
 2. **Package tests with `file://`.** `backup/clean_test.go`, `restore_test.go`. Set `config.WorkingDir` to a temp dir.
 3. **E2E** in the root package (`e2e_*_test.go`). `newE2EEnv(t)` builds a `file://` destination and a working dir. `env.send(...)`, `env.plan(...)`. The test binary is the `zfs` binary.
-4. **Integration** behind the build tag. Rarely run.
+4. **Integration** behind the build tag: `TestIntegrationS3` runs real zfs in Docker against MinIO (`make integration-docker`); on a Mac, `make integration-vm`. `TestIntegration` (Azure + S3) still needs Azurite and `tank/data@c`. Lint covers the tag (`.golangci.yml` `build-tags`).
 
 ## `internal/fakezfs`
 
