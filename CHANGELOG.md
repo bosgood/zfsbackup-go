@@ -1,5 +1,6 @@
 # CHANGELOG
 
+* [ADD] test: TestIntegrationS3NativeEncryption: ZFS native encryption under an encryption root, as in production: a --raw chain with and without the key loaded, a raw restore that opens only with the sender's key, a raw incremental from a bookmark, a forgotten --raw refused, a plaintext send of the encrypted dataset, raw + GPG
 * [ADD] test: TestIntegrationS3ManifestPrefix: two --manifestPrefix jobs in one bucket; list and clean keep to their prefix; an orphan of a set both name is spared
 * [ADD] test: TestIntegrationS3TwoDestinations: one send to two S3 prefixes; complete-partial without re-upload; out-of-sync destinations refused; each restores on its own
 * [ADD] test: TestIntegrationS3ReceiveSafety: receive without -F onto a changed dataset, --properties with and without --unmounted, --origin; the last two are red: they show a restore mounted over the live dataset and --origin refused
