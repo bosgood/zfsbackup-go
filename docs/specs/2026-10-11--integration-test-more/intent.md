@@ -24,4 +24,9 @@ native encryption root (confirmed 2026-10-11).
 Encryption coverage today: plaintext volumes (five tests) and GPG volumes (`EncryptedChain`).
 Native encryption: none.
 
+One production change rides along (decided 2026-10-11): **a chain keeps one stream kind.**
+An incremental must carry the same `--raw` as the backup it continues from; a full starts a
+new chain. Today nothing checks it: a cron run that forgets `--raw` puts a plaintext
+incremental on a raw chain and the program says nothing.
+
 Goal: close the holes above with real zfs and MinIO, through `make integration-vm`.

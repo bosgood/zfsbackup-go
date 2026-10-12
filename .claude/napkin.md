@@ -108,7 +108,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 
 ## Open plans
 - `docs/specs/2026-10-11--integration-test-more/`: UNEXECUTED (written 2026-10-11). Hardens the six TestIntegrationS3* tests, adds seven more (incl. ZFS native encryption: prod `backup3/enc` IS an encryption root). Assumptions A1-A8 must be verified on the VM; a failed one is a finding, not a test defect.
-- `--raw` is a send flag only; nothing after the send reads `JobInfo.Raw`, and the planner never checks that a chain's links agree on it. A forgotten `--raw` sends a plaintext incremental on a raw full, silently.
+- `--raw` is a send flag only; nothing after the send reads `JobInfo.Raw`, and the planner never checks that a chain's links agree on it. A forgotten `--raw` sends a plaintext incremental on a raw full, silently. Task 9 of `2026-10-11--integration-test-more` closes it (rule: a chain keeps one stream kind; a full starts a new chain). Resume/complete-partial already catch it via `sameStream`'s command-line compare.
 - `docs/specs/2026-10-11--integration-test-inc/`: EXECUTED 2026-10-11; five more TestIntegrationS3* tests; notes at the end of its plan.md.
 - `docs/specs/2026-10-11--deps-upgrade/`: EXECUTED 2026-10-11 (0671ffd..), Go 1.26; notes at the end of its plan.md.
 - `docs/specs/2026-10-11--integration-test-env/`: EXECUTED 2026-10-11 (d426bec..); NixOS VM instead of Ubuntu; notes at the end of its plan.md.

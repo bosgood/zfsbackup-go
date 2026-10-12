@@ -1,5 +1,6 @@
 # CHANGELOG
 
+* [ADD] docs: spec 2026-10-11--integration-test-more: audit of the six TestIntegrationS3* tests and the plan that closes their holes (every restore read the manifest from the sender's cache, never from S3; the encrypted test checked only object names; no guid check; no production flags, ties, deep dataset names, window-elapsed full, --fullPath/--lastPath, --unmounted, --origin, two destinations, --manifestPrefix, or ZFS native encryption). Decided: a chain keeps one stream kind; an incremental whose --raw differs from its source backup's will be refused by send, plan and receive --auto (task 9; today nothing checks it outside --resume)
 * [ADD] test: TestIntegrationS3Resume: a zfs send cut mid-stream on real zfs + S3; clean spares the uploaded volumes; --resume after the cut, a lost volume, a lost manifest
 * [ADD] test: TestIntegrationS3ListClean: list filters; clean dry-run, an orphan volume, an unrecognized object, --force on a broken set, against S3
 * [ADD] test: TestIntegrationS3Bookmark: incrementals from a bookmark on real zfs (smart, and -i dataset#name); the restored dataset gets the snapshots

@@ -16,6 +16,11 @@ volumes (`EncryptedChain`, `EncryptedResume`), and ZFS native encryption
 (`NativeEncryption`: raw, plaintext from an encrypted dataset, raw + GPG).
 Production (`backup3/enc/...`) is native-encrypted; task 8 mirrors it.
 
+One rule becomes code (task 9): **a chain keeps one stream kind.** An
+incremental must carry the same `--raw` as the backup of its source at the
+destination. A full starts a new chain and may change the kind. Decided
+2026-10-11: no mixed-heritage chains.
+
 | Task | Test                                | Covers                                                                                                                           |
 | ---- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | 1    | the six existing tests              | restores from an empty cache; volume bytes are PGP; `guid` match; resume with pgzip; sharper `list` filters                      |
@@ -25,8 +30,9 @@ Production (`backup3/enc/...`) is native-encrypted; task 8 mirrors it.
 | 5    | `TestIntegrationS3ReceiveSafety`    | receive without `-F` onto a changed dataset; `--properties` + `--unmounted`; `--origin`                                          |
 | 6    | `TestIntegrationS3TwoDestinations`  | the upload chain to two S3 prefixes; `complete-partial`; destinations out of sync                                                |
 | 7    | `TestIntegrationS3ManifestPrefix`   | two `--manifestPrefix` jobs in one bucket: `list`, `clean` spares the other prefix                                               |
-| 8    | `TestIntegrationS3NativeEncryption` | ZFS native encryption: `--raw` chain + bookmark, key not loaded, restore needs the key, plaintext send, raw + GPG, a mixed chain |
-| 9    | docs                                | README table, `testing.md`, napkin, CHANGELOG                                                                                    |
+| 8    | `TestIntegrationS3NativeEncryption` | ZFS native encryption: `--raw` chain + bookmark, key not loaded, restore needs the key, plaintext send, raw + GPG, a forgotten `--raw` is refused |
+| 9    | raw chain consistency (code)        | `send` refuses an incremental whose `--raw` differs from its source backup's; `plan` agrees; `receive --auto` refuses a mixed chain |
+| 10   | docs                                | README table, `testing.md`, context docs, runbook, napkin, CHANGELOG                                                             |
 
 ## Facts that shape the plan
 
@@ -127,6 +133,27 @@ encryption=aes-256-gcm -o keyformat=raw -o keylocation=file:///<path>
     `wantSnapshots` and `wantGUIDs` work before the key is loaded;
     `compareDirs` needs `load-key` + `mount`. Pass `--unmounted` on raw
     receives so no mount is attempted.
+17. **Where a flipped `--raw` is caught today, and where not.** `sameStream`
+    (`backup/backup.go:706`) compares the whole `zfs send` command line
+    (`-w` included) of a cached or copied manifest with the current run: a
+    `--resume` or a `complete-partial` with the other flag fails with
+    `option mismatch` (`TestE2EResumeCompleteRefusesOtherVariant`). Nothing
+    compares a NEW incremental with the backup it continues from:
+    `planSmartSnapshots` returns an incremental at two sites
+    (`reasonExplicitIncremental`, `reasonNewerCandidate`) without looking at
+    `destBackups[idx][0].Raw`, and an explicit `-i` send (`cmd/send.go:250`)
+    never reads the destination's manifests at all (`refuseExistingSet` lists
+    one object name). `AutoRestore` walks `ParentSnap` without comparing
+    `Raw` between a link and its parent. The planner's doc says it reads only
+    the smart options and `VolumeName` from `jobInfo`; task 9 adds `Raw`.
+18. **Planner fixtures.** `Scenario.parseManifest` (`backup/plan_fixtures.go:388`)
+    reads `<base> [epoch]` or `<source> [epoch] to <base> [epoch]` per line;
+    no other words. `Scenario.run` records the manifest a step sends with
+    `addManifest`; the flags file is parsed with the same `pflag` set as
+    `send` (`loadFlags`, ~line 221; `AddSmartFlags` is shared), so `--raw`
+    must be registered there for `plan` to see it. The fake `zfs send`
+    (`internal/fakezfs/fakezfs.go:177`) accepts `-w` and ignores it, so e2e
+    tests can send `--raw` without real zfs.
 
 ## Assumptions to verify on the VM
 
@@ -150,10 +177,9 @@ red, and report. It is a finding about the program, not about the test.
 - **A6.** A raw receive keeps `keyformat=raw`, and `zfs load-key -L
 file:///<path> <restored>` opens the received dataset with the sender's key
   file (`-L` overrides the recorded `keylocation`). Task 8 step N4.
-- **A7.** A plaintext incremental received onto a raw-received dataset: zfs
-  either refuses it, or (key loaded) encrypts it with the target's key. Task
-  8 step N6 records which. The test asserts only that the dataset is
-  consistent afterwards: unchanged, or complete with matching content.
+- **A7.** Retired. Task 9 refuses a mixed chain in `send` and in `receive
+  --auto`, so zfs never sees a plaintext incremental on a raw chain. Task 8
+  step N6 asserts the refusal instead.
 - **A8.** A plaintext stream received under `<pool>/enc` inherits `encryption`
   and `encryptionroot` from the parent. Task 8 step N7.
 
@@ -175,9 +201,9 @@ fmt-check` (after `git add`) and `make lint` before "done".
   that must make it fail. Run each break in a scratch copy (`rsync -a
 --exclude .git --exclude tmp ./ /tmp/zb-break/`, `make -C /tmp/zb-break
 integration-vm RUN=...`). Record the proofs in the commit message.
-- Never shape production code around a test environment's limit. Never change
-  production code in this plan at all: an assumption that fails is reported,
-  not fixed here.
+- Never shape production code around a test environment's limit. Task 9 is
+  the ONE production change in this plan. Everything else: an assumption that
+  fails is reported, not fixed here.
 - Assert on ZFS state and bucket state before log lines. Log assertions only
   where the behavior is not visible elsewhere.
 - New tests go in new files, `//go:build integration`, `package main`.
@@ -202,8 +228,16 @@ integration_s3_safety_test.go        TestIntegrationS3ReceiveSafety (task 5)
 integration_s3_twodest_test.go       TestIntegrationS3TwoDestinations (task 6)
 integration_s3_prefix_test.go        TestIntegrationS3ManifestPrefix (task 7)
 integration_s3_native_test.go        TestIntegrationS3NativeEncryption (task 8)
-integration/README.md                test table (task 9)
-docs/context/testing.md              layer 4 text (task 9)
+backup/plan.go                       task 9: sameStreamKind check at both incremental return sites
+backup/backup.go                     task 9: refuseMixedChain for explicit -i sends
+backup/restore.go                    task 9: AutoRestore refuses a chain whose links differ in Raw
+backup/plan_fixtures.go              task 9: `raw` word on a manifests line; --raw in the flags file
+backup/plan_test.go                  task 9: unit tests of the planner check
+backup/testdata/scenarios/raw-chain-kept/, raw-chain-flag-forgotten/   task 9 goldens
+e2e_raw_test.go                      task 9: fake-zfs e2e of send, explicit -i, and receive --auto
+docs/context/send.md, receive.md, plan.md, docs/runbook-first-backup.md   task 10
+integration/README.md                test table (task 10)
+docs/context/testing.md              layer 4 text (task 10)
 .claude/napkin.md, CHANGELOG.md      (each task)
 ```
 
@@ -551,16 +585,17 @@ destroy ds@M2`. `c.bin` 1 MiB; `M3` tie. Send `raw ds target`: M3 from M2,
 one step). `wantSnapshots(M1, M2, M3)`; `wantGUIDs` (for M2 compare with `zfs
 get guid ds#M2`); `compareDirs`.
 
-**N6, a mixed chain: the program does not notice** (fact 14). `d.bin` 1 MiB;
-`M4` tie. Send `smart ds target` WITHOUT `--raw`: succeeds; `manifestFor(M4).Raw
-== false`, source M3. `itList(target)[ds]` has four entries; assert the `Raw`
-fields are `true, true, true, false`: that is the state a forgotten flag
-leaves, and `list` is the only place it shows. Then `receive --auto -F
---unmounted ds target restoredRaw` (A7). Afterwards assert ONE of: an error
-and `wantSnapshots(M1, M2, M3)`; or no error, `wantSnapshots(M1..M4)`,
-`wantGUIDs(M4)` and `compareDirs`. Record which in the notes, with zfs's
-message. A follow-up (out of scope) can make `send` refuse an incremental
-whose `--raw` differs from its source's manifest.
+**N6, a forgotten `--raw` is refused** (task 9; do task 9 first). `d.bin`
+1 MiB; `M4` tie. Send `smart ds target` WITHOUT `--raw`: must FAIL with an
+error that holds `mix raw and plaintext`; `objectNames(target)` unchanged
+(nothing uploaded); `itList(target)[ds]` still has three entries, all `Raw ==
+true`. The explicit form too: `send --volsize 1 --compressor "" -i ds@M3
+ds@M4 target` (no `--raw`) must fail the same way, nothing uploaded. Then send
+`raw ds target`: M4 from M3, `Raw == true`. Fresh work, `receive --auto -F
+--unmounted ds target restoredRaw`: `wantSnapshots(M1..M4)`, `wantGUIDs(M4)`,
+`compareDirs`. A new chain may change kind: `send --full` of M4 without
+`--raw` to a fourth bucket succeeds with `Raw == false` (one assertion; no
+restore needed).
 
 **N7, plaintext send of the encrypted dataset** (key loaded). `send --volsize
 1 --compressor "" ds@M1 target2`: `Raw == false`. Fresh work: `receive -F ds@M1
@@ -586,10 +621,91 @@ Break-the-test proofs:
   lands as an unencrypted dataset) and the "must fail" assertion fails.
 - N2: `zfs load-key -r root` before the plaintext send: it succeeds and the
   "must FAIL" assertion fails.
-- N6: assert `Raw` is `true` for all four. Must fail.
+- N6: run it against a tree without task 9 (`git stash` the task 9 commit in
+  the scratch copy): the plaintext send succeeds and the "must FAIL"
+  assertion fails.
 - N8: receive with another key's rings. Must fail.
 
-## Task 9: docs and napkin
+## Task 9: a chain keeps one stream kind (production change)
+
+Files: `backup/plan.go`, `backup/backup.go`, `backup/restore.go`,
+`backup/plan_fixtures.go`, tests and goldens as in Layout.
+
+Rule: an incremental backup must have the same `Raw` as the backup of its
+source at the destination. A full is a new chain: no check. Only `Raw` is
+compared; `-p`, `-R`, `-D` change bytes, not the stream's heritage.
+
+The error, one wording in every place, with a stable substring the tests
+assert on: `... would mix raw and plaintext streams ...`. Shape:
+
+```
+cannot continue the chain of <volume>: the backup of <source> was sent
+<with --raw|without --raw>, this run is <without --raw|with --raw>; it would
+mix raw and plaintext streams. Run with <the source's setting>, or start a
+new chain with --full.
+```
+
+1. **Planner** (`backup/plan.go`). A helper `sameStreamKind(jobInfo
+   *files.JobInfo, source *files.JobInfo) error` that returns the error above
+   when `source.Raw != jobInfo.Raw`. Call it before BOTH incremental returns
+   (`reasonExplicitIncremental`: source manifest `destBackups[0][0]`;
+   `reasonNewerCandidate`: the same, it is `lastBackup[0]`'s manifest). Check
+   every destination that has backups, not only index 0: the planner already
+   errors when their last backups differ, so one loop over `destBackups` is
+   enough. `complete-partial` needs no check: `copyManifest` → `sameStream`
+   covers it (fact 17). Update the doc comment: the planner reads the smart
+   options, `Raw`, and `VolumeName`.
+2. **Explicit `-i` sends** (`backup/backup.go`). `refuseMixedChain(ctx,
+   jobInfo, dests)`: when `jobInfo.IncrementalSnapshot.Name != ""`, for each
+   destination read its backups with `getBackupsForTarget` and find the
+   manifest whose `BaseSnapshot.Equal(&jobInfo.IncrementalSnapshot)` (name
+   and creation time; a bookmark keeps the snapshot's creation time). Found
+   and `Raw` differs → the error above. Not found at a destination → `Infof`
+   "no backup of <source> at <dest>; the stream kind cannot be checked there"
+   and go on: the user may have sent the full elsewhere. Call it in `Backup`
+   right after the `validateSnapShotExists` of the incremental snapshot
+   (which fills its creation time), before the pipeline. Smart sends run it
+   too: the manifests are in the cache by then, so it is one listing. Note
+   in the function's doc that `--dry-run` returns before the lock and does
+   not run it.
+3. **`receive --auto`** (`backup/restore.go`). In the `ParentSnap` walk of
+   `AutoRestore`, before `jobToRestore = jobToRestore.ParentSnap`: if
+   `jobToRestore.Raw != jobToRestore.ParentSnap.Raw`, `Errorf` and return an
+   error that holds `mix raw and plaintext` and names both backups. Nothing
+   is received before the walk ends, so no partial state.
+4. **Fixtures.** `parseManifest`: a trailing word `raw` on a line sets
+   `Raw: true` (`<base> raw`, `<source> to <base> raw`); any other extra word
+   stays an error. `loadFlags`: register `--raw` on the fixture flag set
+   (bound to `jobInfo.Raw`) so a flags file and `plan --raw` work.
+   `Scenario.run`: the manifest it records carries `Raw: jobInfo.Raw`.
+5. **Unit tests** (`backup/plan_test.go`): last backup raw + run plain →
+   error; last backup plain + run raw → error; raw + raw → incremental; a
+   `window-elapsed` full with the other flag → full, no error; two
+   destinations, one empty → no panic, the check uses the one with backups.
+6. **Goldens.** `raw-chain-kept`: manifests `m1 raw`, `m1 to m2 raw`, flags
+   `--raw --fullIfOlderThan 4320h --fullSnapshotSuffix _monthly
+   --incrementalSnapshotSuffix _monthly`, snapshots with m3 → `INCR m3 from
+   m2`. `raw-chain-flag-forgotten`: the same without `--raw` → the error
+   line. `make scenarios-update`, review the two new `expected.txt`.
+7. **e2e** (`e2e_raw_test.go`, fake zfs, `file://`): `send --raw --full`
+   of a; then smart send without `--raw` with b newer → error holds `mix raw
+   and plaintext`, the destination has one manifest; explicit `-i tank/data@a
+   tank/data@b` without `--raw` → the same; with `--raw` → b from a, two
+   manifests. `send --full` of b without `--raw` → a third manifest, `Raw
+   false` (a new chain). `receive --auto`: build a mixed destination by hand
+   with the manifest-writing helper of `TestE2EReceiveRejectsSubstitutedManifest`
+   (a raw full of a, a plaintext incremental a→b) and assert `receive --auto
+   tank/data` fails with `mix raw and plaintext` and `FAKEZFS_RECEIVE_LOG`
+   recorded no receive. `TestE2ESequenceMatchesPlanner` must still pass:
+   `plan` and `send` give the same error.
+8. `make test-docker`, `make scenarios`, `make lint`, `make fmt-check`.
+
+Break-the-test proofs (for a production change the proofs are the tests
+failing on the OLD code): run the unit test, the goldens and the e2e against
+a scratch copy without the change. Every "must fail" case must pass there
+(the mixed send succeeds). Record it in the commit message.
+
+## Task 10: docs and napkin
 
 Files: `integration/README.md`, `docs/context/testing.md`, `.claude/napkin.md`,
 `docs/runbook-first-backup.md`.
@@ -599,15 +715,25 @@ Files: `integration/README.md`, `docs/context/testing.md`, `.claude/napkin.md`,
 - `testing.md`, layer 4 and the `integration-docker` row: "thirteen
   `TestIntegrationS3*` tests" and one sentence per group (plain, GPG, native).
 - Runbook: one short section on native encryption: pass `--raw` on EVERY
-  run of a raw chain; the program does not check it (N6); a raw restore
-  needs `zfs load-key` with the sender's key (N4).
+  run of a raw chain; a run without it is refused (N6, task 9); a new chain
+  starts with `--full`; a raw restore needs `zfs load-key` with the sender's
+  key (N4).
+- `docs/context/send.md`: the planner table gets the row "incremental whose
+  `--raw` differs from its source's backup → error (mixed chain)"; the
+  `planSmartSnapshots` text says it reads `Raw` too. `receive.md`: step 5 of
+  `AutoRestore` refuses a chain whose links differ in `Raw`. `plan.md`: the
+  `raw` word in manifests files and `--raw` in flags.
 - Napkin: one line each for what the VM taught (A1 to A8 outcomes), and:
   "A test that restores with the sender's `work` proves nothing about the
-  manifest at the destination."
+  manifest at the destination." Replace the napkin line that says nothing
+  checks `--raw` across a chain.
 
 ## Order and commits
 
-One commit per task, 1 to 9. Tasks 2 to 8 depend on task 1's helpers only.
+One commit per task, 1 to 10. Run them in this order: 1, 9, 2, 3, 4, 5, 6,
+7, 8, 10. Task 9 is independent of the VM (`make test-docker` and `make
+scenarios` prove it) and task 8 step N6 needs it. Tasks 2 to 8 depend on
+task 1's helpers.
 Do task 1 first and run ALL six tests in the VM before task 2. Then one task
 at a time, each run in the VM before the next. `make integration-image` is
 the compile check between VM runs.
@@ -619,8 +745,11 @@ the compile check between VM runs.
   and the notes below say which and show the zfs output.
 - Every break-the-test proof failed as described and was undone; the commit
   messages say so.
+- Task 9's unit tests, goldens and e2e fail on the old code and pass on the
+  new; `make scenarios` is green with the two new goldens.
 - `make test-docker`, `make fmt-check` (after `git add`) and `make lint` pass.
-- The CHANGELOG lines and the docs of task 9 are in.
+- The CHANGELOG lines (task 9 gets `[CHANGE] send: ...` and `[CHANGE]
+  receive: ...`) and the docs of task 10 are in.
 
 ## Out of scope, noted for later
 
@@ -628,8 +757,11 @@ the compile check between VM runs.
   (task 2 step R3). Report; do not add it here.
 - `receive` defaulting to `-u`, or a warning, when the stream carries
   properties (task 5 step S2). Report; do not add it here.
-- `send` refusing an incremental whose `--raw` differs from the source
-  manifest's `Raw` (task 8 step N6). Report; do not add it here.
+- The same one-kind rule for `-p`, `-R`, `-D` and `--compressor zfs` (`-c`).
+  Task 9 covers `Raw` only. A follow-up may generalize `sameStreamKind` to
+  the whole `zfs send` flag set, as `sameStream` does for resume.
+- `--dry-run` of an explicit `-i` send does not run `refuseMixedChain` (it
+  returns before the lock and the backends).
 - Native encryption with `keyformat=passphrase` (a prompt; the test uses
   `raw` + a key file), `zfs change-key` between links, and a raw receive into
   a target whose parent is encrypted with ANOTHER key.
