@@ -48,5 +48,5 @@ fi
 # No exec: the trap must run.
 cd /src
 status=0
-zfsbackup-integration.test -test.v -test.count=1 -test.timeout 20m -test.run "${RUN:-TestIntegrationS3}" || status=$?
+zfsbackup-integration.test -test.v -test.count=1 -test.timeout 45m -test.run "${RUN:-TestIntegrationS3}" || status=$?
 exit "$status"

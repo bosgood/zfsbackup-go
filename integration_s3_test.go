@@ -23,13 +23,16 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +43,8 @@ import (
 
 	"github.com/someone1/zfsbackup-go/backup"
 	"github.com/someone1/zfsbackup-go/cmd"
+	"github.com/someone1/zfsbackup-go/config"
+	"github.com/someone1/zfsbackup-go/files"
 )
 
 // TestIntegrationS3 runs real zfs against the real s3:// backend: sanoid-style
@@ -298,10 +303,114 @@ func itReceive(t *testing.T, work string, args ...string) {
 	}
 }
 
-// itRun runs `zfsbackup <command>` as e2eEnv.run does. --maxRetryTime 2m: a
-// broken S3 fails the test in minutes, not the 12-hour default.
+// itRun runs `zfsbackup <command>` with the real zfs and returns its logs.
 func itRun(reset func(), command, work string, args ...string) (string, error) {
-	base := []string{command, "--zfsPath", "zfs", "--workingDirectory", work, "--logLevel", "debug", "--maxRetryTime", "2m"}
-	_, logs, err := (&e2eEnv{}).run(reset, append(base, args...)...)
+	_, logs, err := itRunOut(reset, command, work, "zfs", args...)
 	return logs, err
+}
+
+// itRunOut runs `zfsbackup <command>` as e2eEnv.run does, with zfsPath as the
+// zfs binary, and returns what it printed and logged. --maxRetryTime 2m (only
+// send and receive have it): a broken S3 fails the test in minutes, not the
+// 12-hour default.
+func itRunOut(reset func(), command, work, zfsPath string, args ...string) (out, logs string, err error) {
+	base := []string{command, "--zfsPath", zfsPath, "--workingDirectory", work, "--logLevel", "debug"}
+	if command == "send" || command == "receive" {
+		base = append(base, "--maxRetryTime", "2m")
+	}
+	return (&e2eEnv{}).run(reset, append(base, args...)...)
+}
+
+// itList runs `list --jsonOutput` and returns the backups it printed: by
+// dataset, oldest first. It fails the test on an error.
+func itList(t *testing.T, work string, args ...string) map[string][]*files.JobInfo {
+	t.Helper()
+	out, logs, err := itRunOut(cmd.ResetListJobInfo, "list", work, "zfs", append([]string{"--jsonOutput"}, args...)...)
+	if err != nil {
+		t.Fatalf("list %s: %v\n%s", strings.Join(args, " "), err, logs)
+	}
+	var got map[string][]*files.JobInfo
+	if err = json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("list %s printed no JSON: %v\n%s\n%s", strings.Join(args, " "), err, out, logs)
+	}
+	return got
+}
+
+// itClean runs clean and returns its logs. The bool flags leak between
+// in-process runs, so it passes each one; a value in args comes after and wins.
+func itClean(t *testing.T, work string, args ...string) (string, error) {
+	t.Helper()
+	base := []string{"--dry-run=false", "--force=false", "--cleanLocal=false"}
+	_, logs, err := itRunOut(cmd.ResetReceiveJobInfo, "clean", work, "zfs", append(base, args...)...)
+	return logs, err
+}
+
+// objectNames returns the keys under prefix in bucket, sorted, without the prefix.
+func objectNames(t *testing.T, client *s3.S3, bucket, prefix string) []string {
+	t.Helper()
+	var names []string
+	err := client.ListObjectsV2Pages(&s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String(prefix)},
+		func(page *s3.ListObjectsV2Output, _ bool) bool {
+			for _, o := range page.Contents {
+				names = append(names, strings.TrimPrefix(aws.StringValue(o.Key), prefix))
+			}
+			return true
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// putObject writes data to bucket at key.
+func putObject(t *testing.T, client *s3.S3, bucket, key string, data []byte) {
+	t.Helper()
+	if _, err := client.PutObject(&s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(key), Body: bytes.NewReader(data)}); err != nil {
+		t.Fatalf("could not put s3://%s/%s: %v", bucket, key, err)
+	}
+}
+
+// deleteObject deletes key in bucket.
+func deleteObject(t *testing.T, client *s3.S3, bucket, key string) {
+	t.Helper()
+	if _, err := client.DeleteObject(&s3.DeleteObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)}); err != nil {
+		t.Fatalf("could not delete s3://%s/%s: %v", bucket, key, err)
+	}
+}
+
+// cloneOf clones src@snap to <pool>/name, mounted at /<pool>/name, and returns
+// that path. Callers put the clone in destroyAfter before src.
+func cloneOf(t *testing.T, pool, src, snap, name string) string {
+	t.Helper()
+	clone := pool + "/" + name
+	zfsRun(t, "clone", "-o", "mountpoint=/"+clone, src+"@"+snap, clone)
+	return "/" + clone
+}
+
+// manifestFor returns the backup of src@snap at target, as the smart options
+// read it with work as the working directory. It fails the test if there is none.
+func manifestFor(t *testing.T, work, src, target, snap string) *files.JobInfo {
+	t.Helper()
+	old := config.WorkingDir
+	config.WorkingDir = work
+	defer func() { config.WorkingDir = old }()
+	var names []string
+	for _, b := range backupsAt(t, src, target) {
+		if b.BaseSnapshot.Name == snap {
+			return b
+		}
+		names = append(names, b.BaseSnapshot.Name)
+	}
+	t.Fatalf("no backup of %s@%s at %s; there are %v", src, snap, target, names)
+	return nil
+}
+
+// chainNames returns "base<-source" for each backup, oldest first: a full is "base<-".
+func chainNames(backups []*files.JobInfo) []string {
+	names := make([]string, 0, len(backups))
+	for _, b := range backups {
+		names = append(names, b.BaseSnapshot.Name+"<-"+b.IncrementalSnapshot.Name)
+	}
+	return names
 }

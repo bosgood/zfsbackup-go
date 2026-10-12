@@ -174,15 +174,23 @@ func scenarioFlags(t *testing.T, dir string) []string {
 // returns its newest backup.
 func newestBackup(t *testing.T, volume, target string) *files.JobInfo {
 	t.Helper()
+	backups := backupsAt(t, volume, target)
+	if len(backups) == 0 {
+		t.Fatalf("no backups at %s", target)
+	}
+	return backups[0]
+}
+
+// backupsAt reads the destination back as the smart options see it and
+// returns the backups of volume, newest first.
+func backupsAt(t *testing.T, volume, target string) []*files.JobInfo {
+	t.Helper()
 	jobInfo := &files.JobInfo{ManifestPrefix: "manifests", MaxParallelUploads: 1, MaxBackoffTime: time.Minute, MaxRetryTime: time.Minute}
 	backups, err := backup.BackupsAtTarget(context.Background(), volume, target, jobInfo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(backups) == 0 {
-		t.Fatalf("no backups at %s", target)
-	}
-	return backups[0]
+	return backups
 }
 
 // checkSent fails unless the newest backup at target is what plan sends.
