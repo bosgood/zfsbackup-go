@@ -510,6 +510,9 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 			return fmt.Errorf("selected incremental snapshot does not exist")
 		}
 	}
+	if err := refuseMixedChain(ctx, jobInfo); err != nil {
+		return err
+	}
 
 	startCh := make(chan *files.VolumeInfo, fileBufferSize) // Sent to ZFS command and meant to be closed when done
 	stepCh := make(chan *files.VolumeInfo, fileBufferSize)  // Used as input to first backend, closed when final manifest is sent through
@@ -734,6 +737,40 @@ func sameStream(ctx context.Context, original, current *files.JobInfo) error {
 	currentCMDLine := strings.Join(zfs.GetZFSSendCommand(ctx, current).Args, " ")
 	if oldCMDLine != currentCMDLine {
 		return mismatch("zfs send command", "`"+oldCMDLine+"`", "`"+currentCMDLine+"`")
+	}
+	return nil
+}
+
+// refuseMixedChain fails when an incremental would continue, at some destination, a backup of its
+// source sent with the other --raw setting (see MixedChainError). It runs after the incremental
+// snapshot was validated, which fills in its creation time. A destination without a backup of
+// the source is skipped with a note: the user may have sent the full elsewhere. Smart sends run
+// it too (their manifests are cached by then); --dry-run returns before it runs.
+func refuseMixedChain(ctx context.Context, jobInfo *files.JobInfo) error {
+	if jobInfo.IncrementalSnapshot.Name == "" {
+		return nil
+	}
+	for _, uri := range jobInfo.Destinations {
+		backups, err := getBackupsForTarget(ctx, jobInfo.VolumeName, uri, jobInfo)
+		if err != nil {
+			return err
+		}
+		var source *files.JobInfo
+		for _, b := range backups {
+			if b.BaseSnapshot.Equal(&jobInfo.IncrementalSnapshot) {
+				source = b
+				break
+			}
+		}
+		if source == nil {
+			log.AppLogger.Infof("No backup of %s at %s; the stream kind cannot be checked there.",
+				jobInfo.IncrementalSnapshot.Name, backends.RedactURI(uri))
+			continue
+		}
+		if err = MixedChainError(jobInfo.VolumeName, source, jobInfo.Raw); err != nil {
+			log.AppLogger.Errorf("%v.", err)
+			return err
+		}
 	}
 	return nil
 }

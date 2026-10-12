@@ -83,7 +83,7 @@ func (p Plan) String() string {
 // no I/O) so it can be unit-tested and simulated: all ZFS and backend state is
 // passed in. snapshots must be sorted newest-first, and destBackups[i] holds
 // the manifests found at destination i, also newest-first. It reads only the
-// smart options from jobInfo, and VolumeName for messages.
+// smart options and Raw from jobInfo, and VolumeName for messages.
 //
 // When FullSnapshotSuffix/IncrementalSnapshotSuffix are set, full backups are
 // anchored on the newest snapshot matching the full suffix (e.g. "_monthly")
@@ -195,6 +195,9 @@ func planSmartSnapshots(
 		if !incrBase.CreationTime.After(lastComparableSnapshots[0].CreationTime) {
 			return Plan{Action: PlanNoop, Reason: reasonNothingNewer}, nil
 		}
+		if err := sameStreamKind(jobInfo, destBackups); err != nil {
+			return Plan{}, err
+		}
 		return Plan{Action: PlanIncremental, Base: *incrBase, Source: *lastComparableSnapshots[0], Reason: reasonExplicitIncremental}, nil
 	}
 
@@ -270,7 +273,46 @@ func planSmartSnapshots(
 		}
 		return Plan{Action: PlanFull, Base: *fullBase, Source: source, Reason: reasonSourcePruned}, nil
 	}
+	if err := sameStreamKind(jobInfo, destBackups); err != nil {
+		return Plan{}, err
+	}
 	return Plan{Action: PlanIncremental, Base: *incrBase, Source: source, Reason: reasonNewerCandidate, FullDue: fullDue}, nil
+}
+
+// sameStreamKind fails when the incremental jobInfo plans would continue a chain whose last
+// backup at any destination was sent with the other --raw setting: a chain keeps one stream
+// kind, and only a full may change it. The incremental's source is each destination's newest
+// backup (the planner has already checked that they agree).
+func sameStreamKind(jobInfo *files.JobInfo, destBackups [][]*files.JobInfo) error {
+	for _, backups := range destBackups {
+		if len(backups) > 0 {
+			if err := MixedChainError(jobInfo.VolumeName, backups[0], jobInfo.Raw); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// MixedChainError is the error for an incremental, sent with raw or not, that continues from
+// the backup source: nil when both have the same stream kind. Every place that refuses a mixed
+// chain uses it, so the wording (and its "mix raw and plaintext" substring) is the same.
+func MixedChainError(volume string, source *files.JobInfo, raw bool) error {
+	if source.Raw == raw {
+		return nil
+	}
+	return fmt.Errorf(
+		"cannot continue the chain of %s: the backup of %s was sent %s, this run is %s; it would mix raw and plaintext "+
+			"streams. Run %s, or start a new chain with --full",
+		volume, source.BaseSnapshot.Name, withRaw(source.Raw), withRaw(raw), withRaw(source.Raw),
+	)
+}
+
+func withRaw(raw bool) string {
+	if raw {
+		return "with --raw"
+	}
+	return "without --raw"
 }
 
 // checkLastBackupsOnPool fails with ErrLastBackupInFuture when a destination's last backup is
@@ -427,11 +469,14 @@ func (s *Scenario) run(at time.Time, snapshots []files.SnapshotInfo, dest [][]*f
 		FullSnapshotSuffix:        s.JobInfo.FullSnapshotSuffix,
 		IncrementalSnapshotSuffix: s.JobInfo.IncrementalSnapshotSuffix,
 		Resume:                    s.JobInfo.Resume,
+		Raw:                       s.JobInfo.Raw,
 	}
 	plan, err := planSmartSnapshots(&jobInfo, snapshots, dest, s.Completable)
 	if err == nil && plan.Action != PlanNoop {
 		for i := range dest {
-			dest[i] = addManifest(dest[i], manifestFor(s.Volume, plan))
+			m := manifestFor(s.Volume, plan)
+			m.Raw = jobInfo.Raw
+			dest[i] = addManifest(dest[i], m)
 		}
 	}
 	return Step{At: at, Snapshots: snapshots, Plan: plan, Err: err}

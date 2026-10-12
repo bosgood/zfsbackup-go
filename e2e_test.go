@@ -348,6 +348,9 @@ func TestE2ENextRunScenarios(t *testing.T) {
 							args[1] = sc.Volume + "#" + source.Name
 						}
 					}
+					if m.Raw {
+						args = append(args, "--raw")
+					}
 					env.writeSnapshots(t, sc.Volume, pool)
 					if logs, err := env.send(append(args, sc.Volume+"@"+m.BaseSnapshot.Name, targets[d])...); err != nil {
 						t.Fatalf("creating %s at %s: %v\n%s", m.BaseSnapshot.Name, targets[d], err, logs)

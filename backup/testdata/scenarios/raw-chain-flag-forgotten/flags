@@ -1,0 +1,5 @@
+# The same run without --raw: it would put a plaintext incremental on the raw
+# chain, so the planner refuses it.
+--fullIfOlderThan=4320h
+--fullSnapshotSuffix=_monthly
+--incrementalSnapshotSuffix=_monthly

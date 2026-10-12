@@ -798,3 +798,27 @@ signed-only volumes → `starts with a *packet.OnePassSignature`; a new
 `restoredAll@daily3` → guid mismatch; Gzip without `--resume` → no `Resuming
 from volume 4: 3 of`; no `srcops2` send → the `nil`, `s*` and `--before`
 rows fail.
+
+### Task 9 (2026-10-11)
+
+Done in the order 1, 9, 2-8 as the revised plan says. Where the code differs:
+
+- One helper, `MixedChainError(volume, source, raw)` (`backup/plan.go`), holds
+  the wording for the planner and for `refuseMixedChain`. `AutoRestore` has
+  its own sentence (it names both backups and both settings); both hold
+  `mix raw and plaintext`.
+- `--raw` (`-w`) is registered in `ParseSmartFlags` and on `planCmd`, NOT in
+  `AddSmartFlags`: `send` registers `--raw` itself, so a shared registration
+  would define it twice.
+- `manifestFor(volume, plan)` keeps its signature (eight callers);
+  `Scenario.run` sets `Raw` on the manifest it records.
+- `TestE2ENextRunScenarios` replays each golden's manifests with real sends;
+  it now passes `--raw` for a `raw` line (it failed on the two new goldens).
+- e2e: `TestE2EChainKeepsStreamKind` (smart, explicit `-i`, a plaintext full
+  starts a new chain) and `TestE2EReceiveAutoRefusesMixedChain` (the mixed
+  chain made with `reforgeManifest`).
+
+Proofs on the old behavior (scratch copies, the three checks off, fixtures
+kept): the unit test fails 4 ways, `raw-chain-flag-forgotten` differs from its
+golden, both e2e tests fail (the mixed send and the mixed receive succeed).
+With only `refuseMixedChain` off, the explicit `-i` case fails by itself.

@@ -1,0 +1,5 @@
+# Production flags on a natively encrypted dataset: every run sends raw.
+--raw
+--fullIfOlderThan=4320h
+--fullSnapshotSuffix=_monthly
+--incrementalSnapshotSuffix=_monthly

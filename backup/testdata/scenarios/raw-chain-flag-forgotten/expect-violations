@@ -1,0 +1,2 @@
+# This scenario shows a run that fails: a run without --raw cannot continue a
+# raw chain. `plan` reports it as a violation (no-errors), as `send` would fail.

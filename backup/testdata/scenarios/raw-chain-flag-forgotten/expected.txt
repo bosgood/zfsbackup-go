@@ -1,0 +1,3 @@
+next  ERROR  cannot continue the chain of tank/data: the backup of autosnap_2026-09-01_00:00:00_monthly was sent with --raw, this run is without --raw; it would mix raw and plaintext streams. Run with --raw, or start a new chain with --full
+checks: 1 violation(s)
+  no-errors  cannot continue the chain of tank/data: the backup of autosnap_2026-09-01_00:00:00_monthly was sent with --raw, this run is without --raw; it would mix raw and plaintext streams. Run with --raw, or start a new chain with --full

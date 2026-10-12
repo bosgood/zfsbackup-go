@@ -188,6 +188,17 @@ func AutoRestore(pctx context.Context, jobInfo *files.JobInfo) error {
 			)
 			return errors.New("could not find parent snapshot")
 		}
+		// Nothing is received before the walk ends, so a refusal here leaves no partial state.
+		if jobToRestore.Raw != jobToRestore.ParentSnap.Raw {
+			err := fmt.Errorf(
+				"cannot restore the chain of %s: the backup of %s was sent %s, the backup of %s it continues from %s; "+
+					"restoring them would mix raw and plaintext streams",
+				jobInfo.VolumeName, jobToRestore.BaseSnapshot.Name, withRaw(jobToRestore.Raw),
+				jobToRestore.ParentSnap.BaseSnapshot.Name, withRaw(jobToRestore.ParentSnap.Raw),
+			)
+			log.AppLogger.Errorf("%v.", err)
+			return err
+		}
 		jobToRestore = jobToRestore.ParentSnap
 	}
 

@@ -426,6 +426,77 @@ func TestPlanSmartSnapshotsReasons(t *testing.T) {
 	}
 }
 
+// TestPlanSmartSnapshotsKeepsStreamKind checks that an incremental continues only a chain sent
+// with the same --raw setting, and that a full may change it.
+func TestPlanSmartSnapshotsKeepsStreamKind(t *testing.T) {
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	day := func(n int) time.Time { return base.Add(time.Duration(n) * 24 * time.Hour) }
+	asRaw := func(m *files.JobInfo) *files.JobInfo { m.Raw = true; return m }
+	smart := func(raw bool) files.JobInfo {
+		return files.JobInfo{
+			VolumeName: "tank/data", Raw: raw, FullIfOlderThan: 720 * time.Hour,
+			FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_monthly",
+		}
+	}
+	snapshots := []files.SnapshotInfo{snap("d3_monthly", day(3)), snap("d2_monthly", day(2)), snap("d1_monthly", day(1))}
+	rawChain := func() []*files.JobInfo {
+		return []*files.JobInfo{
+			asRaw(incrManifest(snap("d2_monthly", day(2)), snap("d1_monthly", day(1)))),
+			asRaw(fullManifest(snap("d1_monthly", day(1)))),
+		}
+	}
+	plainChain := func() []*files.JobInfo {
+		return []*files.JobInfo{
+			incrManifest(snap("d2_monthly", day(2)), snap("d1_monthly", day(1))),
+			fullManifest(snap("d1_monthly", day(1))),
+		}
+	}
+	explicit := files.JobInfo{VolumeName: "tank/data", Incremental: true, FullIfOlderThan: -1 * time.Minute}
+
+	for _, tc := range []struct {
+		name    string
+		jobInfo files.JobInfo
+		snaps   []files.SnapshotInfo
+		dest    []*files.JobInfo
+		want    PlanAction
+		wantErr bool
+	}{
+		{"raw chain, run without --raw", smart(false), snapshots, rawChain(), "", true},
+		{"plain chain, run with --raw", smart(true), snapshots, plainChain(), "", true},
+		{"raw chain, run with --raw", smart(true), snapshots, rawChain(), PlanIncremental, false},
+		{"plain chain, run without --raw", smart(false), snapshots, plainChain(), PlanIncremental, false},
+		{"explicit incremental onto a raw chain without --raw", explicit, snapshots, rawChain(), "", true},
+		{
+			"window elapsed: a full may change the kind",
+			func() files.JobInfo { j := smart(false); j.FullIfOlderThan = time.Hour; return j }(),
+			snapshots, rawChain(), PlanFull, false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ji := tc.jobInfo
+			got, err := planSmartSnapshots(&ji, tc.snaps, [][]*files.JobInfo{tc.dest}, false)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "mix raw and plaintext") {
+					t.Fatalf("got %+v, %v; want an error that holds \"mix raw and plaintext\"", got, err)
+				}
+				return
+			}
+			if err != nil || got.Action != tc.want {
+				t.Fatalf("got %+v, %v; want a %s plan", got, err, tc.want)
+			}
+		})
+	}
+
+	// Two destinations, one empty: the check reads the one with backups.
+	dests := [][]*files.JobInfo{{}, rawChain()}
+	if err := sameStreamKind(&files.JobInfo{Raw: true}, dests); err != nil {
+		t.Errorf("raw run, raw chain at destination 2: %v", err)
+	}
+	if err := sameStreamKind(&files.JobInfo{}, dests); err == nil || !strings.Contains(err.Error(), "mix raw and plaintext") {
+		t.Errorf("plain run, raw chain at destination 2: got %v, want a mixed-chain error", err)
+	}
+}
+
 // A run cannot see snapshots created after it, even when a simulation starts
 // before the newest snapshot it was given.
 func TestRunSeesOnlyPastSnapshots(t *testing.T) {

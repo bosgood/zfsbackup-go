@@ -1,0 +1,3 @@
+# A raw chain: both backups were sent with --raw.
+autosnap_2026-08-01_00:00:00_monthly raw
+autosnap_2026-08-01_00:00:00_monthly to autosnap_2026-09-01_00:00:00_monthly raw

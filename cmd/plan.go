@@ -79,6 +79,13 @@ func init() {
 		false,
 		"plan as \"send --resume\" would: complete a backup set missing at some destinations even where its volumes are not all there.",
 	)
+	planCmd.Flags().BoolVarP(
+		&jobInfo.Raw,
+		"raw",
+		"w",
+		false,
+		"plan as \"send --raw\" would: an incremental must continue a chain sent with --raw.",
+	)
 	planCmd.Flags().StringVar(
 		&planSnapshots,
 		"snapshots",
@@ -92,7 +99,8 @@ func init() {
 		"manifests",
 		"",
 		"read the backups already at the destinations from this file instead of destination URIs: one \"<base>\" (full) or "+
-			"\"<source> to <base>\" (incremental) per line, with \"---\" between destinations.",
+			"\"<source> to <base>\" (incremental) per line, with a trailing \"raw\" for a backup sent with --raw, and \"---\" "+
+			"between destinations.",
 	)
 	planCmd.Flags().StringVar(
 		&planSchedule,

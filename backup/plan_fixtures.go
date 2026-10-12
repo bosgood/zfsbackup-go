@@ -45,7 +45,7 @@ const defaultScenarioVolume = "tank/data"
 // optionally, how the pool changes between runs.
 type Scenario struct {
 	Volume      string
-	JobInfo     files.JobInfo        // only the smart options are read
+	JobInfo     files.JobInfo        // only the smart options and Raw are read
 	Snapshots   []files.SnapshotInfo // newest-first, as zfs list -S creation returns them
 	DestBackups [][]*files.JobInfo   // per destination, newest-first
 	// CaptureDataset is the dataset a --snapshots listing names, when its
@@ -228,6 +228,8 @@ func ParseSmartFlags(r io.Reader) (files.JobInfo, error) {
 	fs := pflag.NewFlagSet("flags", pflag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	AddSmartFlags(fs, &j)
+	// Not a smart option, but the planner reads it: an incremental keeps its chain's stream kind.
+	fs.BoolVarP(&j.Raw, "raw", "w", false, "the runs send raw streams (zfs send -w)")
 	if err := fs.Parse(args); err != nil {
 		return j, err
 	}
@@ -354,8 +356,8 @@ func formatTimes(times []time.Time) string {
 // `<source> to <base>`. A line of `---` starts the next destination. A name
 // may be followed by its creation epoch; otherwise its creation time comes from
 // the scenario's snapshots or, failing that, from the sanoid timestamp in the
-// name, so pruned snapshots need no entry in the snapshot list. Call
-// ReadSnapshots first.
+// name, so pruned snapshots need no entry in the snapshot list. A trailing word
+// `raw` marks a backup sent with --raw. Call ReadSnapshots first.
 func (s *Scenario) ReadManifests(r io.Reader) error {
 	dests := [][]*files.JobInfo{{}}
 	scanner := bufio.NewScanner(r)
@@ -387,6 +389,10 @@ func (s *Scenario) ReadManifests(r io.Reader) error {
 func (s *Scenario) parseManifest(line string) (*files.JobInfo, error) {
 	fields := strings.Fields(line)
 	manifest := &files.JobInfo{VolumeName: s.Volume}
+	if n := len(fields); n > 1 && fields[n-1] == "raw" {
+		manifest.Raw = true
+		fields = fields[:n-1]
+	}
 	baseFields := fields
 	for i, field := range fields {
 		if field != "to" {
