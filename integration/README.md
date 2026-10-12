@@ -13,8 +13,20 @@ the real `zfs` against the real `s3://` backend:
 4. Subtest `Pipe`: `send` and `receive` with `--maxFileBuffer 0` (S3 multipart
    upload from a pipe, and a download into a pipe).
 
-The S3 server is MinIO in a second container. The test makes its own buckets
-and deletes them.
+The other `TestIntegrationS3*` tests run in the same environment:
+
+| `RUN=` | Covers |
+|---|---|
+| `TestIntegrationS3` | the steps above (`integration_s3_test.go`) |
+| `TestIntegrationS3Chain` | full, then 2 incrementals; restore of the middle link (fails without `--auto`), then of the newest; the whole chain into an empty dataset |
+| `TestIntegrationS3EncryptedChain` | the same chain, encrypted and signed; `list` and `receive` with the right key, another key, no key |
+| `TestIntegrationS3Bookmark` | an incremental from a bookmark, found by the smart options and named with `-i dataset#name`; restore of the chain |
+| `TestIntegrationS3ListClean` | `list` filters; `clean` dry-run, an orphan volume, an unrecognized object, `--force` on a broken set |
+| `TestIntegrationS3Resume` | a `zfs send` cut mid-stream (a bash wrapper as `--zfsPath`); `clean` spares the uploaded volumes; `--resume` after the cut, after a lost volume, after a lost manifest |
+
+The S3 server is MinIO in a second container. Each test makes its own bucket
+and deletes it. All tests together take about a minute; the test binary runs
+with `-test.timeout 45m`.
 
 ## The host needs the zfs kernel module
 
@@ -40,7 +52,9 @@ container. Docker makes the directory when it is missing.
 | Linux host with the zfs module and Docker | `make integration-docker` |
 | CI (`ubuntu-24.04` runner) | `sudo apt-get install zfsutils-linux`, then `make integration-docker` |
 
-`RUN` selects tests: `make integration-vm RUN=TestIntegrationS3/Pipe`.
+`RUN` selects tests (a `go test -run` pattern; the default runs all
+`TestIntegrationS3*`): `make integration-vm RUN=TestIntegrationS3Resume`, or
+`RUN=TestIntegrationS3/Pipe` for one subtest.
 
 On a Linux host the image's zfs userland (Ubuntu 24.04, zfs 2.2) must match
 the host's module. Use an Ubuntu 24.04 host, or set `ZFS_USERLAND` as the VM

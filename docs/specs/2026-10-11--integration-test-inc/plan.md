@@ -426,3 +426,39 @@ the compile check between VM runs.
   kills the stream, not the process; `e2e_signal_test.go` covers the signal.
 - A chain longer than 4 links, and a `--fullIfOlderThan` window that elapses
   for real. The golden scenarios cover the planner.
+
+## Execution notes (2026-10-11)
+
+All six `TestIntegrationS3*` tests pass in `make integration-vm` twice in a
+row (zfs 2.4.4, MinIO). Together they take about 40 s.
+
+Where the code differs from the plan:
+
+- **Task 1.** `--maxRetryTime` exists on `send` and `receive` only; `itRunOut`
+  adds it for those two. `manifestFor` reads with `backupsAt`, the reader that
+  `newestBackup` now calls (`e2e_test.go`). `buildChain` registers
+  `destroyAfter(clone, src)` itself; callers register only what they restore.
+- **Tasks 2, 3.** `buildChain` checks each link with `itList` (key flags
+  included), not `newestBackup`: an encrypted manifest needs the rings.
+- **Task 4.** Break proof: without the bookmark the smart send is a noop
+  (`source-pruned`, no newer `_monthly`), not a full. The test fails either
+  way: the daily3 send never happens.
+- **Task 6.** Two changes.
+  1. The wrapper stalls 5 s after the cut, then fails. Without the stall the
+     stream died before volume 1 finished its S3 upload; the failure cancels
+     uploads in flight, so nothing was cached and nothing could resume
+     (seen on the first VM run). A failed `zfs send` keeps only volumes whose
+     upload finished before the failure. That is production behavior, not
+     changed here.
+  2. Step 3 as written cannot pass: `clean` refuses a destination with
+     objects but no manifests even when the cache holds a partial. The test
+     first sends a small full of an earlier snapshot. Then `clean --dry-run`
+     with the cache deletes 0 objects, and with a fresh working directory it
+     would delete exactly the 2 partial volumes.
+- **Resume assumption holds.** `--resume` on real ZFS accepted the volumes of
+  the cut attempt (`Resuming from volume 3: 2 of 2`).
+
+Break proofs, each run in a scratch copy and failing as planned: chain middle
+link with daily3 expected; a changed `c.bin`; encrypted receive with another
+key's rings; no bookmark; no orphan; `notes.txt` deleted by hand; resume
+without `--resume`; a cut at 512 KiB (no complete volume).

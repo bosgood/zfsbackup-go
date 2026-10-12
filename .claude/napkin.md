@@ -67,6 +67,11 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - In-process cobra runs: a subcommand keeps the context of its FIRST run (cobra sets it only when nil). `cmd.Run` resets it; use it, not `RootCmd.ExecuteContext`.
 - A test that sends a real signal: `cmd.SignalContext` BEFORE `syscall.Kill`, never two signals outside `exitFunc` tests.
 - The file:// backend writes a volume under its final name from the first byte. "Volume done" = a cached partial manifest (`<work>/cache/*/*`), not the object.
+- Fault injection with real zfs: a bash wrapper as `--zfsPath` cuts one `zfs send` (`flakyZFS` in `integration_s3_resume_test.go`); `zfs send -n -P` must pass through. It must STALL before it fails: a failed stream cancels uploads in flight, and on S3 a stream that dies at once leaves 0 volumes to resume.
+- `--resume` on real ZFS accepts the volumes of the cut attempt: `zfs send` of one snapshot gives the same bytes each run (checked 2026-10-11, zfs 2.4.4).
+- `--maxRetryTime` exists on send and receive only; list and clean reject it (`itRunOut` adds it for those two).
+- clean refuses a destination with objects but 0 manifests even when the cache holds a partial. To test that the partial protects its volumes, put a complete backup there first.
+- Smart send, last backup's snapshot destroyed with no bookmark, no newer `_monthly`: a NOOP (`source-pruned`), not a full.
 
 ## Git and a shared tree
 - Another session can edit this tree at the same time. Run `git status` right before staging; stage BY NAME, never `git add -A`.
@@ -97,6 +102,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - `dev.nix`: bump `rev`, set `hash = lib.fakeHash`, build, paste the "got:" hash. The user must run nix.
 
 ## Open plans
+- `docs/specs/2026-10-11--integration-test-inc/`: EXECUTED 2026-10-11; five more TestIntegrationS3* tests; notes at the end of its plan.md.
 - `docs/specs/2026-10-11--deps-upgrade/`: plan written 2026-10-11, unexecuted. Blocked on one answer: does the user's nixpkgs have `go_1_26`?
 - `docs/specs/2026-10-11--integration-test-env/`: EXECUTED 2026-10-11 (d426bec..); NixOS VM instead of Ubuntu; notes at the end of its plan.md.
 - `docs/specs/2026-10-11--sigterm-handling/`: EXECUTED 2026-10-11 (a2c0636..069eeba); notes at the end of its plan.md.
