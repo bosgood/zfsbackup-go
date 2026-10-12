@@ -336,6 +336,9 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 
 	manifest, err := readCachedManifest(ctx, jobInfo, localCachePath, backend, jobInfo.ManifestObjectName())
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			explainMissingManifest(ctx, jobInfo, localCachePath, backend)
+		}
 		log.AppLogger.Errorf("Error trying to retrieve manifest volume - %v", err)
 		return err
 	}
@@ -497,6 +500,58 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 	noteReceivedMountpoint(pctx, jobInfo, manifest, volume)
 	log.AppLogger.Noticef("Done. Elapsed Time: %v", time.Since(jobInfo.StartTime))
 	return nil
+}
+
+// explainMissingManifest says, when the destination has no manifest of the backup the flags
+// name, which backups of that snapshot it does have and the flags that name each: the usual
+// cause is an incremental received without -i, or a full with it. Its errors are warnings:
+// the receive fails on the missing manifest whatever this finds.
+func explainMissingManifest(ctx context.Context, j *files.JobInfo, localCache string, backend backends.Backend) {
+	target := backends.RedactURI(j.Destinations[0])
+	asked := "full backup"
+	if j.IncrementalSnapshot.Name != "" {
+		asked = "incremental backup from " + j.IncrementalSnapshot.Name
+	}
+	names, _, err := syncCache(ctx, j, localCache, backend)
+	if err != nil {
+		log.AppLogger.Warningf("Could not list the backups at %s to say what it holds: %v", target, err)
+		return
+	}
+	ours := names[:0]
+	for _, name := range names {
+		if manifestMayBeFor(name, j.ManifestPrefix, j.VolumeName) {
+			ours = append(ours, name)
+		}
+	}
+	manifests, err := readAndSortManifests(ctx, j, localCache, backend, ours)
+	if err != nil {
+		log.AppLogger.Warningf("Could not read the backups at %s to say what it holds: %v", target, err)
+		return
+	}
+	var holds []string
+	for _, m := range manifests {
+		if m.VolumeName != j.VolumeName || m.BaseSnapshot.Name != j.BaseSnapshot.Name {
+			continue
+		}
+		if m.IncrementalSnapshot.Name == "" {
+			holds = append(holds, "a full backup (run again without -i)")
+		} else {
+			holds = append(holds, fmt.Sprintf("an incremental backup from %s (run again with -i %s)",
+				m.IncrementalSnapshot.Name, m.IncrementalSnapshot.Name))
+		}
+	}
+	snapshot := j.VolumeName + "@" + j.BaseSnapshot.Name
+	if len(holds) == 0 {
+		log.AppLogger.Errorf(
+			"No %s of %s at %s, and no other backup of it: zfsbackup list %s shows what is there.",
+			asked, snapshot, target, target,
+		)
+		return
+	}
+	log.AppLogger.Errorf(
+		"No %s of %s at %s. It has %s. Or receive --auto picks the chain itself.",
+		asked, snapshot, target, strings.Join(holds, " and "),
+	)
 }
 
 // streamHasMountpoint returns whether the stream of manifest may carry a mountpoint: it was

@@ -359,6 +359,10 @@ func (a *AWSS3Backend) classifyRestores(
 			Key:    aws.String(a.prefix + rel),
 		})
 		if err != nil {
+			// HeadObject says "NotFound", not NoSuchKey, for a key that is not there.
+			if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == "NotFound" || aerr.Code() == s3.ErrCodeNoSuchKey) {
+				return nil, nil, 0, &notFoundError{err}
+			}
 			return nil, nil, 0, err
 		}
 		totalBytes += aws.Int64Value(heads[i].ContentLength)
