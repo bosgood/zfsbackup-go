@@ -343,6 +343,26 @@ func GetZFSProperty(ctx context.Context, prop, target string) (string, error) {
 	return strings.TrimSpace(b.String()), nil
 }
 
+// GetMountpoint returns the mountpoint property of dataset and where it comes from ("local",
+// "received", "default", "inherited from ..."): a zvol has "-" for both. A send with properties
+// carries a local or received mountpoint; an inherited one is not in the stream.
+func GetMountpoint(ctx context.Context, dataset string) (value, source string, err error) {
+	b := new(bytes.Buffer)
+	errB := new(bytes.Buffer)
+	cmd := exec.CommandContext(ctx, ZFSPath, "get", "-H", "-o", "value,source", "mountpoint", dataset)
+	log.AppLogger.Debugf("Getting ZFS mountpoint with command \"%s\"", strings.Join(cmd.Args, " "))
+	cmd.Stdout = b
+	cmd.Stderr = errB
+	if err = cmd.Run(); err != nil {
+		return "", "", fmt.Errorf("%s (%v)", strings.TrimSpace(errB.String()), err)
+	}
+	fields := strings.SplitN(strings.TrimSpace(b.String()), "\t", 2)
+	if len(fields) != 2 {
+		return "", "", fmt.Errorf("unexpected zfs get output %q", b.String())
+	}
+	return fields[0], fields[1], nil
+}
+
 // GetSnapshotGUID returns the guid of volume's snapshot (or bookmark) snap.
 func GetSnapshotGUID(ctx context.Context, volume string, snap *files.SnapshotInfo) (string, error) {
 	sep := "@"

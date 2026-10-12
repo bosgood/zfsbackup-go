@@ -383,6 +383,10 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 		}
 	}
 
+	if err = refuseMountOverSource(ctx, jobInfo, manifest, volume); err != nil {
+		return err
+	}
+
 	manifest.ManifestPrefix = jobInfo.ManifestPrefix
 	manifest.SignKey = jobInfo.SignKey
 	manifest.TrustedSignKeys = jobInfo.TrustedSignKeys
@@ -489,8 +493,67 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 		return err
 	}
 
+	// pctx: the errgroup canceled ctx when Wait returned.
+	noteReceivedMountpoint(pctx, jobInfo, manifest, volume)
 	log.AppLogger.Noticef("Done. Elapsed Time: %v", time.Since(jobInfo.StartTime))
 	return nil
+}
+
+// streamHasMountpoint returns whether the stream of manifest may carry a mountpoint: it was
+// sent with --properties or --replication.
+func streamHasMountpoint(manifest *files.JobInfo) bool {
+	return manifest.Properties || manifest.Replication
+}
+
+// mounts returns whether a dataset with this mountpoint property is mounted by zfs mount -a or
+// at import: "none" and "legacy" are not, nor is a zvol's "-".
+func mounts(mountpoint string) bool {
+	return mountpoint != "none" && mountpoint != "legacy" && mountpoint != "-"
+}
+
+// refuseMountOverSource refuses a receive that would mount the restored dataset over the live
+// one: the stream carries the source's mountpoint, the source is on this host with a mountpoint
+// of its own (local or received: an inherited one is not in the stream), the target is another
+// dataset, and --unmounted is not set. Only --unmounted lifts it: -F means a rollback, and a
+// user who asked for that did not ask for a mount over live data.
+func refuseMountOverSource(ctx context.Context, jobInfo, manifest *files.JobInfo, volume string) error {
+	if !streamHasMountpoint(manifest) || jobInfo.NotMounted || volume == manifest.VolumeName {
+		return nil
+	}
+	mountpoint, source, err := zfs.GetMountpoint(ctx, manifest.VolumeName)
+	if err != nil {
+		log.AppLogger.Debugf("%s is not on this host (%v): the received mountpoint cannot hide it.", manifest.VolumeName, err)
+		return nil
+	}
+	if !mounts(mountpoint) || (source != "local" && source != "received") {
+		return nil
+	}
+	log.AppLogger.Errorf(
+		"The backup of %s was sent with its properties, so its stream sets the mountpoint of %s to the source's "+
+			"(now %s), and %s is on this host. Receiving it without --unmounted would mount %s over %s and hide "+
+			"the live data. Run again with --unmounted, then move the restored dataset (zfs set mountpoint=<another "+
+			"path> %s) before a reboot or zfs mount -a mounts it there.",
+		manifest.VolumeName, volume, mountpoint, manifest.VolumeName, volume, mountpoint, volume,
+	)
+	return fmt.Errorf("refusing to mount %s over %s", volume, manifest.VolumeName)
+}
+
+// noteReceivedMountpoint says, after a receive with --unmounted of a stream that carries a
+// mountpoint, where the restored dataset mounts next time something mounts it: --unmounted
+// skips the mount once, it does not change the property.
+func noteReceivedMountpoint(ctx context.Context, jobInfo, manifest *files.JobInfo, volume string) {
+	if !streamHasMountpoint(manifest) || !jobInfo.NotMounted {
+		return
+	}
+	mountpoint, source, err := zfs.GetMountpoint(ctx, volume)
+	if err != nil || source != "received" || !mounts(mountpoint) {
+		return
+	}
+	log.AppLogger.Noticef(
+		"%s is not mounted, and its mountpoint from the stream is %s. A reboot or zfs mount -a mounts it there: "+
+			"set another one first (zfs set mountpoint=<path> %s) if that path is in use.",
+		volume, mountpoint, volume,
+	)
 }
 
 // downloadSequenceVolume downloads one volume, with retries, and closes its sequence's channel once

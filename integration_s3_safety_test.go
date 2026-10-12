@@ -92,13 +92,18 @@ func TestIntegrationS3ReceiveSafety(t *testing.T) {
 	t.Logf("S2: %s mountpoint %s (source %s)", restoredP,
 		zfsGet(t, restoredP, "mountpoint"), strings.TrimSpace(zfsRun(t, "get", "-H", "-o", "source", "mountpoint", restoredP)))
 
+	// Without --unmounted the receive is refused before zfs receive runs: the restored dataset
+	// would mount over src.
 	t.Run("Mounted", func(t *testing.T) {
 		logs, err := itRun(cmd.ResetReceiveJobInfo, "receive", t.TempDir(), "--unmounted=false", "-F", src+"@"+m1, target2, restoredP2)
-		t.Logf("S2 Mounted: receive without --unmounted: %v", err)
+		if err == nil {
+			t.Errorf("receive of a --properties stream without --unmounted succeeded, want a refusal:\n%s", logs)
+		}
+		if !strings.Contains(logs, "--unmounted") {
+			t.Errorf("want the error to say to use --unmounted:\n%s", logs)
+		}
 		if exec.Command("zfs", "list", restoredP2).Run() == nil {
-			t.Logf("S2 Mounted: %s mountpoint %s, mounted %s", restoredP2, zfsGet(t, restoredP2, "mountpoint"), zfsGet(t, restoredP2, "mounted"))
-		} else {
-			t.Logf("S2 Mounted: no dataset %s:\n%s", restoredP2, logs)
+			t.Errorf("S2 Mounted: %s exists (mountpoint %s, mounted %s), want no dataset", restoredP2, zfsGet(t, restoredP2, "mountpoint"), zfsGet(t, restoredP2, "mounted"))
 		}
 		if !exists(after) {
 			t.Errorf("%s is hidden: the received dataset mounted over the live one", after)

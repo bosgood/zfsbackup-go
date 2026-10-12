@@ -150,7 +150,12 @@ func list(args []string, stdout io.Writer) error {
 // get: get -H -p -o value creation|guid <dataset>[@snapshot|#bookmark]. A snapshot's guid is
 // derived from its name and creation time, so a snapshot recreated under the same name gets a
 // new one; a bookmark has its snapshot's guid.
+// Also get -H -o value,source mountpoint <dataset>: the mountpoint is /<dataset>, and its source
+// is what FAKEZFS_MOUNTPOINTS (comma-separated dataset=source entries) says, else "default".
 func get(args []string, stdout io.Writer) error {
+	if dataset, ok := trailingArg(args, "-H", "-o", "value,source", "mountpoint"); ok {
+		return getMountpoint(dataset, stdout)
+	}
 	if len(args) != 6 || (args[4] != "creation" && args[4] != "guid") {
 		return errUnexpected
 	}
@@ -182,6 +187,23 @@ func get(args []string, stdout io.Writer) error {
 		return err
 	}
 	_, err = fmt.Fprintln(stdout, s.CreationTime.Unix())
+	return err
+}
+
+func getMountpoint(dataset string, stdout io.Writer) error {
+	if strings.ContainsAny(dataset, "@#") {
+		return errUnexpected
+	}
+	if _, err := datasetSnapshots(dataset); err != nil {
+		return err
+	}
+	source := "default"
+	for _, entry := range strings.Split(os.Getenv("FAKEZFS_MOUNTPOINTS"), ",") {
+		if name, s, found := strings.Cut(entry, "="); found && name == dataset {
+			source = s
+		}
+	}
+	_, err := fmt.Fprintf(stdout, "/%s\t%s\n", dataset, source)
 	return err
 }
 

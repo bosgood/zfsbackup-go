@@ -50,6 +50,7 @@ A pure-Go `zfs`. The test binary becomes the fake when `FAKEZFS=1` (`RunIfReques
 | `FAKEZFS_RECEIVE_UNKNOWN` | file of `dataset@name` lines; a received stream that matches no fixture snapshot (a shim's) takes the first line |
 | `FAKEZFS_DRYRUN_OUTPUT` | replaces `zfs send -n -P` output |
 | `FAKEZFS_LOG` | one line per invocation |
+| `FAKEZFS_MOUNTPOINTS` | `dataset=source` entries, comma-separated: the source `zfs get mountpoint` reports (`local`, `received`); others are `default`. The value is always `/<dataset>` |
 
 `zfs receive` adds the snapshot it received to `FAKEZFS_SNAPSHOTS` (as `-d`/`-e` map the name, with the sent creation time), as real zfs lists it afterwards. It finds the snapshot by comparing the stream with what `zfs send` writes for each fixture snapshot, with the current `FAKEZFS_STREAM_SALT`. A second receive of the same snapshot is an error. A test that receives one snapshot again must put the fixture back (see `checkRestores`).
 
