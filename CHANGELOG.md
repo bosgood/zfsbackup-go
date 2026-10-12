@@ -1,5 +1,6 @@
 # CHANGELOG
 
+* [ADD] test: TestIntegrationS3TwoDestinations: one send to two S3 prefixes; complete-partial without re-upload; out-of-sync destinations refused; each restores on its own
 * [ADD] test: TestIntegrationS3ReceiveSafety: receive without -F onto a changed dataset, --properties with and without --unmounted, --origin; the last two are red: they show a restore mounted over the live dataset and --origin refused
 * [ADD] test: TestIntegrationS3EncryptedResume: a cut send and --resume with GPG rings; re-sent volumes get new ciphertext; a tampered volume fails the restore; an encrypted incremental from a bookmark
 * [ADD] test: TestIntegrationS3ProdShape: production flags, 3-way creation ties, a 5-part dataset name, --snapshotPrefix, receive --fullPath and --lastPath, on real zfs + S3
