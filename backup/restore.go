@@ -124,19 +124,12 @@ func AutoRestore(pctx context.Context, jobInfo *files.JobInfo) error {
 	}
 
 	if jobInfo.Origin != "" {
-		originSnapshot, oerr := zfs.GetSnapshotsAndBookmarks(ctx, jobInfo.Origin)
+		// The origin snapshot is one the restore can start from
+		origin, oerr := originSnapshot(ctx, jobInfo.Origin)
 		if oerr != nil {
-			log.AppLogger.Errorf("Could not get origin snapshot %s info due to error: %v", jobInfo.Origin, oerr)
 			return oerr
 		}
-
-		if len(originSnapshot) == 1 {
-			// The origin snapshot can be added as an existing snapshot we can start the restore from
-			snapshots = append(snapshots, originSnapshot[0])
-		} else {
-			log.AppLogger.Errorf("Could not find origin snapshot %s", jobInfo.Origin)
-			return fmt.Errorf("could not find origin snapshot %s", jobInfo.Origin)
-		}
+		snapshots = append(snapshots, origin)
 	}
 
 	// Find the backup of the snapshot we want to restore to: the one that applies to what is here
@@ -285,6 +278,21 @@ func localSnapshotMismatch(volume string, snap *files.SnapshotInfo, local []file
 	return ""
 }
 
+// originSnapshot lists the snapshot --origin names (dataset@snapshot), for the checks that need
+// the creation time of what zfs receive -o origin= will clone.
+func originSnapshot(ctx context.Context, origin string) (files.SnapshotInfo, error) {
+	listed, err := zfs.GetSnapshotsAndBookmarks(ctx, origin)
+	if err != nil {
+		log.AppLogger.Errorf("Could not get origin snapshot %s info due to error: %v", origin, err)
+		return files.SnapshotInfo{}, err
+	}
+	if len(listed) != 1 {
+		log.AppLogger.Errorf("Could not find origin snapshot %s", origin)
+		return files.SnapshotInfo{}, fmt.Errorf("could not find origin snapshot %s", origin)
+	}
+	return listed[0], nil
+}
+
 // sourceIsLocal returns whether the incremental backup b is from a snapshot in local.
 func sourceIsLocal(b *files.JobInfo, local []files.SnapshotInfo) bool {
 	source := b.IncrementalSnapshot // a copy: the check records whether it matched a bookmark
@@ -355,11 +363,21 @@ func Receive(pctx context.Context, jobInfo *files.JobInfo) error {
 	}
 
 	// Check that we have the parent snapshot this wants to restore from. In --auto, an earlier
-	// step of the chain received it, and the listing above shows it.
+	// step of the chain received it, and the listing above shows it. With --origin, zfs receive
+	// clones that snapshot of another dataset and applies the stream to the clone: it is the
+	// source then, and the target need not exist.
 	if manifest.IncrementalSnapshot.Name != "" {
+		sources := local
+		if jobInfo.Origin != "" {
+			origin, oerr := originSnapshot(ctx, jobInfo.Origin)
+			if oerr != nil {
+				return oerr
+			}
+			sources = append(append([]files.SnapshotInfo(nil), local...), origin)
+		}
 		source := manifest.IncrementalSnapshot // a copy: the check records whether it matched a bookmark
-		if !validateSnapShotExistsFromSnaps(&source, local, false) {
-			noteLocalSnapshotMismatch(volume, &manifest.IncrementalSnapshot, local)
+		if !validateSnapShotExistsFromSnaps(&source, sources, false) {
+			noteLocalSnapshotMismatch(volume, &manifest.IncrementalSnapshot, sources)
 			log.AppLogger.Errorf("Selected incremental snapshot does not exist!")
 			return fmt.Errorf("selected incremental snapshot does not exist")
 		}

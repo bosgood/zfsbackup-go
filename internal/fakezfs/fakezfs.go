@@ -119,9 +119,21 @@ func list(args []string, stdout io.Writer) error {
 	if !ok {
 		return errUnexpected
 	}
+	// A snapshot or bookmark as the target lists only itself, as real zfs does.
+	ref := ""
+	if i := strings.IndexAny(dataset, "@#"); i >= 0 {
+		dataset, ref = dataset[:i], dataset
+	}
 	snaps, err := datasetSnapshots(dataset)
 	if err != nil {
 		return err
+	}
+	if ref != "" {
+		s, lerr := lookup(dataset, ref, snaps)
+		if lerr != nil {
+			return lerr
+		}
+		snaps = []files.SnapshotInfo{s}
 	}
 	for _, s := range snaps {
 		kind, sep := "snapshot", "@"
