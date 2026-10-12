@@ -79,6 +79,10 @@ linters:
       - linters:
           - staticcheck
         text: 'SA1019: "golang.org/x/crypto/openpgp'
+      # aws-sdk-go v1 is deprecated (end of support 2025-07-31). The v2 migration is its own spec.
+      - linters:
+          - staticcheck
+        text: 'SA1019: "github.com/aws/aws-sdk-go'
     paths:
       - third_party$
       - builtin$

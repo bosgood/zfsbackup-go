@@ -152,6 +152,9 @@ func buildCanonicalizedResource(accountName, uri string, keyType SharedKeyType) 
 		// the resource's URI should be encoded exactly as it is in the URI.
 		// -- https://msdn.microsoft.com/en-gb/library/azure/dd179428.aspx
 		cr.WriteString(u.EscapedPath())
+	} else {
+		// a slash is required to indicate the root path
+		cr.WriteString("/")
 	}
 
 	params, err := url.ParseQuery(u.RawQuery)
@@ -187,7 +190,7 @@ func buildCanonicalizedResource(accountName, uri string, keyType SharedKeyType) 
 		}
 	}
 
-	return string(cr.Bytes()), nil
+	return cr.String(), nil
 }
 
 func getCanonicalizedAccountName(accountName string) string {
@@ -286,7 +289,7 @@ func buildCanonicalizedHeader(headers http.Header) string {
 		ch.WriteRune('\n')
 	}
 
-	return strings.TrimSuffix(string(ch.Bytes()), "\n")
+	return strings.TrimSuffix(ch.String(), "\n")
 }
 
 func createAuthorizationHeader(accountName string, accountKey []byte, canonicalizedString string, keyType SharedKeyType) string {

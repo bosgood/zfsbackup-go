@@ -122,11 +122,12 @@ func startSftpServer(t testing.TB, user string, password string) net.Listener {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if err := server.Serve(); err == io.EOF {
-						_ = server.Close()
-						fmt.Println("sftp client exited session.")
-					} else if err != nil {
-						t.Fatal("sftp server completed with error:", err)
+					// pkg/sftp >= 1.13.6 returns nil, not io.EOF, when the client ends the session.
+					serveErr := server.Serve()
+					_ = server.Close()
+					_ = channel.Close() // what sshd does when the subsystem exits
+					if serveErr != nil && serveErr != io.EOF {
+						t.Fatal("sftp server completed with error:", serveErr)
 					}
 				}
 			}(acceptedConn)

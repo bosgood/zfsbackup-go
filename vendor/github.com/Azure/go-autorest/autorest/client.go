@@ -17,9 +17,9 @@ package autorest
 import (
 	"bytes"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"strings"
@@ -30,7 +30,7 @@ import (
 
 const (
 	// DefaultPollingDelay is a reasonable delay between polling requests.
-	DefaultPollingDelay = 60 * time.Second
+	DefaultPollingDelay = 30 * time.Second
 
 	// DefaultPollingDuration is a reasonable total polling duration.
 	DefaultPollingDuration = 15 * time.Minute
@@ -105,14 +105,14 @@ func (li LoggingInspector) WithInspection() PrepareDecorator {
 
 			defer r.Body.Close()
 
-			r.Body = ioutil.NopCloser(io.TeeReader(r.Body, &body))
+			r.Body = io.NopCloser(io.TeeReader(r.Body, &body))
 			if err := r.Write(&b); err != nil {
 				return nil, fmt.Errorf("Failed to write response: %v", err)
 			}
 
 			li.Logger.Printf(requestFormat, b.String())
 
-			r.Body = ioutil.NopCloser(&body)
+			r.Body = io.NopCloser(&body)
 			return p.Prepare(r)
 		})
 	}
@@ -128,14 +128,14 @@ func (li LoggingInspector) ByInspecting() RespondDecorator {
 		return ResponderFunc(func(resp *http.Response) error {
 			var body, b bytes.Buffer
 			defer resp.Body.Close()
-			resp.Body = ioutil.NopCloser(io.TeeReader(resp.Body, &body))
+			resp.Body = io.NopCloser(io.TeeReader(resp.Body, &body))
 			if err := resp.Write(&b); err != nil {
 				return fmt.Errorf("Failed to write response: %v", err)
 			}
 
 			li.Logger.Printf(responseFormat, b.String())
 
-			resp.Body = ioutil.NopCloser(&body)
+			resp.Body = io.NopCloser(&body)
 			return r.Respond(resp)
 		})
 	}
@@ -165,7 +165,8 @@ type Client struct {
 	// Setting this to zero will use the provided context to control the duration.
 	PollingDuration time.Duration
 
-	// RetryAttempts sets the default number of retry attempts for client.
+	// RetryAttempts sets the total number of times the client will attempt to make an HTTP request.
+	// Set the value to 1 to disable retries.  DO NOT set the value to less than 1.
 	RetryAttempts int
 
 	// RetryDuration sets the delay duration for retries.
@@ -259,6 +260,9 @@ func (c Client) Do(r *http.Request) (*http.Response, error) {
 		},
 	})
 	resp, err := SendWithSender(c.sender(tls.RenegotiateNever), r)
+	if resp == nil && err == nil {
+		err = errors.New("autorest: received nil response and error")
+	}
 	logger.Instance.WriteResponse(resp, logger.Filter{})
 	Respond(resp, c.ByInspecting())
 	return resp, err
