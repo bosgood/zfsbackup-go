@@ -1,5 +1,6 @@
 # CHANGELOG
 
+* [ADD] test: TestIntegrationS3EncryptedResume: a cut send and --resume with GPG rings; re-sent volumes get new ciphertext; a tampered volume fails the restore; an encrypted incremental from a bookmark
 * [ADD] test: TestIntegrationS3ProdShape: production flags, 3-way creation ties, a 5-part dataset name, --snapshotPrefix, receive --fullPath and --lastPath, on real zfs + S3
 * [ADD] test: TestIntegrationS3Rollover: a --fullIfOlderThan window elapses on real zfs; new and old chains restore; a receiver on the old chain is refused by zfs; clean retires the old chain
 * [CHANGE] send: an incremental must carry the same --raw as the backup it continues from (smart and explicit -i); a run that forgets --raw on a raw chain is refused before anything is uploaded; a full starts a new chain and may change it. plan agrees (plan --raw; a "raw" word on a --manifests line)
