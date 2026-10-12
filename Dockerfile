@@ -29,7 +29,7 @@
 # `make test-docker` and `make devcontainer-build` derive it from go.mod; the
 # default below is what plain `docker build` and devcontainer.json use, so bump
 # it whenever go.mod's `go` line changes.
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.26
 
 ###############################################################################
 FROM golang:${GO_VERSION}-bookworm AS toolchain
@@ -108,11 +108,11 @@ ENV HOME=/home/${USERNAME} \
     VISUAL=vim
 
 # gopls for the VS Code Go extension and Claude Code's LSP support. Pinned to
-# the newest release that builds with GO_VERSION (gopls@latest already wants
-# Go 1.26, which GOTOOLCHAIN=local refuses); bump it together with GO_VERSION.
+# the newest release that builds with GO_VERSION (a newer gopls may want a
+# newer Go, which GOTOOLCHAIN=local refuses); bump it together with GO_VERSION.
 # The build cache it leaves behind is dropped to keep the image (and the
 # seeded cache volume) small.
-ARG GOPLS_VERSION=v0.21.1
+ARG GOPLS_VERSION=v0.23.0
 RUN go install "golang.org/x/tools/gopls@${GOPLS_VERSION}" && go clean -cache
 
 # Claude Code via the native installer (no Node.js needed). CLAUDE_CODE_VERSION

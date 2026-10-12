@@ -21,7 +21,7 @@ services:
       dockerfile: Dockerfile
       target: integration
       args:
-        GO_VERSION: "${GO_VERSION:-1.25}"
+        GO_VERSION: "${GO_VERSION:-1.26}"
     privileged: true
     devices: ["/dev/zfs:/dev/zfs"]
     # The pool's file: the zfs module opens it by this path on the host.

@@ -69,7 +69,7 @@ The PGP algorithm is used for encryption/signing. The cipher used is AES-256.
 
 ## Installation
 
-You need Go 1.25 or newer to build. The host that runs `send` or `receive` needs the `zfs` command.
+You need Go 1.26 or newer to build. The host that runs `send` or `receive` needs the `zfs` command.
 
 ```shell
 git clone https://github.com/bosgood/zfsbackup-go.git

@@ -14,8 +14,9 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - Never gate a commit on a piped test run (`make ... | grep && git commit`): the status is grep's. Run them as separate calls.
 - Host zone is EDT. `TestScenarioAdoptCreationTimes` and `TestE2EPlanManifestsFileAdoptsCreationTimes` fail on the host at HEAD too. Confirm with `make test-one` (Docker, UTC).
 - Host Go 1.26 is for throwaway checks in /tmp only. Nix is not installed.
-- Docker containers cannot reach api.anthropic.com from this Mac; the host cannot reach proxy.golang.org. Query the proxy from a container: `docker run --rm golang:1.25-bookworm bash -c 'cd /tmp && go mod init probe >/dev/null 2>&1; go list -m -versions <module>'`.
+- Docker containers cannot reach api.anthropic.com from this Mac; the host cannot reach proxy.golang.org. Query the proxy from a container: `docker run --rm golang:1.26-bookworm bash -c 'cd /tmp && go mod init probe >/dev/null 2>&1; go list -m -versions <module>'`.
 - Host load varies a lot (e2e 7 s -> 43 s, no code change). Compare against the old tree in the same minute.
+- Scratch module upgrade: rsync the tree (no .git/tmp/vendor) to /tmp, run `golang:<ver>-bookworm` with `-v /tmp/zfsb-modcache:/go/pkg/mod -e GOFLAGS=-mod=mod -e GOTOOLCHAIN=local`. Second run is fast. Delete the copies after.
 - Docker here is OrbStack (arm64). Its kernel has NO zfs module and no `/lib/modules`; the maintainer will not ship one. Real `zfs` runs in the NixOS Lima VM: `make integration-vm` (see `integration/README.md`).
 - OrbStack NixOS + ZFS IS possible (laris/orbstack-nixos-openzfs): build OpenZFS 2.4.1 against `/sys/kernel/kheaders.tar.xz` with 5 patches, load with a systemd unit. Rebuild after every OrbStack kernel update. Rejected for the test env 2026-10-11 (fragile); Lima VM instead.
 - A privileged container sees the HOST's zpools. A test entrypoint must refuse an existing pool name and destroy only the pool it made.
@@ -33,6 +34,11 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - Try a linter without editing .golangci.yml: `make lint LINT_ARGS="--enable-only X,Y --max-same-issues 0"`. 2026-10-11 probe of 31 extra linters: 1 real bug (ignored ctx), rest noise.
 - `make test-docker` copies the build context in the first ~5 s; after that you can edit the tree.
 - Keep the Dockerfile `GO_VERSION` default in sync with go.mod's `go` line (images set `GOTOOLCHAIN=local`).
+- Newest `golang.org/x/*` and Google modules need go 1.26 (Go 1.25 is out of support since 2026-08). With `GOTOOLCHAIN=local` on 1.25, `go get -u ./...` aborts as a whole; it never picks an older version.
+- `go get -u ./...` stops with "ambiguous import cloud.google.com/go/compute/metadata": first `go get cloud.google.com/go/storage@latest google.golang.org/api@latest cloud.google.com/go/compute@latest`.
+- `go get` writes `go 1.26.0`; the Makefile then builds `golang:1.26.0-bookworm`. Run `go mod edit -go=1.26` after.
+- pgzip v1.2.6/v1.2.7 panic in `Reader.WriteTo` after a `Read` (klauspost/pgzip#74). `files.VerifyEnd` hits it; `TestUnknownSignerErrorDoesNotAdviseTrust` catches it. Fix commit e1b5b318 (2026-10-09) is untagged.
+- pkg/sftp >= 1.13.6: `Server.Serve` returns nil on EOF, not io.EOF. The fake sshd in `ssh_backend_test.go` must `channel.Close()` after Serve, or the client's `Close` waits forever.
 - `go test` without `-v` hides stdout of passing tests.
 - After a flag help change, check with `make help CMD=<cmd>`.
 
@@ -91,6 +97,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - `dev.nix`: bump `rev`, set `hash = lib.fakeHash`, build, paste the "got:" hash. The user must run nix.
 
 ## Open plans
+- `docs/specs/2026-10-11--deps-upgrade/`: plan written 2026-10-11, unexecuted. Blocked on one answer: does the user's nixpkgs have `go_1_26`?
 - `docs/specs/2026-10-11--integration-test-env/`: EXECUTED 2026-10-11 (d426bec..); NixOS VM instead of Ubuntu; notes at the end of its plan.md.
 - `docs/specs/2026-10-11--sigterm-handling/`: EXECUTED 2026-10-11 (a2c0636..069eeba); notes at the end of its plan.md.
 - `docs/specs/2026-10-11--third-pass-fixes/`: EXECUTED 2026-10-11 (caed77d..525b133); notes at the end of its plan.md.
