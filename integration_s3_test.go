@@ -34,6 +34,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -283,26 +284,37 @@ func snapshot(t *testing.T, dataset, kind string) string {
 	return name
 }
 
-// snapshotTie takes one sanoid-style snapshot of dataset per kind in ONE zfs
-// snapshot call, so they share one creation second, as sanoid's monthly, daily
-// and hourly do on the 1st. It returns the names in the order of kinds.
+// snapshotTie takes one sanoid-style snapshot of dataset per kind, all in one
+// creation second, as sanoid's monthly, daily and hourly tie on the 1st. It
+// returns the names in the order of kinds. zfs takes one snapshot of a dataset
+// per call (and per channel program), so it takes them one by one right after
+// a second starts, and starts again if the second rolled over meanwhile.
 func snapshotTie(t *testing.T, dataset string, kinds ...string) []string {
 	t.Helper()
-	now := time.Now().UTC()
-	for now.Unix() == lastSnapshot.Unix() {
-		time.Sleep(50 * time.Millisecond)
-		now = time.Now().UTC()
+	for try := 0; try < 3; try++ {
+		time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second)))
+		now := time.Now().UTC()
+		lastSnapshot = now
+		names := make([]string, 0, len(kinds))
+		for _, kind := range kinds {
+			name := "autosnap_" + now.Format("2006-01-02_15:04:05") + "_" + kind
+			zfsRun(t, "snapshot", dataset+"@"+name)
+			names = append(names, name)
+		}
+		created := zfsGet(t, dataset+"@"+names[0], "creation")
+		tie := true
+		for _, n := range names[1:] {
+			tie = tie && zfsGet(t, dataset+"@"+n, "creation") == created
+		}
+		if tie {
+			return names
+		}
+		for _, n := range names {
+			zfsRun(t, "destroy", dataset+"@"+n)
+		}
 	}
-	lastSnapshot = now
-	names := make([]string, 0, len(kinds))
-	args := []string{"snapshot"}
-	for _, kind := range kinds {
-		name := "autosnap_" + now.Format("2006-01-02_15:04:05") + "_" + kind
-		names = append(names, name)
-		args = append(args, dataset+"@"+name)
-	}
-	zfsRun(t, args...)
-	return names
+	t.Fatalf("could not take %v of %s in one second", kinds, dataset)
+	return nil
 }
 
 // zfsGet returns the parsable value of property of a dataset, snapshot or bookmark.
@@ -492,4 +504,15 @@ func chainNames(backups []*files.JobInfo) []string {
 		names = append(names, b.BaseSnapshot.Name+"<-"+b.IncrementalSnapshot.Name)
 	}
 	return names
+}
+
+// zfsLine returns the first line of logs that holds want: zfs's own message
+// among the program's, for the test log.
+func zfsLine(logs, want string) string {
+	for _, line := range strings.Split(logs, "\n") {
+		if strings.Contains(line, want) {
+			return strings.TrimSpace(line)
+		}
+	}
+	return "(no line holds " + strconv.Quote(want) + ")"
 }

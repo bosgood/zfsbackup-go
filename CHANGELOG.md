@@ -1,5 +1,6 @@
 # CHANGELOG
 
+* [ADD] test: TestIntegrationS3Rollover: a --fullIfOlderThan window elapses on real zfs; new and old chains restore; a receiver on the old chain is refused by zfs; clean retires the old chain
 * [CHANGE] send: an incremental must carry the same --raw as the backup it continues from (smart and explicit -i); a run that forgets --raw on a raw chain is refused before anything is uploaded; a full starts a new chain and may change it. plan agrees (plan --raw; a "raw" word on a --manifests line)
 * [CHANGE] receive: receive --auto refuses a chain whose links differ in --raw, before it receives anything
 * [ADD] test: the six TestIntegrationS3* tests restore from an empty cache, check the guid of every received snapshot, check that GPG volumes and manifests are ciphertext, resume with the default compressor, and filter list across two datasets
