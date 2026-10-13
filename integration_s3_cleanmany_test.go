@@ -102,23 +102,26 @@ func TestIntegrationS3CleanMany(t *testing.T) {
 			<-finished
 		})
 
-		// A delete has happened: then the signal lands in the middle of the run.
+		// Signal when at least minDone deletes have happened and at least minLeft
+		// orphans are left: the signal then lands in the middle of the run, with room
+		// for the deletes between the last count and the Kill.
+		const minDone, minLeft = 100, 1000
 		deadline := time.Now().Add(time.Minute)
-		for len(objectNames(t, client, bucket, prefix)) >= len(sent)+n {
+		left := n
+		for left > n-minDone {
 			select {
 			case r := <-done:
-				t.Fatalf("clean returned before a delete was seen (%v); the test cannot signal it:\n%s", r.err, r.logs)
+				t.Fatalf("clean returned before %d deletes were seen (%v); the test cannot signal it:\n%s", minDone, r.err, r.logs)
 			default:
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("no delete in a minute")
+				t.Fatalf("fewer than %d deletes in a minute (%d orphans left)", minDone, left)
 			}
 			time.Sleep(50 * time.Millisecond)
+			left = len(objectNames(t, client, bucket, prefix)) - len(sent)
 		}
-		select {
-		case r := <-done:
-			t.Fatalf("the deletes finished before the signal: raise the orphan count (%v)\n%s", r.err, r.logs)
-		default:
+		if left < minLeft {
+			t.Fatalf("only %d of %d orphans left when %d deletes were first seen: too fast to signal in the middle; raise n", left, n, minDone)
 		}
 		// One signal only: a second one exits the test binary.
 		if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
@@ -129,7 +132,7 @@ func TestIntegrationS3CleanMany(t *testing.T) {
 			t.Fatalf("clean stopped by SIGTERM returned no error:\n%s", r.logs)
 		}
 		wantInLog(t, r.logs, "Received SIGTERM; stopping.")
-		left := len(objectNames(t, client, bucket, prefix))
+		left = len(objectNames(t, client, bucket, prefix))
 		t.Logf("SIGTERM: %v; %d of %d orphans left", r.err, left-len(sent), n)
 		if left <= len(sent) {
 			t.Errorf("after the SIGTERM no orphan is left: the deletes did not stop")

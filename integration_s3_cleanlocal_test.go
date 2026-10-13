@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -72,7 +73,7 @@ func TestIntegrationS3CleanLocal(t *testing.T) {
 	writeFile(t, "/"+src, "a.bin", 4<<20)
 	daily := snapshot(t, src, "daily")
 	fulls := cachedFiles(t, work)
-	partial := cutSend(t, client, bucket, prefix, work, src, daily)
+	partial := cutSend(t, client, bucket, prefix, work, src, daily, 2)
 	partialPath := newCachedFile(t, fulls, cachedFiles(t, work))
 	cut := objectNames(t, client, bucket, prefix)
 	withPartial := cachedFiles(t, work)
@@ -92,7 +93,12 @@ func TestIntegrationS3CleanLocal(t *testing.T) {
 	// 3. A send of src runs (its lock holds a live pid): --cleanLocal leaves the
 	// partial and its volumes alone, and still deletes the orphan of src2.
 	lock := lockPath(t, work, src)
-	if err := os.WriteFile(lock, []byte(fmt.Sprintf("%d\n", os.Getppid())), 0o600); err != nil {
+	holder := exec.Command("sleep", "600") // a live pid the test owns, whatever the container's process tree
+	if err := holder.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = holder.Process.Kill(); _ = holder.Wait() })
+	if err := os.WriteFile(lock, []byte(fmt.Sprintf("%d\n", holder.Process.Pid)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Remove(lock) })
@@ -140,7 +146,7 @@ func TestIntegrationS3CleanLocal(t *testing.T) {
 	writeFile(t, "/"+src, "b.bin", 4<<20)
 	weekly := snapshot(t, src, "weekly")
 	before := cachedFiles(t, work)
-	partial2 := cutSend(t, client, bucket, prefix, work, src, weekly)
+	partial2 := cutSend(t, client, bucket, prefix, work, src, weekly, 2)
 	partial2Path := newCachedFile(t, before, cachedFiles(t, work))
 	deleteObject(t, client, bucket, prefix+partial2[1])
 	wantInLog(t, clean("--force"),
@@ -258,7 +264,7 @@ func cleanLocalDenied(t *testing.T, pool string) {
 	}
 	writeFile(t, "/"+src, "a.bin", 4<<20)
 	daily := snapshot(t, src, "daily")
-	partial := cutSend(t, client, bucket, prefix, work, src, daily)
+	partial := cutSend(t, client, bucket, prefix, work, src, daily, 2)
 	before := objectNames(t, client, bucket, prefix)
 	files := cachedFiles(t, work)
 

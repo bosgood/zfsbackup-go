@@ -92,7 +92,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - clean's `--force leaves it alone, --cleanLocal deletes it` Notice fires only when a volume the cached partial LISTS is gone; a fresh cut send gets only `There are N local manifests ... use --cleanLocal`. A denied S3 delete (403) is retried for 10 min; test it under a ctx deadline (backoff v2 returns the last op error).
 - `setupS3Bucket` cleanup pages `ListObjectVersions` and deletes every version and delete marker (fixed 2026-10-12): >1000 objects and versioned buckets are fine.
 - The VM wall clock is stepped BACK now and then (journal: "Time jumped backwards", ~1 s). `snapshot()` and `snapshotTie` wait for a second AFTER the last; a helper that names things by the second must do the same.
-- `wantInLog` is in `e2e_resume_other_dest_test.go` (one package with the integration tests): do not redeclare it.
+- `wantInLog` and `wantNotInLog` are in `log_assert_test.go` (untagged, one package with the integration tests): do not redeclare them.
 - Volume names hold no `--manifestPrefix`: two prefixes that send one snapshot share its objects, and clean spares orphans of a set both name.
 - Smart send to out-of-sync destinations errors before it looks for anything newer (never a noop).
 - `t.Cleanup` is LIFO: a cleanup that must run BEFORE `destroyAfter` is registered AFTER it.

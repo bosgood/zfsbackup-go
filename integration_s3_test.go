@@ -188,20 +188,9 @@ func itBucket(t *testing.T, name string) (client *s3.S3, bucket, prefix string) 
 	}
 	client = s3.New(sess)
 	prefix = unique + "/"
-	t.Cleanup(func() {
-		err := client.ListObjectsV2Pages(&s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String(prefix)},
-			func(page *s3.ListObjectsV2Output, _ bool) bool {
-				for _, o := range page.Contents {
-					if _, derr := client.DeleteObject(&s3.DeleteObjectInput{Bucket: aws.String(bucket), Key: o.Key}); derr != nil {
-						t.Errorf("could not delete s3://%s/%s: %v", bucket, aws.StringValue(o.Key), derr)
-					}
-				}
-				return true
-			})
-		if err != nil {
-			t.Errorf("could not list s3://%s/%s: %v", bucket, prefix, err)
-		}
-	})
+	// Versions too: a shared bucket may have versioning on, and a run must not leave
+	// its versions and delete markers behind.
+	t.Cleanup(func() { deleteAllVersions(t, client, bucket, prefix) })
 	return client, bucket, prefix
 }
 
@@ -526,17 +515,6 @@ func putMany(t *testing.T, client *s3.S3, bucket string, keys []string, data []b
 	}
 	if err := g.Wait(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// wantNotInLog fails the test if logs holds a string of unwanted. Its pair,
-// wantInLog, is in e2e_resume_other_dest_test.go.
-func wantNotInLog(t *testing.T, logs string, unwanted ...string) {
-	t.Helper()
-	for _, u := range unwanted {
-		if strings.Contains(logs, u) {
-			t.Errorf("want no %q in the log:\n%s", u, logs)
-		}
 	}
 }
 

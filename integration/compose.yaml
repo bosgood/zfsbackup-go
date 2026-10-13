@@ -20,12 +20,14 @@ services:
   # is the community build of mc that goes with pgsty/minio. Pinned; bump on
   # purpose. Each step can run again: user add updates the user and policy
   # create replaces the policy. attach fails when the user already has the
-  # policy, so its failure is ignored (the image has no grep to check first);
-  # a user with no policy fails the Denied subtest at its first listing.
+  # policy, so its failure is ignored; the last step then checks that the user
+  # has a policy (user info --json has a policyName key only then; the image
+  # has no grep, so sh's case does the match) and fails the service if not.
+  # The image is pinned by tag and digest: a community build with the root key.
   # make integration-docker does not attach to this service: its exit must
   # not stop the others (--abort-on-container-exit).
   mc:
-    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd
     depends_on:
       minio:
         condition: service_healthy
@@ -37,7 +39,11 @@ services:
         mc alias set local http://minio:9000 minioadmin minioadmin &&
         mc admin user add local nodelete nodelete-secret &&
         mc admin policy create local nodelete /nodelete-policy.json &&
-        { mc admin policy attach local nodelete --user nodelete || true; }
+        { mc admin policy attach local nodelete --user nodelete || true; } &&
+        case "$$(mc admin user info local nodelete --json)" in
+        *policyName*) echo "nodelete has a policy" ;;
+        *) echo "nodelete has NO policy" >&2; exit 1 ;;
+        esac
   zfs:
     build:
       context: ..

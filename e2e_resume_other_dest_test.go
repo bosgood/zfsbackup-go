@@ -93,15 +93,6 @@ func changedObjects(before, after map[string][]byte) int {
 	return changed
 }
 
-func wantInLog(t *testing.T, logs string, wants ...string) {
-	t.Helper()
-	for _, want := range wants {
-		if !strings.Contains(logs, want) {
-			t.Errorf("log lacks %q:\n%s", want, logs)
-		}
-	}
-}
-
 // Attempt 1 to (a,b) is interrupted after volume 2. A plain send to ONE of them rewrites volumes
 // 1-2 there with other bytes of the same size (FAKEZFS_STREAM_SALT, no encryption) and fails at
 // volume 3, so that destination's cache records the new SHA-256s. A --resume to (a,b) must see

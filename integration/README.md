@@ -26,7 +26,7 @@ The other `TestIntegrationS3*` tests run in the same environment:
 | `TestIntegrationS3Rollover` | a `--fullIfOlderThan` window elapses for real; new and old chains restore; a receiver on the old chain is refused by zfs; `clean` retires the old chain |
 | `TestIntegrationS3ProdShape` | production flags, monthly/daily/hourly tied on one second, a 5-part dataset name, `--snapshotPrefix`, `receive --fullPath` and `--lastPath` |
 | `TestIntegrationS3EncryptedResume` | `--resume` with GPG rings; re-sent volumes get new ciphertext; a tampered volume fails the restore; an encrypted incremental from a bookmark |
-| `TestIntegrationS3ReceiveSafety` | receive without `-F` onto a changed dataset; `--properties` with `--unmounted`; subtests `Mounted` and `Origin` are RED on purpose (findings, below) |
+| `TestIntegrationS3ReceiveSafety` | receive without `-F` onto a changed dataset; `--properties` with `--unmounted`; subtests `Mounted` (a restore that would mount over the live source is refused) and `Origin` (`--origin` of an incremental). Both were red findings, fixed 2026-10-12 (ad5b6ed, 613b22d) |
 | `TestIntegrationS3TwoDestinations` | one send to two S3 prefixes; `complete-partial` without re-upload; out-of-sync destinations refused; each restores alone |
 | `TestIntegrationS3ManifestPrefix` | two `--manifestPrefix` jobs in one bucket: `list` and `clean` keep to their prefix |
 | `TestIntegrationS3NativeEncryption` | ZFS native encryption: a `--raw` chain with the key unloaded, a raw restore that opens only with the sender's key, a raw incremental from a bookmark, a forgotten `--raw` refused, a plaintext send, raw + GPG |
@@ -46,8 +46,8 @@ What the VM showed (zfs 2.4.4), as assumed by
 - A1: a full stream into a dataset with snapshots fails (`destination has snapshots`) and destroys nothing.
 - A2: `zfs receive -d` creates the parent datasets.
 - A3: `zfs receive` without `-F` into a changed dataset fails (`destination ... has been modified`) and keeps the change.
-- A4: a `-p` stream carries the source's local `mountpoint`. Without `--unmounted` the restored dataset mounts OVER the live one and hides its files (`ReceiveSafety/Mounted`, red).
-- A5: not checked: `receive --origin` of an incremental is refused by the program before zfs runs (`ReceiveSafety/Origin`, red).
+- A4: a `-p` stream carries the source's local `mountpoint`. Without `--unmounted` the restored dataset would mount OVER the live one and hide its files; receive refuses that since ad5b6ed (`ReceiveSafety/Mounted`).
+- A5: `receive --origin` of an incremental works since 2026-10-12 (`ReceiveSafety/Origin`); before, the program refused it before zfs ran.
 - A6: `zfs load-key -L file://<key>` opens a raw-received dataset with the sender's key.
 - A7: retired: `send` and `receive --auto` refuse a chain that mixes raw and plaintext.
 - A8: a plaintext stream received under an encryption root inherits its encryption.

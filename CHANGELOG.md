@@ -1,5 +1,6 @@
 # CHANGELOG
 
+* [ADD] test: integration helpers: one paged version delete for both bucket modes (a shared bucket loses no versions), cutSend takes the expected volume count, a sleep child holds the busy lock, the SIGTERM test signals only with deletes done and 1000 orphans left, the log assertions live in log_assert_test.go, the mc image is pinned by digest and checks the nodelete policy; setupS3Bucket refuses an existing bucket
 * [ADD] test: TestIntegrationS3CleanLocal: clean on a cut send's cached partial (kept without --cleanLocal and with --force, kept for a busy dataset, deleted with its volumes by --cleanLocal), a partial that lost a volume; subtests Repair (clean --force at one of two destinations, then a send) and Denied (a user without s3:DeleteObject)
 * [ADD] test: TestIntegrationS3CleanEncrypted: clean at an encrypted destination with no rings, --force and no rings, another key's rings; red on purpose: with no rings clean advises deleting the manifest (finding F1)
 * [ADD] test: TestIntegrationS3CleanLayout: clean of nested and sibling prefixes, the bucket root, two destinations; subtests Separator, Legacy, Versioned; red on purpose (findings F2, F3)
