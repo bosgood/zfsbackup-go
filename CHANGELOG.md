@@ -1,5 +1,10 @@
 # CHANGELOG
 
+* [ADD] test: TestIntegrationS3CleanLocal: clean on a cut send's cached partial (kept without --cleanLocal and with --force, kept for a busy dataset, deleted with its volumes by --cleanLocal), a partial that lost a volume; subtests Repair (clean --force at one of two destinations, then a send) and Denied (a user without s3:DeleteObject)
+* [ADD] test: TestIntegrationS3CleanEncrypted: clean at an encrypted destination with no rings, --force and no rings, another key's rings; red on purpose: with no rings clean advises deleting the manifest (finding F1)
+* [ADD] test: TestIntegrationS3CleanLayout: clean of nested and sibling prefixes, the bucket root, two destinations; subtests Separator, Legacy, Versioned; red on purpose (findings F2, F3)
+* [ADD] test: TestIntegrationS3CleanMany: clean of 1100 orphans (more than one listing page); a SIGTERM in the middle of 3000 deletes
+* [ADD] test: integration compose adds the MinIO user nodelete (no s3:DeleteObject) through a pinned pgsty/mc service; the test bucket cleanup deletes every version, more than 1000 objects too; snapshot() waits out a clock stepped back
 * [ADD] docs: runbook section on natively encrypted datasets (--raw on every run, a new chain with --full, zfs load-key -L for a raw restore); the integration README lists thirteen tests and what the VM showed about zfs
 * [ADD] test: TestIntegrationS3NativeEncryption: ZFS native encryption under an encryption root, as in production: a --raw chain with and without the key loaded, a raw restore that opens only with the sender's key, a raw incremental from a bookmark, a forgotten --raw refused, a plaintext send of the encrypted dataset, raw + GPG
 * [ADD] test: TestIntegrationS3ManifestPrefix: two --manifestPrefix jobs in one bucket; list and clean keep to their prefix; an orphan of a set both name is spared

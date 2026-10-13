@@ -24,6 +24,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -44,6 +45,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"golang.org/x/crypto/openpgp/packet"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/someone1/zfsbackup-go/backup"
 	"github.com/someone1/zfsbackup-go/cmd"
@@ -283,10 +285,12 @@ var lastSnapshot time.Time
 // returns its name. It first waits for a new second: two snapshots in one
 // second tie on creation time, and selection must not depend on tie order.
 // flags go to zfs snapshot ("-r" for a snapshot of every descendant too).
+// It waits for a second AFTER the last one, not just another: the VM's clock
+// is stepped back now and then, and a repeated second repeats a name.
 func snapshot(t *testing.T, dataset, kind string, flags ...string) string {
 	t.Helper()
 	now := time.Now().UTC()
-	for now.Unix() == lastSnapshot.Unix() {
+	for now.Unix() <= lastSnapshot.Unix() {
 		time.Sleep(50 * time.Millisecond)
 		now = time.Now().UTC()
 	}
@@ -309,6 +313,11 @@ func snapshotTie(t *testing.T, dataset string, kinds ...string) []string {
 	for try := 0; try < 10; try++ {
 		time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second)))
 		now := time.Now().UTC()
+		// After the last second, as in snapshot: the clock may have been stepped back.
+		for now.Unix() <= lastSnapshot.Unix() {
+			time.Sleep(time.Until(now.Truncate(time.Second).Add(time.Second)))
+			now = time.Now().UTC()
+		}
 		lastSnapshot = now
 		names := make([]string, len(kinds))
 		errs := make([]error, len(kinds))
@@ -435,11 +444,16 @@ func itRun(reset func(), command, work string, args ...string) (string, error) {
 // send and receive have it): a broken S3 fails the test in minutes, not the
 // 12-hour default.
 func itRunOut(reset func(), command, work, zfsPath string, args ...string) (out, logs string, err error) {
+	return itRunCtx(context.Background(), reset, command, work, zfsPath, args...)
+}
+
+// itRunCtx is itRunOut under ctx, through runInProcess (e2e_test.go).
+func itRunCtx(ctx context.Context, reset func(), command, work, zfsPath string, args ...string) (out, logs string, err error) {
 	base := []string{command, "--zfsPath", zfsPath, "--workingDirectory", work, "--logLevel", "debug"}
 	if command == "send" || command == "receive" {
 		base = append(base, "--maxRetryTime", "2m")
 	}
-	return (&e2eEnv{}).run(reset, append(base, args...)...)
+	return runInProcess(ctx, reset, append(base, args...)...)
 }
 
 // itList runs `list --jsonOutput` and returns the backups it printed: by
@@ -461,9 +475,79 @@ func itList(t *testing.T, work string, args ...string) map[string][]*files.JobIn
 // in-process runs, so it passes each one; a value in args comes after and wins.
 func itClean(t *testing.T, work string, args ...string) (string, error) {
 	t.Helper()
+	return itCleanCtx(context.Background(), t, work, args...)
+}
+
+// itCleanCtx is itClean under ctx. It does not fail the test: it may run in a goroutine.
+func itCleanCtx(ctx context.Context, t *testing.T, work string, args ...string) (string, error) {
+	t.Helper()
 	base := []string{"--dry-run=false", "--force=false", "--cleanLocal=false"}
-	_, logs, err := itRunOut(cmd.ResetReceiveJobInfo, "clean", work, "zfs", append(base, args...)...)
+	_, logs, err := itRunCtx(ctx, cmd.ResetReceiveJobInfo, "clean", work, "zfs", append(base, args...)...)
 	return logs, err
+}
+
+// cachedFiles returns the paths of the cached manifests in work, sorted: of
+// every destination, at <work>/cache/<md5(uri)>/<md5(name)>.
+func cachedFiles(t *testing.T, work string) []string {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(work, "cache", "*", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+// orphanOf puts an object named as volume n of the set whose volume 1 is vol1
+// at prefix in bucket, and returns its name: a volume no manifest lists.
+func orphanOf(t *testing.T, client *s3.S3, bucket, prefix, vol1 string, n int) string {
+	t.Helper()
+	if !strings.HasSuffix(vol1, "vol1") {
+		t.Fatalf("volume 1 is %s, want a name ending in vol1", vol1)
+	}
+	name := strings.TrimSuffix(vol1, "vol1") + "vol" + strconv.Itoa(n)
+	putObject(t, client, bucket, prefix+name, []byte("orphan"))
+	return name
+}
+
+// putMany writes data to bucket at every key, 16 at a time.
+func putMany(t *testing.T, client *s3.S3, bucket string, keys []string, data []byte) {
+	t.Helper()
+	var g errgroup.Group
+	g.SetLimit(16)
+	for _, key := range keys {
+		g.Go(func() error {
+			_, err := client.PutObject(&s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(key), Body: bytes.NewReader(data)})
+			if err != nil {
+				return fmt.Errorf("could not put s3://%s/%s: %w", bucket, key, err)
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// wantNotInLog fails the test if logs holds a string of unwanted. Its pair,
+// wantInLog, is in e2e_resume_other_dest_test.go.
+func wantNotInLog(t *testing.T, logs string, unwanted ...string) {
+	t.Helper()
+	for _, u := range unwanted {
+		if strings.Contains(logs, u) {
+			t.Errorf("want no %q in the log:\n%s", u, logs)
+		}
+	}
+}
+
+// wantObjectsAt fails the test unless the keys under prefix in bucket, without
+// the prefix, are want.
+func wantObjectsAt(t *testing.T, client *s3.S3, bucket, prefix string, want []string) {
+	t.Helper()
+	want = slices.Sorted(slices.Values(want))
+	if got := objectNames(t, client, bucket, prefix); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("objects at s3://%s/%s:\n%s\nwant:\n%s", bucket, prefix, strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
 }
 
 // objectNames returns the keys under prefix in bucket, sorted, without the prefix.

@@ -25,7 +25,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -113,23 +112,9 @@ func (env *e2eEnv) send(args ...string) (string, error) {
 
 // sendCtx is send under ctx. Like main, it removes the temp dir when the send fails.
 func (env *e2eEnv) sendCtx(ctx context.Context, args ...string) (string, error) {
-	cmd.ResetSendJobInfo()
-	var logs bytes.Buffer
-	log.AppLogger.SetBackend(logging.AddModuleLevel(logging.NewLogBackend(&logs, "", 0)))
-	oldStdout := config.Stdout
-	config.Stdout = io.Discard
-	defer func() { config.Stdout = oldStdout }()
-
 	base := []string{"send", "--zfsPath", env.self, "--workingDirectory", env.work, "--maxParallelUploads", "1"}
-	cmd.RootCmd.SetArgs(append(base, args...))
-	// Leave no arguments or flag values behind: RootCmd would reuse them, for
-	// example in TestVersion's main(), which runs with os.Args.
-	defer func() {
-		cmd.RootCmd.SetArgs(nil)
-		cmd.ResetSendJobInfo()
-	}()
-	_, err := cmd.Run(ctx)
-	return logs.String(), err
+	_, logs, err := runInProcess(ctx, cmd.ResetSendJobInfo, append(base, args...)...)
+	return logs, err
 }
 
 // plan runs `zfsbackup plan` in-process and returns what it printed and logged.
@@ -140,6 +125,16 @@ func (env *e2eEnv) plan(args ...string) (out, logs string, err error) {
 // run runs `zfsbackup <args>` in-process, with reset before and after, and returns what it
 // printed and logged.
 func (env *e2eEnv) run(reset func(), args ...string) (out, logs string, err error) {
+	return runInProcess(context.Background(), reset, args...)
+}
+
+// runInProcess runs `zfsbackup <args>` under ctx, with reset before and after, and
+// returns what it printed and logged. It is the one path for every in-process run
+// (e2e and integration). It runs through cmd.Run, as main does: that gives every
+// subcommand ctx, where cobra would keep the context of the first run. Leave no
+// arguments or flag values behind: RootCmd would reuse them, for example in
+// TestVersion's main(), which runs with os.Args.
+func runInProcess(ctx context.Context, reset func(), args ...string) (out, logs string, err error) {
 	reset()
 	var outBuf, logBuf bytes.Buffer
 	log.AppLogger.SetBackend(logging.AddModuleLevel(logging.NewLogBackend(&logBuf, "", 0)))
@@ -152,7 +147,7 @@ func (env *e2eEnv) run(reset func(), args ...string) (out, logs string, err erro
 		cmd.RootCmd.SetArgs(nil)
 		reset()
 	}()
-	err = cmd.RootCmd.ExecuteContext(context.Background())
+	_, err = cmd.Run(ctx)
 	return outBuf.String(), logBuf.String(), err
 }
 

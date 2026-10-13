@@ -30,6 +30,10 @@ The other `TestIntegrationS3*` tests run in the same environment:
 | `TestIntegrationS3TwoDestinations` | one send to two S3 prefixes; `complete-partial` without re-upload; out-of-sync destinations refused; each restores alone |
 | `TestIntegrationS3ManifestPrefix` | two `--manifestPrefix` jobs in one bucket: `list` and `clean` keep to their prefix |
 | `TestIntegrationS3NativeEncryption` | ZFS native encryption: a `--raw` chain with the key unloaded, a raw restore that opens only with the sender's key, a raw incremental from a bookmark, a forgotten `--raw` refused, a plaintext send, raw + GPG |
+| `TestIntegrationS3CleanLocal` | `clean` on a cut send's cached partial: kept without `--cleanLocal` and with `--force`, kept for a busy dataset, deleted with its volumes by `--cleanLocal`; a partial that lost a volume; subtests `Repair` (`clean --force` at one of two destinations, then a send) and `Denied` (a user without `s3:DeleteObject`) |
+| `TestIntegrationS3CleanEncrypted` | `clean` at an encrypted destination with no rings, `--force` and no rings, another key's rings: refused, nothing deleted; RED on purpose with no rings (finding, below) |
+| `TestIntegrationS3CleanLayout` | `clean` of nested (`run/`, `run/sub/`) and sibling (`other/`) prefixes, the bucket root, two destinations; subtests `Separator` (`--separator '#'`), `Legacy` (a volume under the old key prefix), `Versioned` (versioning on); RED on purpose (findings, below) |
+| `TestIntegrationS3CleanMany` | `clean` of 1100 orphans (more than one listing page); subtest `Interrupted`: a SIGTERM in the middle of 3000 deletes, then a clean that finishes |
 | `TestIntegrationS3Large` | 1 GiB with the default flags (`--volsize 200`, `--maxFileBuffer 5`, `--maxParallelUploads 4`, gzip): six volumes, each a multipart upload of 10 MiB parts (checked by ETag), file-buffered and in pipe mode; restores of each; subtest `Replication`: `send -R` of a parent with two children, received as a tree |
 
 Every restore of a whole chain runs with an empty working directory, so the
@@ -48,6 +52,25 @@ What the VM showed (zfs 2.4.4), as assumed by
 - A7: retired: `send` and `receive --auto` refuse a chain that mixes raw and plaintext.
 - A8: a plaintext stream received under an encryption root inherits its encryption.
 - zfs takes one snapshot of a dataset per `zfs snapshot` call (and per channel program): a tie takes separate calls in one second (`snapshotTie`).
+
+What the `clean` tests found (2026-10-12; red on purpose, not fixed yet):
+
+- F1 (`CleanEncrypted`): with no rings at all, clean reads an encrypted
+  manifest as plain gzip (`gzip: invalid header`) and says to "delete that
+  object from the destination". It is a backup encrypted to a key this run
+  does not have. It also deletes that manifest's cached copy. Nothing at the
+  destination is deleted. With another key's rings the advice is right
+  (`--secretKeyRingPath`).
+- F2 (`CleanLayout`): the manifest of a nested destination
+  (`run/sub/manifests|...`) is read as a manifest of another
+  `--manifestPrefix` (`sub/manifests`). An orphan at `run/` of a set that
+  `run/sub/` also names is spared, with the Notice "under another
+  --manifestPrefix". Nothing wrong is deleted.
+- F3 (`CleanLayout/Separator`): clean reads `manifests#...` as its own
+  manifests, but its listing loop names them "unrecognized object ... (not a
+  backup volume)": that check uses `manifests|`. Nothing wrong is deleted.
+- A denied delete (`AccessDenied`) is retried for up to 10 minutes before
+  clean fails (`CleanLocal/Denied` ends it with a 20 s deadline).
 
 The S3 server is MinIO in a second container. Each test makes its own bucket
 and deletes it. All tests together take a few minutes (`TestIntegrationS3Large` moves gigabytes); the test binary runs
@@ -79,7 +102,9 @@ container. Docker makes the directory when it is missing.
 
 `RUN` selects tests (a `go test -run` pattern; the default runs all
 `TestIntegrationS3*`): `make integration-vm RUN=TestIntegrationS3Resume`, or
-`RUN=TestIntegrationS3/Pipe` for one subtest.
+`RUN=TestIntegrationS3/Pipe` for one subtest
+(`RUN=TestIntegrationS3CleanLayout/Separator` runs the parent's steps, then
+that subtest).
 
 On a Linux host the image's zfs userland (Ubuntu 24.04, zfs 2.2) must match
 the host's module. Use an Ubuntu 24.04 host, or set `ZFS_USERLAND` as the VM
@@ -158,3 +183,11 @@ compose -f ... down -v` stops it.
 | `ZFSBACKUP_IT_BUCKET` | unset | use this existing bucket, under a prefix per run, not a new bucket |
 | `INTEGRATION_AWS` (make) | unset | `1`: real AWS S3, see above |
 | `LIMA_VM` (make) | `zfsbackup` | Lima instance name |
+| `ZFSBACKUP_IT_NODELETE_KEY`, `ZFSBACKUP_IT_NODELETE_SECRET` | `nodelete`, `nodelete-secret`; empty with `INTEGRATION_AWS=1` | keys of a user without `s3:DeleteObject`; unset, `TestIntegrationS3CleanLocal/Denied` skips |
+
+The `mc` service of `compose.yaml` (`pgsty/mc`, pinned) runs once before the
+test: it adds the MinIO user `nodelete` with the policy
+`nodelete-policy.json` (list, read, write; no delete), then exits. The `zfs`
+service waits for it to finish. `make integration-docker` does not attach to
+it (`--no-attach mc`): with `--abort-on-container-exit` its exit would stop
+the run.

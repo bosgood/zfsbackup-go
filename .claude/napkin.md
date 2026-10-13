@@ -5,8 +5,8 @@ Project history, review facts and defect lists go in `docs/specs/`, not here.
 Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`.
 
 ## Bash tool and host
-- Call #1 of a session is `cat .claude/napkin.md` ALONE. No chain, no separator. (Broken 10 times by chaining, last 2026-10-12.)
-- zsh expands a leading `=word`: `echo ======` aborts the whole chain. Use `echo '-----'`. Quote globs too: `--include='*.go'`.
+- Call #1 of a session is `cat .claude/napkin.md` ALONE. No chain, no separator. (Broken 11 times by chaining, last 2026-10-12.)
+- zsh expands a leading `=word`: `echo ======` aborts the whole chain (again 2026-10-12). Use `echo '-----'`. Quote globs too: `--include='*.go'`.
 - `grep` here is ugrep: it ignores `--` as end of options. Use `/usr/bin/grep` or `-e PATTERN` when it matters.
 - macOS has no `timeout`. Put it inside the container command.
 - `cd dir && ...` persists across calls; parallel calls interleave. Use absolute paths or `(cd dir && ...)`.
@@ -43,6 +43,9 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - pgzip v1.2.6/v1.2.7 panic in `Reader.WriteTo` after a `Read` (klauspost/pgzip#74). `files.VerifyEnd` hits it; `TestUnknownSignerErrorDoesNotAdviseTrust` catches it. Fix commit e1b5b318 (2026-10-09) is untagged.
 - pkg/sftp >= 1.13.6: `Server.Serve` returns nil on EOF, not io.EOF. The fake sshd in `ssh_backend_test.go` must `channel.Close()` after Serve, or the client's `Close` waits forever.
 - `go test` without `-v` hides stdout of passing tests.
+- Break proofs in `~/.cache` copies fill the VM disk with build cache (18 GB after 15); MinIO then fails with `XMinioStorageFull`. Run `limactl shell zfsbackup -- docker builder prune -f` after them.
+- `make ... RUN='X$/^$'` breaks: make eats `$/`. To run a parent test without its subtests: `RUN=X/NONE`.
+- compose `--abort-on-container-exit` stops all on ANY exit: a one-shot setup service (`mc`) needs `--no-attach mc` in `integration-docker`. `pgsty/mc` has `/bin/sh` but no grep.
 - After a flag help change, check with `make help CMD=<cmd>`. It also proves the vendor dir is consistent (`go run .` uses `-mod=vendor`); a cheap build check on the host.
 
 ## Writing tests
@@ -69,6 +72,9 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - `fmt.Sprintf(w)` with no verb appends `%!(EXTRA ...)`. `fmt.Sprint("a", 1)` is `a1` (space only between two non-strings).
 - Never put backticks in a cobra/pflag usage string: pflag shows the span as the flag TYPE.
 - In-process cobra runs: a subcommand keeps the context of its FIRST run (cobra sets it only when nil). `cmd.Run` resets it; use it, not `RootCmd.ExecuteContext`.
+- `runInProcess(ctx, reset, args...)` in `e2e_test.go` is THE in-process runner (e2e `run`/`sendCtx`, integration `itRunCtx` call it). Do not copy its body again (three copies drifted, 2026-10-12).
+- `setupS3Bucket` refuses an existing bucket (also `BucketAlreadyOwnedByYou`): its cleanup wipes every version and deletes the bucket, so it must own it.
+- A test goroutine that runs a cobra command must be stopped and waited for in `t.Cleanup` (`stop(); <-finished`): its deferred flag reset lands in the next test otherwise.
 - A test that sends a real signal: `cmd.SignalContext` BEFORE `syscall.Kill`, never two signals outside `exitFunc` tests.
 - The file:// backend writes a volume under its final name from the first byte. "Volume done" = a cached partial manifest (`<work>/cache/*/*`), not the object.
 - Fault injection with real zfs: a bash wrapper as `--zfsPath` cuts one `zfs send` (`flakyZFS` in `integration_s3_resume_test.go`); `zfs send -n -P` must pass through. It must STALL before it fails: a failed stream cancels uploads in flight, and on S3 a stream that dies at once leaves 0 volumes to resume.
@@ -82,6 +88,10 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - Explicit `receive` of an incremental needs `-i <source>`, else it looks for a full set; since 2026-10-12 the error lists the backups of that snapshot and the flags for each.
 - `receive --origin` of an incremental and the `--properties` mount-over-source trap are fixed (2026-10-12); `TestIntegrationS3ReceiveSafety` is green on both. The fake's `zfs get mountpoint` source comes from `FAKEZFS_MOUNTPOINTS`.
 - zfs sync tasks in flight together share one txg sync: `snapshotTie` takes its snapshots in goroutines (one `zfs snapshot` per kind), which cuts a 3-snapshot tie from ~1.5 s to ~0.5 s on the VM.
+- clean's `--force leaves it alone, --cleanLocal deletes it` Notice fires only when a volume the cached partial LISTS is gone; a fresh cut send gets only `There are N local manifests ... use --cleanLocal`. A denied S3 delete (403) is retried for 10 min; test it under a ctx deadline (backoff v2 returns the last op error).
+- `setupS3Bucket` cleanup pages `ListObjectVersions` and deletes every version and delete marker (fixed 2026-10-12): >1000 objects and versioned buckets are fine.
+- The VM wall clock is stepped BACK now and then (journal: "Time jumped backwards", ~1 s). `snapshot()` and `snapshotTie` wait for a second AFTER the last; a helper that names things by the second must do the same.
+- `wantInLog` is in `e2e_resume_other_dest_test.go` (one package with the integration tests): do not redeclare it.
 - Volume names hold no `--manifestPrefix`: two prefixes that send one snapshot share its objects, and clean spares orphans of a set both name.
 - Smart send to out-of-sync destinations errors before it looks for anything newer (never a noop).
 - `t.Cleanup` is LIFO: a cleanup that must run BEFORE `destroyAfter` is registered AFTER it.
@@ -116,6 +126,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - `dev.nix`: bump `rev`, set `hash = lib.fakeHash`, build, paste the "got:" hash. The user must run nix.
 
 ## Open plans
+- `docs/specs/2026-10-12--integration-test-clean/`: EXECUTED 2026-10-12 (uncommitted); four TestIntegrationS3Clean* tests; `CleanEncrypted` and `CleanLayout` red on purpose (findings F1-F3 in `integration/README.md`); notes at the end of its plan.md.
 - `docs/specs/2026-10-11--integration-test-more/`: EXECUTED 2026-10-11 (01e927f..); thirteen TestIntegrationS3* tests; `ReceiveSafety/Mounted` and `/Origin` red on purpose (findings); notes at the end of its plan.md.
 - A chain keeps one stream kind: send (smart and `-i`), plan and `receive --auto` refuse an incremental whose `--raw` differs from its source's backup (`MixedChainError`, 0c038d2). A full starts a new chain.
 - `docs/specs/2026-10-11--integration-test-inc/`: EXECUTED 2026-10-11; five more TestIntegrationS3* tests; notes at the end of its plan.md.

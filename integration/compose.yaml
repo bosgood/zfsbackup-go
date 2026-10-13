@@ -15,6 +15,29 @@ services:
       test: ["CMD", "curl", "-sf", "http://localhost:9000/minio/health/live"]
       interval: 2s
       retries: 30
+  # Adds the MinIO user nodelete, who may list, read and write but not delete
+  # (nodelete-policy.json), for TestIntegrationS3CleanLocal/Denied. pgsty/mc
+  # is the community build of mc that goes with pgsty/minio. Pinned; bump on
+  # purpose. Each step can run again: user add updates the user and policy
+  # create replaces the policy. attach fails when the user already has the
+  # policy, so its failure is ignored (the image has no grep to check first);
+  # a user with no policy fails the Denied subtest at its first listing.
+  # make integration-docker does not attach to this service: its exit must
+  # not stop the others (--abort-on-container-exit).
+  mc:
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./nodelete-policy.json:/nodelete-policy.json:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc admin user add local nodelete nodelete-secret &&
+        mc admin policy create local nodelete /nodelete-policy.json &&
+        { mc admin policy attach local nodelete --user nodelete || true; }
   zfs:
     build:
       context: ..
@@ -30,10 +53,14 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+      mc:
+        condition: service_completed_successfully
     environment:
       AWS_S3_CUSTOM_ENDPOINT: http://minio:9000
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
       ZFSBACKUP_TEST_POOL: zbtest
+      ZFSBACKUP_IT_NODELETE_KEY: nodelete
+      ZFSBACKUP_IT_NODELETE_SECRET: nodelete-secret
       RUN: "${RUN:-TestIntegrationS3}"

@@ -49,7 +49,7 @@ INTEGRATION_COMPOSE ?= -f integration/compose.yaml $(INTEGRATION_AWS_COMPOSE)
 INTEGRATION_RUN = $(if $(filter .,$(RUN)),TestIntegrationS3,$(RUN))
 integration-docker:
 	GO_VERSION=$(GO_VERSION) RUN='$(INTEGRATION_RUN)' docker compose $(INTEGRATION_COMPOSE) up \
-		--build --abort-on-container-exit --exit-code-from zfs; \
+		--build --abort-on-container-exit --exit-code-from zfs --no-attach mc; \
 	status=$$?; docker compose $(INTEGRATION_COMPOSE) down -v; exit $$status
 
 # The NixOS Lima VM with the zfs module and Docker (integration/lima.yaml,

@@ -38,7 +38,6 @@ import (
 	"github.com/Azure/azure-sdk-for-go/storage"
 	"github.com/Azure/azure-storage-blob-go/azblob"
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/op/go-logging"
@@ -112,40 +111,44 @@ func setupS3Bucket(t *testing.T, bucket string) (*s3.S3, func()) {
 	}
 
 	client := s3.New(sess)
-	_, err = client.CreateBucket(&s3.CreateBucketInput{
-		Bucket: aws.String(bucket),
-	})
-	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok {
-			if aerr.Code() != "BucketAlreadyOwnedByYou" {
-				t.Fatalf("could not create S3 bucket due to error: %v", err)
-			}
-		}
+	// The cleanup below empties the whole bucket, every version, and deletes it: it
+	// must run only for a bucket this call made. A bucket that exists already
+	// (BucketAlreadyOwnedByYou too) is someone's; refuse it.
+	if _, err = client.CreateBucket(&s3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
+		t.Fatalf("could not create S3 bucket %s (an existing bucket is not cleaned, to protect its contents): %v", bucket, err)
 	}
 
 	return client, func() {
-		objects, err := client.ListObjects(&s3.ListObjectsInput{
-			Bucket: aws.String(bucket),
-		})
+		// Versions, not objects: a versioned bucket keeps every version and delete marker,
+		// and an unversioned one lists each object once, as the null version. One
+		// DeleteObjects per page: a page holds at most 1000, as many as one call takes.
+		err := client.ListObjectVersionsPages(&s3.ListObjectVersionsInput{Bucket: aws.String(bucket)},
+			func(page *s3.ListObjectVersionsOutput, _ bool) bool {
+				ids := make([]*s3.ObjectIdentifier, 0, len(page.Versions)+len(page.DeleteMarkers))
+				for _, v := range page.Versions {
+					ids = append(ids, &s3.ObjectIdentifier{Key: v.Key, VersionId: v.VersionId})
+				}
+				for _, m := range page.DeleteMarkers {
+					ids = append(ids, &s3.ObjectIdentifier{Key: m.Key, VersionId: m.VersionId})
+				}
+				if len(ids) == 0 {
+					return true
+				}
+				out, derr := client.DeleteObjects(&s3.DeleteObjectsInput{
+					Bucket: aws.String(bucket),
+					Delete: &s3.Delete{Objects: ids, Quiet: aws.Bool(true)},
+				})
+				if derr != nil {
+					t.Errorf("could not delete objects: %v", derr)
+					return true
+				}
+				for _, e := range out.Errors {
+					t.Errorf("could not delete %s (version %s): %s", aws.StringValue(e.Key), aws.StringValue(e.VersionId), aws.StringValue(e.Message))
+				}
+				return true
+			})
 		if err != nil {
-			t.Errorf("could not list objects: %v", err)
-		}
-
-		objectsToDelete := make([]*s3.ObjectIdentifier, 0, len(objects.Contents))
-		for _, object := range objects.Contents {
-			obj := s3.ObjectIdentifier{
-				Key: object.Key,
-			}
-			objectsToDelete = append(objectsToDelete, &obj)
-		}
-
-		if _, err := client.DeleteObjects(&s3.DeleteObjectsInput{
-			Bucket: aws.String(bucket),
-			Delete: &s3.Delete{
-				Objects: objectsToDelete,
-			},
-		}); err != nil {
-			t.Errorf("could not delete objects: %v", err)
+			t.Errorf("could not list object versions: %v", err)
 		}
 		if _, err := client.DeleteBucket(&s3.DeleteBucketInput{
 			Bucket: aws.String(bucket),

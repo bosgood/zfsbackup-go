@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go/service/s3"
+
 	"github.com/someone1/zfsbackup-go/cmd"
 )
 
@@ -222,6 +224,29 @@ func TestIntegrationS3Resume(t *testing.T) {
 		wantGUIDs(t, src, restored, snap)
 		compareDirs(t, "/"+src, "/"+restored)
 	})
+}
+
+// cutSend sends src@snap to s3://<bucket>/<prefix> through a zfs that cuts the
+// stream after 2.5 MiB, and returns the volumes the cached partial manifest
+// lists: the 2 complete 1 MiB volumes before the cut, also at the destination.
+// extra goes before the snapshot ("-i", a source). It fails unless the send
+// failed by the cut and left exactly those 2 volumes.
+func cutSend(t *testing.T, client *s3.S3, bucket, prefix, work, src, snap string, extra ...string) []string {
+	t.Helper()
+	target := "s3://" + bucket + "/" + prefix
+	flaky, arm := flakyZFS(t, 5<<19, 5)
+	before := objectNames(t, client, bucket, prefix)
+	args := append(append([]string{"--volsize", "1", "--compressor", ""}, extra...), src+"@"+snap, target)
+	arm()
+	_, logs, err := itRunOut(cmd.ResetSendJobInfo, "send", work, flaky, args...)
+	if err == nil || !strings.Contains(logs, "flaky zfs") {
+		t.Fatalf("send through the flaky zfs: got %v, want its failure in the log:\n%s", err, logs)
+	}
+	partial := cutPartial(t, work, snap, before, objectNames(t, client, bucket, prefix), logs)
+	if len(partial) != 2 {
+		t.Fatalf("after the cut the cached partial manifest lists %v, want 2 volumes:\n%s", partial, logs)
+	}
+	return partial
 }
 
 // cutPartial returns the volumes the cached partial manifest of snap in work

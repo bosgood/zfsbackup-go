@@ -11,3 +11,6 @@ services:
       AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY}"
       AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN:-}"
       ZFSBACKUP_IT_BUCKET: "${ZFSBACKUP_IT_BUCKET:?set ZFSBACKUP_IT_BUCKET}"
+      # The nodelete user is MinIO's: the Denied subtest skips on real S3.
+      ZFSBACKUP_IT_NODELETE_KEY: ""
+      ZFSBACKUP_IT_NODELETE_SECRET: ""
