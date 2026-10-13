@@ -34,9 +34,9 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/crypto/openpgp"
-	"golang.org/x/crypto/openpgp/armor"
-	"golang.org/x/crypto/openpgp/packet"
+	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/packet"
 
 	"github.com/someone1/zfsbackup-go/files"
 	"github.com/someone1/zfsbackup-go/internal/fakezfs"
@@ -65,6 +65,13 @@ func newKey(t *testing.T) *openpgp.Entity {
 // as send/receive flags.
 func writeRings(t *testing.T, keys ...*openpgp.Entity) []string {
 	t.Helper()
+	return writeRingsFor(t, "backup@example.com", keys...)
+}
+
+// writeRingsFor is writeRings with email as --encryptTo and --signFrom. It writes the keys'
+// signatures as they are: newKey signed them, a key read from a file has them.
+func writeRingsFor(t *testing.T, email string, keys ...*openpgp.Entity) []string {
+	t.Helper()
 	dir := t.TempDir()
 	var flags []string
 	for _, ring := range []struct {
@@ -81,7 +88,7 @@ func writeRings(t *testing.T, keys ...*openpgp.Entity) []string {
 		}
 		for _, e := range keys {
 			if ring.private {
-				err = e.SerializePrivate(w, nil)
+				err = e.SerializePrivateWithoutSigning(w, nil)
 			} else {
 				err = e.Serialize(w)
 			}
@@ -96,7 +103,7 @@ func writeRings(t *testing.T, keys ...*openpgp.Entity) []string {
 		}
 		flags = append(flags, ring.flag, path)
 	}
-	return append(flags, "--encryptTo", "backup@example.com", "--signFrom", "backup@example.com")
+	return append(flags, "--encryptTo", email, "--signFrom", email)
 }
 
 // sentSet sends tank/data@a (3 MiB of stream, 1 MiB volumes) to env.dest and returns its

@@ -158,7 +158,7 @@ CMD ["go", "test", "./..."]
 # in the image.
 FROM ubuntu:24.04 AS integration
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl diffutils zfsutils-linux \
+        ca-certificates curl diffutils gnupg zfsutils-linux \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 COPY --from=toolchain /usr/local/go /usr/local/go
 ENV PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local GOFLAGS=-mod=vendor

@@ -1,5 +1,6 @@
 # CHANGELOG
 
+* [CHANGE] pgp: keys with an expiry date (the key, a subkey or a self-signature) are refused by send, plan, receive, list and clean unless `--allowKeyExpiry`; go-crypto checks a signer's expiry at restore time, so a backup signed by a key that has expired since does not verify. With the flag, each expiry date is logged
 * [ADD] test: integration helpers: one paged version delete for both bucket modes (a shared bucket loses no versions), cutSend takes the expected volume count, a sleep child holds the busy lock, the SIGTERM test signals only with deletes done and 1000 orphans left, the log assertions live in log_assert_test.go, the mc image is pinned by digest and checks the nodelete policy; setupS3Bucket refuses an existing bucket
 * [FIX] clean, list, receive: with no keys, an encrypted manifest is reported as encrypted to a key this run lacks (pass --encryptTo and --secretKeyRingPath; the cached copy stays), not as a damaged object to delete from the destination
 * [FIX] clean: the manifest of a nested destination (run/sub/ seen from run/) no longer counts as another --manifestPrefix's, so an orphan here of a set the nested destination also holds is deleted; a --manifestPrefix with a slash still protects its sets

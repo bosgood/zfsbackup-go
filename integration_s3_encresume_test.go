@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -15,7 +16,11 @@ import (
 // encrypts it with a new session key, a tampered volume fails the restore,
 // and a bookmark is the source of an encrypted incremental.
 func TestIntegrationS3EncryptedResume(t *testing.T) {
-	const cut = 5 << 19 // 2.5 MiB: two complete 1 MiB volumes, then the cut
+	// 3.5 MiB: two or three complete volumes, then the cut. An encrypted volume ends one
+	// copy step (512 KiB) late: go-crypto's packet writer holds data back, so the counter
+	// sees under 974 KiB after 1 MiB of stream, and a volume holds 1.5 MiB of it
+	// (files.TestEncryptedVolumeStreamBytes).
+	const cut = 7 << 19
 	pool := testPool(t)
 	client, bucket, prefix := itBucket(t, "zfsbackup-it-encres")
 	target := "s3://" + bucket + "/" + prefix
@@ -83,20 +88,25 @@ func TestIntegrationS3EncryptedResume(t *testing.T) {
 		t.Fatalf("send through the flaky zfs: got %v, want its failure in the log:\n%s", err, logs)
 	}
 	added := slices.DeleteFunc(objectNames(t, client, bucket, prefix), func(n string) bool { return slices.Contains(before, n) })
-	if len(added) != 2 {
-		t.Fatalf("after the kill the destination got %v, want 2 volumes:\n%s", added, logs)
+	kept := len(added)
+	if kept < 2 || kept > 3 {
+		t.Fatalf("after the kill the destination got %v, want 2 or 3 volumes:\n%s", added, logs)
 	}
 	wantPGPVolume(t, added[0], objectBytes(t, client, bucket, prefix+added[0]))
 
-	resume("Resuming from volume 3: 2 of 2 cached volumes")
+	resume(fmt.Sprintf("Resuming from volume %d: %d of %d cached volumes", kept+1, kept, kept))
 	m := manifestFor(t, work, src, target, snap, rings...)
-	if len(m.Volumes) < 3 {
-		t.Fatalf("%s has %d volumes, want 3+", snap, len(m.Volumes))
+	if len(m.Volumes) <= kept {
+		t.Fatalf("%s has %d volumes, want %d+", snap, len(m.Volumes), kept+1)
 	}
-	if strings.Join(added, " ") != m.Volumes[0].ObjectName+" "+m.Volumes[1].ObjectName {
-		t.Errorf("the cut send uploaded %v, the manifest starts with %s, %s", added, m.Volumes[0].ObjectName, m.Volumes[1].ObjectName)
+	var head []string
+	for _, v := range m.Volumes[:kept] {
+		head = append(head, v.ObjectName)
 	}
-	wantPGPVolume(t, m.Volumes[2].ObjectName, objectBytes(t, client, bucket, prefix+m.Volumes[2].ObjectName))
+	if !slices.Equal(added, head) {
+		t.Errorf("the cut send uploaded %v, the manifest starts with %v", added, head)
+	}
+	wantPGPVolume(t, m.Volumes[kept].ObjectName, objectBytes(t, client, bucket, prefix+m.Volumes[kept].ObjectName))
 	restore(restoredER)
 
 	// Volume 1 and the manifest are gone: all is sent again, with a new

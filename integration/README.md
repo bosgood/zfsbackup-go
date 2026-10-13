@@ -34,6 +34,10 @@ The other `TestIntegrationS3*` tests run in the same environment:
 | `TestIntegrationS3CleanEncrypted` | `clean` at an encrypted destination with no rings, `--force` and no rings, another key's rings: refused, nothing deleted, the advice is to pass the key (finding F1, fixed) |
 | `TestIntegrationS3CleanLayout` | `clean` of nested (`run/`, `run/sub/`) and sibling (`other/`) prefixes, the bucket root, two destinations; subtests `Separator` (`--separator '#'`), `Legacy` (a volume under the old key prefix), `Versioned` (versioning on); findings F2 and F3, fixed |
 | `TestIntegrationS3CleanMany` | `clean` of 1100 orphans (more than one listing page); subtest `Interrupted`: a SIGTERM in the middle of 3000 deletes, then a clean that finishes |
+| `TestIntegrationS3PGPKeys` | each `testdata/pgp` fixture (`ed25519`, `ed25519-pass` with `PGP_PASSPHRASE`, `rsa`): send, list, restore from an empty cache; manifest key fingerprints; another fixture's key refused with ring advice; a wrong passphrase uploads nothing |
+| `TestIntegrationS3PGPModes` | encrypt-only and sign-only sends restore; encrypted pipe-mode receive (`--maxFileBuffer 0`); a tampered signed volume fails its manifest check |
+| `TestIntegrationS3PGPRotation` | a chain signed with the RSA fixture, then the Ed25519 key: smart send and `receive --auto` refuse the old signatures without `--trustSigner` and work with it |
+| `TestIntegrationS3PGPInterop` | stock `gpg` (in the image) decrypts and verifies every object; the decrypted volumes feed `zfs receive`; subtests `ed25519`, `rsa`, and `runbook` (a key made with the runbook's `gpg` commands, gpg 2.4, with a passphrase). Skipped without `gpg` |
 | `TestIntegrationS3Large` | 1 GiB with the default flags (`--volsize 200`, `--maxFileBuffer 5`, `--maxParallelUploads 4`, gzip): six volumes, each a multipart upload of 10 MiB parts (checked by ETag), file-buffered and in pipe mode; restores of each; subtest `Replication`: `send -R` of a parent with two children, received as a tree |
 | `TestIntegrationS3ReviewGUID` | finding 7: a snapshot of one name and second on two datasets (one `zfs snapshot` call, two guids); a backup of one received into the other is refused (explicit and `--auto`, with and without `-F`); a real copy gets "already exists" |
 | `TestIntegrationS3ReviewMountGuard` | findings 8 and 9: subtests `Replication` (a `-R` child with a local mountpoint, mounted, on the same host), `Shared` (`--properties`, source gone, another dataset mounted at its path) and `SharedReplication` (the same for a `-R` child): refused without `--unmounted`, the live files visible; received unmounted with it |
@@ -113,7 +117,8 @@ container. Docker makes the directory when it is missing.
 
 `RUN` selects tests (a `go test -run` pattern; the default runs all
 `TestIntegrationS3*`): `make integration-vm RUN=TestIntegrationS3Resume`, or
-`RUN=TestIntegrationS3/Pipe` for one subtest
+`RUN=TestIntegrationS3/Pipe` for one subtest, or
+`RUN=TestIntegrationS3PGP` for the four OpenPGP tests
 (`RUN=TestIntegrationS3CleanLayout/Separator` runs the parent's steps, then
 that subtest).
 

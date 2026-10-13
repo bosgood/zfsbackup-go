@@ -71,6 +71,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - Fault injection: upload failure on `file://` = a regular FILE at `<dest>/tank`. ENOSPC = `make test-enospc`. S3 without network = `httptest.Server` + `AWS_S3_CUSTOM_ENDPOINT`, `AWS_REGION`, keys (fake in `clean_s3_test.go`).
 - zfs tests are `package zfs_test` (the fake imports `zfs`).
 - `fmt.Sprintf(w)` with no verb appends `%!(EXTRA ...)`. `fmt.Sprint("a", 1)` is `a1` (space only between two non-strings).
+- gpg in tests on macOS: GNUPGHOME under `t.TempDir()` is too long for gpg-agent's socket ("File name too long"); use `os.MkdirTemp("", "gpg")` and `gpgconf --kill gpg-agent` on cleanup. `gpg --verify` rejects encrypted messages; check `GOODSIG` in `--decrypt --status-file`.
 - Never put backticks in a cobra/pflag usage string: pflag shows the span as the flag TYPE.
 - In-process cobra runs: a subcommand keeps the context of its FIRST run (cobra sets it only when nil). `cmd.Run` resets it; use it, not `RootCmd.ExecuteContext`.
 - `runInProcess(ctx, reset, args...)` in `e2e_test.go` is THE in-process runner (e2e `run`/`sendCtx`, integration `itRunCtx` call it). Do not copy its body again (three copies drifted, 2026-10-12).
@@ -104,11 +105,18 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - zfs 2.4.4 refuses a BOOKMARK source with `-R` and `-I` but accepts `-p` and `-D` (the 2026-10-12 review claimed all four; reading OpenZFS source was wrong). Check zfs facts on the VM before you build a rule on them.
 - `zfs receive -F` DOES destroy a same-second other-named snapshot taken after the source (txg order); `refuseDestroy` counts ties.
 - Same name and second on two datasets with other guids: ONE `zfs snapshot a@n b@n` call (`snapshotAcross`); zfs takes them in one txg.
+- An ENCRYPTED volume at `--volsize 1` holds 1 to 1.5 MiB of stream: go-crypto's packet writer holds data back, so the counter ends the volume one 512 KiB copy step late. Never assume N MiB of stream = N encrypted volumes; leave a whole volume of slack. `files.TestEncryptedVolumeStreamBytes` pins it (exactly 1.5 MiB today).
+- `VolumeInfo.Counter()` panics after `Close` (the counter is nil). Read it first.
+- `setupS3Bucket` cleanup: S3/MinIO reject a `DeleteObjects` with 0 keys (MalformedXML). A test may leave a bucket empty.
+- `make fmt-check` fails in a git worktree (the `.git` link does not resolve in the container). Use `make fmt-write FILES=...` and check `git diff`.
+- `PGP_PASSPHRASE` is read in `init()` AND `resetRootFlags()`: `t.Setenv` + a `Reset*JobInfo` run sees it. Unset with an encrypted key and no TTY panics the test binary.
 
 ## Git and a shared tree
 - Another session can edit this tree at the same time. Run `git status` right before staging; stage BY NAME, never `git add -A`.
 - A shared file already shows `M`? Stage only your hunk: `git show HEAD:<f> > /tmp/f`, add your change, `git update-index --cacheinfo 100644,$(git hash-object -w /tmp/f),<f>`.
 - No `git add -p` here. To split a staged change: save `git diff --cached`, reset, rebuild each step's file from HEAD + line ranges; the final diff must be byte-identical to the saved patch.
+- 1Password ssh commit signing fails in a non-interactive session ("failed to fill whole buffer"): commit with `-c commit.gpgsign=false`, re-sign after.
+- A long-lived branch that shares cherry-picked history with master (pgp-ed25519, 2026-10-12): `git merge` gave ~40 add/add conflicts; `git cherry HEAD <branch>` + cherry-pick of the `+` commits was clean. Vendor conflicts: reset `vendor go.sum` to HEAD, fix go.mod, `make mod-vendor`.
 - Check a commit stack: `git archive` each commit to /tmp, `go vet ./...` all of them in ONE container (vet also compiles tests). Delete the copies (~30 MB each).
 
 ## Subagents
@@ -131,7 +139,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - `send` locks `<workingDirectory>/locks/<md5(dataset)>.lck`. Same host only; invisible across users and working dirs.
 - On the 1st, sanoid takes monthly, daily, hourly in that order, same second. Selection must not depend on tie order.
 - `tmp/snap.json` (gitignored) is native `zfs list -j`; `testdata/zfs/*.json` is a flat array of rows. `zfs.ParseSnapshotList` rejects the native shape.
-- gpg's default ed25519 key fails until the pgp-ed25519 branch lands; use RSA. Ring files must be ASCII-armored.
+- PGP is ProtonMail/go-crypto v1 `openpgp` (not `openpgp/v2`): ed25519/cv25519 and RFC 9580 v6 keys load. Keyring fixtures in `testdata/pgp` (`make pgp-fixtures` regenerates). Ring files must be ASCII-armored.
 - `dev.nix`: bump `rev`, set `hash = lib.fakeHash`, build, paste the "got:" hash. The user must run nix.
 
 - Fixed 2026-10-12 (review findings 1-20): explicit `-i` checks the source's GUID; smart send refuses a broken chain (`broken-chain`) and drops snapshots/backups > 1 day in the future; `--auto` links by Unix time; `--origin` on step 1 only; receive checks GUID, `-R` children's and the recorded `SourceMountpoint`; `-F` needs `--allowDestroy` to destroy; `send -n` runs the read-only refusals and connects to destinations.
@@ -157,6 +165,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - `docs/specs/2026-10-11--integration-test-env/`: EXECUTED 2026-10-11 (d426bec..); NixOS VM instead of Ubuntu; notes at the end of its plan.md.
 - `docs/specs/2026-10-11--sigterm-handling/`: EXECUTED 2026-10-11 (a2c0636..069eeba); notes at the end of its plan.md.
 - `docs/specs/2026-10-11--third-pass-fixes/`: EXECUTED 2026-10-11 (caed77d..525b133); notes at the end of its plan.md.
-- `docs/specs/2026-09-29--pgp-ed25519/`. Unexecuted as of 2026-09-29.
+- `docs/specs/2026-10-12--pgp-integration-tests/`: tasks done 2026-10-12; four `TestIntegrationS3PGP*` tests, `gnupg` in the integration image; notes at the end of its plan.md. Open: whole-suite run and proofs, see its remaining.md.
+- `docs/specs/2026-09-29--pgp-ed25519/`: EXECUTED 2026-10-02 on branch pgp-ed25519, replayed onto master 2026-10-12 by cherry-pick (11 commits, 2 superseded); notes at the end of its plan.md.
 - `send --dry-run` audit (2026-09-07), items 1-5, 7, 8: status unknown, see the archive.
 - Prune spec gap: deleting a destination manifest leaves a cached copy that `clean` treats as live. Prune must delete the cached copy too.

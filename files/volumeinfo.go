@@ -22,6 +22,7 @@ package files
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/md5"  // nolint:gosec // MD5 not used for cryptographic purposes here
@@ -39,13 +40,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ProtonMail/go-crypto/openpgp"
+	pgperrors "github.com/ProtonMail/go-crypto/openpgp/errors"
+	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"github.com/dustin/go-humanize"
 	"github.com/juju/ratelimit"
 	gzip "github.com/klauspost/pgzip"
 	"github.com/miolini/datacounter"
-	"golang.org/x/crypto/openpgp"
-	pgperrors "golang.org/x/crypto/openpgp/errors"
-	"golang.org/x/crypto/openpgp/packet"
 
 	"github.com/someone1/zfsbackup-go/config"
 	"github.com/someone1/zfsbackup-go/log"
@@ -225,7 +226,7 @@ func (v *VolumeInfo) signatureError() error {
 	got := v.pgpr.SignedBy.Entity.PrimaryKey.Fingerprint
 	want := make([]string, 0, len(v.signers))
 	for _, signer := range v.signers {
-		if signer.PrimaryKey.Fingerprint == got {
+		if bytes.Equal(signer.PrimaryKey.Fingerprint, got) {
 			return nil
 		}
 		want = append(want, fmt.Sprintf("%X", signer.PrimaryKey.Fingerprint))

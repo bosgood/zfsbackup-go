@@ -38,7 +38,7 @@ Read this when a task adds a flag, a command, or changes exit behavior.
 - `config.WorkingDir`: default `~/.zfsbackup`. Holds `locks/`, `cache/`, `temp/`. See [data-model.md](data-model.md).
 - `config.BackupTempdir`: temp file dir for volumes.
 - `log.AppLogger`: op/go-logging. Default level Notice. User-facing text must use `Noticef`.
-- `pgp/`: loads public and secret keyrings from `--publicKeyRingPath` and `--secretKeyRingPath`. Passphrase from `PGP_PASSPHRASE`.
+- `pgp/`: loads public and secret keyrings from `--publicKeyRingPath` and `--secretKeyRingPath`. Passphrase from `PGP_PASSPHRASE`. `loadSendKeys` and `loadReceiveKeys` end in `checkKeyExpiry`: a key with an expiry date (`pgp.Expiries`) is refused unless `--allowKeyExpiry` (root flag, var `allowKeyExpiry`).
 - `zfs.ZFSPath` / `--zfsPath`: the `zfs` binary. Tests point it at the test binary (see [testing.md](testing.md)).
 
 ## Tests

@@ -57,7 +57,9 @@ func TestE2EResumeDoesNotTrustOtherDestinationsCache(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			const streamBytes = 3 << 20
+			// 5 MiB: volume 3 must be complete. An encrypted volume at --volsize 1 holds 1 to 1.5 MiB
+			// of stream (files.TestEncryptedVolumeStreamBytes).
+			const streamBytes = 5 << 20
 			env := newE2EEnv(t)
 			dest2 := newDest(t)
 			rings := writeRings(t, newKey(t))

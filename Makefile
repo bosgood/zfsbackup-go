@@ -223,3 +223,8 @@ e2e:
 # blocks, e.g. `make help CMD=send` (CMD empty prints the root help).
 help:
 	go run . $(CMD) --help
+
+# Regenerate the OpenPGP keyring fixtures under testdata/pgp with the GnuPG
+# shipped in the Go image (see testdata/pgp/generate.sh).
+pgp-fixtures:
+	docker run --rm -v "$(CURDIR)":/src -w /src $(GO_IMAGE) bash testdata/pgp/generate.sh
