@@ -72,6 +72,11 @@ type Scenario struct {
 	Every       time.Duration
 	Skips       []TimeRange // no run happens inside these ranges (the host was down)
 	Checks      []string    // opt-in checks, e.g. coverage:_monthly
+	// Now is the wall clock of the plan: snapshots and backups dated more than a day after
+	// it (or after a later run) are ignored, as send ignores them. Zero reads the clock
+	// (backup.Now). LoadScenario sets it to the newest time its files hold, so a golden
+	// gives the same result on any day.
+	Now time.Time
 }
 
 // TimeRange is a half-open interval [From, Until) of run times.
@@ -116,7 +121,28 @@ func LoadScenario(dir string) (*Scenario, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.Now = s.newestTime()
 	return s, nil
+}
+
+// newestTime is the newest creation time of the snapshots and of the backups' snapshots, or zero.
+func (s *Scenario) newestTime() time.Time {
+	var newest time.Time
+	later := func(t time.Time) {
+		if t.After(newest) {
+			newest = t
+		}
+	}
+	for _, snap := range s.Snapshots {
+		later(snap.CreationTime)
+	}
+	for _, backups := range s.DestBackups {
+		for _, m := range backups {
+			later(m.BaseSnapshot.CreationTime)
+			later(m.IncrementalSnapshot.CreationTime)
+		}
+	}
+	return newest
 }
 
 // scenarioSnapshotsFile returns the path of a scenario's snapshot listing:
@@ -172,7 +198,9 @@ func AddSmartFlags(fs *pflag.FlagSet, j *files.JobInfo) {
 		"fullIfOlderThan",
 		-1*time.Minute,
 		"set this flag to do an incremental backup of the most recent snapshot from the most recent snapshot found in the target, unless "+
-			"the last full backup is older than this duration, in which case do a full backup.",
+			"the last full backup is older than this duration, in which case do a full backup. A full is due 10 minutes before the "+
+			"duration ends (a duration of 1h or less: when it ends), so the seconds sanoid adds to its snapshot times do not move a "+
+			"full by a month. Snapshots and backups dated more than a day after now are ignored, with a warning.",
 	)
 	fs.StringVar(
 		&j.FullSnapshotSuffix,

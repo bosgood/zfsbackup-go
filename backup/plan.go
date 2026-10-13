@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/someone1/zfsbackup-go/files"
+	"github.com/someone1/zfsbackup-go/log"
 )
 
 // PlanAction is what a smart backup run does.
@@ -52,7 +53,31 @@ const (
 	reasonExplicitIncremental = "explicit-incremental"
 	reasonAlreadyBackedUp     = "already-backed-up"
 	reasonCompletePartial     = "complete-partial"
+	reasonBrokenChain         = "broken-chain"
 )
+
+// Now is the clock the smart planner reads to find snapshots and backups dated in the future
+// (see dropFutureDated). Tests set it, as they set HostZone; nothing else does.
+var Now = time.Now
+
+// futureSlack is how far after now a snapshot or a backup may be dated. One dated later is from a
+// wrong clock (a host that booted with its clock in 2099, say): the planner ignores it. A day
+// covers time zones and a clock that is a few hours fast.
+const futureSlack = 24 * time.Hour
+
+// fullWindowSlack is the slack of --fullIfOlderThan: a full is due when the last full is older
+// than the window minus this. sanoid takes its snapshots some seconds after the hour, a few
+// seconds earlier or later each time; without the slack, a 720h window after a 30-day month
+// would depend on those seconds. A window of an hour or less has no slack.
+const fullWindowSlack = 10 * time.Minute
+
+// fullWindowElapsed reports whether a last full of age age is old enough for a new full.
+func fullWindowElapsed(age, window time.Duration) bool {
+	if window > time.Hour {
+		window -= fullWindowSlack
+	}
+	return age > window
+}
 
 // Plan is the decision of one smart backup run: a full backup of Base, an
 // incremental backup from Source to Base, or nothing.
@@ -66,6 +91,9 @@ type Plan struct {
 	// FullDue is set when the last full is older than --fullIfOlderThan but
 	// no full candidate newer than the last backup exists yet.
 	FullDue bool
+	// Warnings tell what the planner ignored or found wrong, also when it fails. send logs them
+	// at Warning; plan prints them under the run.
+	Warnings []string
 }
 
 func (p Plan) String() string {
@@ -79,11 +107,122 @@ func (p Plan) String() string {
 	}
 }
 
-// planSmartSnapshots decides what a "smart" backup sends. It is pure (performs
+// planSmartSnapshots decides what a "smart" backup sends now (the clock Now), as planSmartAt
+// does, and logs the plan's warnings at Warning.
+func planSmartSnapshots(
+	jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, destBackups [][]*files.JobInfo, completable bool,
+) (Plan, error) {
+	p, err := planSmartAt(Now(), jobInfo, snapshots, destBackups, completable)
+	for _, w := range p.Warnings {
+		log.AppLogger.Warningf("%s", w)
+	}
+	return p, err
+}
+
+// planSmartAt decides what a "smart" backup run at now sends. It is pure (performs
 // no I/O) so it can be unit-tested and simulated: all ZFS and backend state is
 // passed in. snapshots must be sorted newest-first, and destBackups[i] holds
 // the manifests found at destination i, also newest-first. It reads only the
-// smart options and Raw from jobInfo, and VolumeName for messages.
+// smart options, Raw and the zfs send flags that cannot send from a bookmark
+// from jobInfo, and VolumeName for messages.
+//
+// Snapshots and backups dated more than futureSlack after now are ignored, with
+// a warning (see dropFutureDated). The returned plan holds its warnings also
+// when the error is not nil.
+func planSmartAt(
+	now time.Time, jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, destBackups [][]*files.JobInfo, completable bool,
+) (Plan, error) {
+	snapshots, destBackups, warnings := dropFutureDated(jobInfo.VolumeName, now, snapshots, destBackups)
+	p, err := planSmart(jobInfo, snapshots, destBackups, completable)
+	p.Warnings = append(warnings, p.Warnings...)
+	return p, err
+}
+
+// dropFutureDated removes the snapshots and the backups dated more than futureSlack after now,
+// and returns a warning for each. A snapshot taken while the clock was wrong (in 2099, say) would
+// otherwise be backed up as the newest, and every later snapshot would look older than that
+// backup: each run would send nothing, with exit 0, and an explicit --full would not change it.
+// A backup is dated by its base snapshot. The inputs are not changed.
+func dropFutureDated(
+	volume string, now time.Time, snapshots []files.SnapshotInfo, destBackups [][]*files.JobInfo,
+) ([]files.SnapshotInfo, [][]*files.JobInfo, []string) {
+	limit := now.Add(futureSlack)
+	var warnings []string
+	keptSnapshots := make([]files.SnapshotInfo, 0, len(snapshots))
+	for _, s := range snapshots {
+		if !s.CreationTime.After(limit) {
+			keptSnapshots = append(keptSnapshots, s)
+			continue
+		}
+		warnings = append(warnings, fmt.Sprintf(
+			"Ignoring %s%s: it is dated %s, more than %v after now (%s). Was the clock wrong when it was taken? "+
+				"A smart send does not back it up; destroy it, or send it with an explicit snapshot name.",
+			volume, snapshotSeparator(s), s.CreationTime.UTC().Format(time.RFC3339), futureSlack, now.UTC().Format(time.RFC3339),
+		))
+	}
+	keptBackups := make([][]*files.JobInfo, len(destBackups))
+	for idx, backups := range destBackups {
+		keptBackups[idx] = make([]*files.JobInfo, 0, len(backups))
+		for _, m := range backups {
+			if !m.BaseSnapshot.CreationTime.After(limit) {
+				keptBackups[idx] = append(keptBackups[idx], m)
+				continue
+			}
+			warnings = append(warnings, fmt.Sprintf(
+				"Ignoring the backup %s at %s: its snapshot %s is dated %s, more than %v after now (%s). Was the clock "+
+					"wrong when it was taken? The next backups do not continue from it.",
+				describeBackup(m.BaseSnapshot, m.IncrementalSnapshot), destinationLabel(idx, len(destBackups)),
+				m.BaseSnapshot.Name, m.BaseSnapshot.CreationTime.UTC().Format(time.RFC3339), futureSlack, now.UTC().Format(time.RFC3339),
+			))
+		}
+	}
+	return keptSnapshots, keptBackups, warnings
+}
+
+// snapshotSeparator is "@name" for a snapshot and "#name" for a bookmark.
+func snapshotSeparator(s files.SnapshotInfo) string {
+	if s.Bookmark {
+		return "#" + s.Name
+	}
+	return "@" + s.Name
+}
+
+// destinationLabel names destination idx of n in a message.
+func destinationLabel(idx, n int) string {
+	if n > 1 {
+		return fmt.Sprintf("destination #%d", idx+1)
+	}
+	return "the destination"
+}
+
+// brokenLink returns the snapshot whose backup is missing from the chain of the newest backup in
+// backups (newest-first): restoring the newest backup needs a backup of it, and the destination
+// has none. It is nil when that chain reaches a full, and for no backups. Links are found as
+// parentOf finds them.
+func brokenLink(backups []*files.JobInfo) *files.SnapshotInfo {
+	if len(backups) == 0 {
+		return nil
+	}
+	m := backups[0]
+	for steps := 0; m.IncrementalSnapshot.Name != ""; steps++ {
+		parent := parentOf(backups, m.IncrementalSnapshot)
+		if parent == nil || steps >= len(backups) { // steps: a loop of links cannot be restored either
+			missing := m.IncrementalSnapshot
+			return &missing
+		}
+		m = parent
+	}
+	return nil
+}
+
+// needsSnapshotSource reports whether jobInfo has a zfs send flag that cannot send from a bookmark:
+// zfs send refuses a bookmark source with -R, -p, -D and -I ("Unsupported flag with filesystem or
+// bookmark").
+func needsSnapshotSource(jobInfo *files.JobInfo) bool {
+	return jobInfo.Replication || jobInfo.Properties || jobInfo.Deduplication || jobInfo.IntermediaryIncremental
+}
+
+// planSmart is planSmartAt without the future-dated check.
 //
 // When FullSnapshotSuffix/IncrementalSnapshotSuffix are set, full backups are
 // anchored on the newest snapshot matching the full suffix (e.g. "_monthly")
@@ -91,7 +230,7 @@ func (p Plan) String() string {
 // (e.g. "_daily"). With both suffixes empty this preserves the historical
 // behavior of using the single newest matching snapshot for everything.
 // nolint:funlen,gocyclo // Difficult to break this up
-func planSmartSnapshots(
+func planSmart(
 	jobInfo *files.JobInfo, snapshots []files.SnapshotInfo, destBackups [][]*files.JobInfo, completable bool,
 ) (Plan, error) {
 	if len(snapshots) == 0 {
@@ -192,8 +331,25 @@ func planSmartSnapshots(
 		if lastComparableSnapshots[0] == nil {
 			return Plan{}, fmt.Errorf("no snapshot to increment from - try doing a full backup instead")
 		}
+		idx, missing := firstBrokenChain(destBackups)
 		if !incrBase.CreationTime.After(lastComparableSnapshots[0].CreationTime) {
-			return Plan{Action: PlanNoop, Reason: reasonNothingNewer}, nil
+			p := Plan{Action: PlanNoop, Reason: reasonNothingNewer}
+			if missing != nil {
+				// Nothing to send now, but the next run fails: say so now.
+				p.Warnings = []string{fmt.Sprintf(
+					"The chain of %s at %s is broken: it holds no backup of %s, so its newest backup, %s, and every "+
+						"incremental after it cannot be restored. The next incremental is refused. Start a new chain with --full.",
+					jobInfo.VolumeName, destinationLabel(idx, len(destBackups)), missing.Name, destBackups[idx][0].BaseSnapshot.Name,
+				)}
+			}
+			return p, nil
+		}
+		if missing != nil {
+			return Plan{}, fmt.Errorf(
+				"cannot continue the chain of %s: %s holds no backup of %s, so its newest backup, %s, cannot be "+
+					"restored, and an incremental from it could not be either. Start a new chain with --full",
+				jobInfo.VolumeName, destinationLabel(idx, len(destBackups)), missing.Name, destBackups[idx][0].BaseSnapshot.Name,
+			)
 		}
 		if err := sameStreamKind(jobInfo, destBackups); err != nil {
 			return Plan{}, err
@@ -224,7 +380,7 @@ func planSmartSnapshots(
 	// from, orphaning the full). When destinations disagree on the most recent
 	// backup, the one furthest behind decides, so the full brings them back
 	// in step whatever order they are given in.
-	ageExceeded := snapshots[0].CreationTime.Sub(lastFull.CreationTime) > jobInfo.FullIfOlderThan
+	ageExceeded := fullWindowElapsed(snapshots[0].CreationTime.Sub(lastFull.CreationTime), jobInfo.FullIfOlderThan)
 	// Nothing matches the full backup criteria at all, so no full can ever be taken and
 	// --fullIfOlderThan can never be honored: the prefix or full suffix is almost certainly
 	// wrong. Fail loudly rather than extending the incremental chain forever.
@@ -241,10 +397,45 @@ func planSmartSnapshots(
 		}
 	}
 	hasNewerFullBase := fullBase != nil && fullBase.CreationTime.After(behind.CreationTime)
+
+	// The newest backup at every destination must restore: its chain must reach a full there. A
+	// set deleted from the middle of the chain (clean --force, or by hand) breaks it; an
+	// incremental that continues from the newest backup could not be restored either. So a broken
+	// chain is handled as a pruned source is: a full of a newer full candidate, or nothing until
+	// one exists. Either way the warning names the missing link.
+	var brokenWarning string
+	brokenIdx, missing := firstBrokenChain(destBackups)
+	if missing != nil {
+		brokenWarning = fmt.Sprintf(
+			"The chain of %s at %s is broken: it holds no backup of %s, so its newest backup, %s, and every "+
+				"incremental after it cannot be restored. ",
+			jobInfo.VolumeName, destinationLabel(brokenIdx, len(destBackups)), missing.Name,
+			destBackups[brokenIdx][0].BaseSnapshot.Name,
+		)
+	}
+
 	if ageExceeded && hasNewerFullBase {
-		return Plan{Action: PlanFull, Base: *fullBase, Reason: reasonWindowElapsed}, nil
+		p := Plan{Action: PlanFull, Base: *fullBase, Reason: reasonWindowElapsed}
+		if missing != nil {
+			p.Warnings = []string{brokenWarning + "The full backup of " + fullBase.Name + " starts a new chain."}
+		}
+		return p, nil
 	}
 	fullDue := ageExceeded
+
+	if missing != nil {
+		if !hasNewerFullBase {
+			return Plan{
+				Action: PlanNoop, Source: *missing, Reason: reasonBrokenChain, FullDue: fullDue,
+				Warnings: []string{brokenWarning + "No full backup candidate newer than the last backup exists yet: " +
+					"nothing is sent until one does. To start a new chain now, send a full backup of a newer snapshot."},
+			}, nil
+		}
+		return Plan{
+			Action: PlanFull, Base: *fullBase, Source: *missing, Reason: reasonBrokenChain,
+			Warnings: []string{brokenWarning + "The full backup of " + fullBase.Name + " starts a new chain."},
+		}, nil
+	}
 
 	// Otherwise perform an incremental up to the incremental-candidate snapshot.
 	if incrBase == nil {
@@ -262,21 +453,45 @@ func planSmartSnapshots(
 	// full-candidate newer than that backup; an older one would only re-send
 	// data already backed up, so wait for the next one instead. The copy keeps
 	// the destination state untouched: the existence check flags the source as
-	// a bookmark if only a bookmark of it is left.
+	// a bookmark if only a bookmark of it is left. zfs send cannot send from a
+	// bookmark with -R, -p, -D or -I: with those, a source left only as a
+	// bookmark is a pruned source too.
 	source := *lastBackup[0]
-	if !validateSnapShotExistsFromSnaps(&source, snapshots, true) {
+	present := validateSnapShotExistsFromSnaps(&source, snapshots, true)
+	onlyBookmark := present && source.Bookmark && needsSnapshotSource(jobInfo)
+	if !present || onlyBookmark {
 		if fullBase == nil {
 			return Plan{}, fmt.Errorf("no snapshots found matching the full backup criteria")
 		}
-		if !fullBase.CreationTime.After(source.CreationTime) {
-			return Plan{Action: PlanNoop, Source: source, Reason: reasonSourcePruned, FullDue: fullDue}, nil
+		var warnings []string
+		if onlyBookmark {
+			warnings = []string{fmt.Sprintf(
+				"Only a bookmark of %s, the last backup, is left on the pool, and zfs send cannot send from a "+
+					"bookmark with -R, -p, -D or -I: no incremental can be sent from it.",
+				source.Name,
+			)}
 		}
-		return Plan{Action: PlanFull, Base: *fullBase, Source: source, Reason: reasonSourcePruned}, nil
+		if !fullBase.CreationTime.After(source.CreationTime) {
+			return Plan{Action: PlanNoop, Source: source, Reason: reasonSourcePruned, FullDue: fullDue, Warnings: warnings}, nil
+		}
+		return Plan{Action: PlanFull, Base: *fullBase, Source: source, Reason: reasonSourcePruned, Warnings: warnings}, nil
 	}
 	if err := sameStreamKind(jobInfo, destBackups); err != nil {
 		return Plan{}, err
 	}
 	return Plan{Action: PlanIncremental, Base: *incrBase, Source: source, Reason: reasonNewerCandidate, FullDue: fullDue}, nil
+}
+
+// firstBrokenChain returns the first destination whose newest backup does not restore, and the
+// snapshot whose backup is missing there (see brokenLink). The snapshot is nil when every chain
+// reaches a full.
+func firstBrokenChain(destBackups [][]*files.JobInfo) (int, *files.SnapshotInfo) {
+	for idx, backups := range destBackups {
+		if missing := brokenLink(backups); missing != nil {
+			return idx, missing
+		}
+	}
+	return 0, nil
 }
 
 // sameStreamKind fails when the incremental jobInfo plans would continue a chain whose last
@@ -470,8 +685,12 @@ func (s *Scenario) run(at time.Time, snapshots []files.SnapshotInfo, dest [][]*f
 		IncrementalSnapshotSuffix: s.JobInfo.IncrementalSnapshotSuffix,
 		Resume:                    s.JobInfo.Resume,
 		Raw:                       s.JobInfo.Raw,
+		Replication:               s.JobInfo.Replication,
+		Properties:                s.JobInfo.Properties,
+		Deduplication:             s.JobInfo.Deduplication,
+		IntermediaryIncremental:   s.JobInfo.IntermediaryIncremental,
 	}
-	plan, err := planSmartSnapshots(&jobInfo, snapshots, dest, s.Completable)
+	plan, err := planSmartAt(s.Clock(at), &jobInfo, snapshots, dest, s.Completable)
 	if err == nil && plan.Action != PlanNoop {
 		for i := range dest {
 			m := manifestFor(s.Volume, plan)
@@ -480,6 +699,20 @@ func (s *Scenario) run(at time.Time, snapshots []files.SnapshotInfo, dest [][]*f
 		}
 	}
 	return Step{At: at, Snapshots: snapshots, Plan: plan, Err: err}
+}
+
+// Clock is "now" for a run at at: the plan's wall clock (Now, or s.Now when set), or at when at
+// is later. A simulated run in the future sees its own time; one in the past still sees the
+// backups made since as dated in the past, not in the future.
+func (s *Scenario) Clock(at time.Time) time.Time {
+	now := s.Now
+	if now.IsZero() {
+		now = Now()
+	}
+	if at.After(now) {
+		return at
+	}
+	return now
 }
 
 // manifestFor is the manifest of the backup a plan sends.
@@ -587,6 +820,9 @@ func (sim *Simulation) WriteText(w io.Writer, violations []Violation) error {
 			at += ".." + sim.formatTime(sim.Steps[j-1].At)
 		}
 		fmt.Fprintf(&b, "%s  %s\n", at, step.describe(j-i))
+		for _, w := range step.Plan.Warnings {
+			fmt.Fprintf(&b, "    warning: %s\n", w)
+		}
 		i = j
 	}
 
@@ -629,15 +865,18 @@ func (sim *Simulation) WriteJSON(w io.Writer, violations []Violation) error {
 		return &t
 	}
 	type run struct {
-		At            *time.Time `json:"at,omitempty"` // omitted for a single next run
-		Action        string     `json:"action"`       // full, incremental, noop or error
-		Base          *snapshot  `json:"base,omitempty"`
-		Source        *snapshot  `json:"source,omitempty"`
-		MissingSource *snapshot  `json:"missingSource,omitempty"` // the pruned incremental source (reason source-pruned)
-		Reason        string     `json:"reason,omitempty"`
-		FullDue       bool       `json:"fullDue,omitempty"` // a full is due but waits for a newer candidate
-		Error         string     `json:"error,omitempty"`
-		Snapshots     int        `json:"snapshots"` // on the pool at this run
+		At     *time.Time `json:"at,omitempty"` // omitted for a single next run
+		Action string     `json:"action"`       // full, incremental, noop or error
+		Base   *snapshot  `json:"base,omitempty"`
+		Source *snapshot  `json:"source,omitempty"`
+		// The pruned incremental source (reason source-pruned), or the snapshot whose backup is
+		// missing from the chain (reason broken-chain).
+		MissingSource *snapshot `json:"missingSource,omitempty"`
+		Reason        string    `json:"reason,omitempty"`
+		FullDue       bool      `json:"fullDue,omitempty"` // a full is due but waits for a newer candidate
+		Error         string    `json:"error,omitempty"`
+		Warnings      []string  `json:"warnings,omitempty"`
+		Snapshots     int       `json:"snapshots"` // on the pool at this run
 	}
 	type backup struct {
 		Base   *snapshot `json:"base"`
@@ -665,6 +904,7 @@ func (sim *Simulation) WriteJSON(w io.Writer, violations []Violation) error {
 		default:
 			r.Base, r.MissingSource = ref(st.Plan.Base), ref(st.Plan.Source)
 		}
+		r.Warnings = st.Plan.Warnings
 		out.Runs = append(out.Runs, r)
 	}
 	for _, dest := range sim.Manifests {
@@ -710,6 +950,9 @@ func (st Step) fullDue() string {
 }
 
 func sameOutcome(a, b Step) bool {
+	if strings.Join(a.Plan.Warnings, "\n") != strings.Join(b.Plan.Warnings, "\n") {
+		return false
+	}
 	if a.Err != nil || b.Err != nil {
 		return a.Err != nil && b.Err != nil && a.Err.Error() == b.Err.Error()
 	}

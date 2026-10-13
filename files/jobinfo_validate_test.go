@@ -36,6 +36,7 @@ func validSendJob() *JobInfo {
 		CompressionLevel:   6,
 		Separator:          "|",
 		UploadChunkSize:    10,
+		VolumeSize:         200,
 	}
 }
 

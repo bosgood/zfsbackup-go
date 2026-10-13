@@ -1,0 +1,66 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/files"
+)
+
+// Probe: pipe-mode receive of a volume LARGER than files.BufferSize (1 MiB stream): the writer
+// blocks on the pipe before Close, so Extract can take the lock. Expected to pass.
+func TestAdvPipeReceiveLargeVolumeIntact(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", "1048576")
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Unix(100, 0)}})
+	logs, err := env.send("--compressor", "", "tank/data@a", "file://"+env.dest)
+	if err != nil {
+		t.Fatalf("send: %v\n%s", err, logs)
+	}
+	receiveLog := filepath.Join(t.TempDir(), "receive.log")
+	t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+	logs, err = guarded(t, func() (string, error) {
+		return env.receive("--maxFileBuffer", "0", "tank/data@a", "file://"+env.dest, "restored/data")
+	})
+	if err != nil {
+		t.Fatalf("receive: %v\n%s", err, logs)
+	}
+}
+
+// Probe: the same, one byte of the only volume flipped. The SHA-256 mismatch must be reported
+// (it is), but is the whole stream fed to zfs receive with a clean EOF first?
+func TestAdvPipeReceiveLargeVolumeCorrupt(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", "1048576")
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Unix(100, 0)}})
+	logs, err := env.send("--compressor", "", "tank/data@a", "file://"+env.dest)
+	if err != nil {
+		t.Fatalf("send: %v\n%s", err, logs)
+	}
+	for name, data := range destObjects(t, env.dest) {
+		if !strings.Contains(name, ".vol1") {
+			continue
+		}
+		data[len(data)-1] ^= 0xff
+		if err := os.WriteFile(filepath.Join(env.dest, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	receiveLog := filepath.Join(t.TempDir(), "receive.log")
+	t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+	logs, err = guarded(t, func() (string, error) {
+		return env.receive("--maxFileBuffer", "0", "tank/data@a", "file://"+env.dest, "restored/data")
+	})
+	if err == nil {
+		t.Fatalf("receive of a corrupt volume succeeded\n%s", logs)
+	}
+	if !strings.Contains(logs, "does not match its manifest") {
+		t.Errorf("the mismatch was not reported: %v\n%s", err, logs)
+	}
+	if data, rerr := os.ReadFile(receiveLog); rerr == nil && len(data) > 0 {
+		t.Errorf("zfs receive read the corrupt stream to a clean EOF (real zfs commits there) before the mismatch was reported; receive log: %s", data)
+	}
+}

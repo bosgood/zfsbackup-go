@@ -14,6 +14,8 @@ Delete(ctx, filename string) error
 Close() error
 ```
 
+`Archiver` is optional (`NotReadable(ctx, objects) ([]string, error)`). S3 implements it with HEAD requests only: the objects a GET cannot read before a `PreDownload`. `send --dry-run` and `plan` use it instead of `PreDownload`, which would start a Glacier restore (hours, and it costs money).
+
 `Sizer` is optional. `file` and `ssh` implement it because they write under the final name and a killed upload leaves a truncated object. Object stores do not need it.
 
 `GetBackendForURI` picks the backend from the URI scheme. Callers cannot inject a mock. Tests use `file://`.
@@ -24,7 +26,7 @@ Close() error
 
 | Scheme | File | Notes |
 |---|---|---|
-| `s3://` | `aws_s3_backend.go` | path-style; `AWS_S3_CUSTOM_ENDPOINT` for tests; `PreDownload` restores Glacier objects for `restoreDays` (days to download every key at `AWS_S3_RESTORE_DOWNLOAD_RATE`, default 50 MiB/s, + 2, clamped 3..30; `AWS_S3_RESTORE_DAYS` overrides; a bad value fails `Init`, so every command, and `PreDownload`). It HEADs every key before the first restore |
+| `s3://` | `aws_s3_backend.go` | path-style; `AWS_S3_CUSTOM_ENDPOINT` for tests; a failed multipart upload is aborted by s3manager, a canceled one by `abortCanceledUpload` (new 30 s context: s3manager sends its abort with the canceled one, which never reaches S3); a bucket lifecycle rule `AbortIncompleteMultipartUpload` is the backstop for SIGKILL and a failed abort, because `List` (so `clean`) never sees parts; `PreDownload` restores Glacier objects for `restoreDays` (days to download every key at `AWS_S3_RESTORE_DOWNLOAD_RATE`, default 50 MiB/s, + 2, clamped 3..30; `AWS_S3_RESTORE_DAYS` overrides; a bad value fails `Init`, so every command, and `PreDownload`). It HEADs every key before the first restore |
 | `gs://` | `gcs_backend.go` | |
 | `azure://` | `azure_backend.go` | |
 | `b2://` | `backblaze_b2_backend.go` | |
@@ -37,6 +39,7 @@ Close() error
 - Upload must be retry-safe. The send pipeline retries with exponential backoff.
 - `List` must return every object under the prefix, including manifests.
 - Redact secrets in logs and errors (`redact3_test.go`).
+- `parseObjectURI` (s3, gs, azure, b2) refuses a bucket name with `:` or `@` (`s3://user:password@bucket`): an SDK error quotes the bucket. The error does not echo the URI (`s3_review_test.go`).
 - `Delete` errors are retried with backoff, then fail `clean`. `file://` returns the `os.Remove` error for a missing object.
 
 ## Tests

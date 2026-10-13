@@ -5,7 +5,7 @@ Project history, review facts and defect lists go in `docs/specs/`, not here.
 Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`.
 
 ## Bash tool and host
-- Call #1 of a session is `cat .claude/napkin.md` ALONE. No chain, no separator. (Broken 11 times by chaining, last 2026-10-12.)
+- Call #1 of a session is `cat .claude/napkin.md` ALONE. No chain, no separator. (Broken 12 times by chaining, last 2026-10-12.)
 - zsh expands a leading `=word`: `echo ======` aborts the whole chain (again 2026-10-12). Use `echo '-----'`. Quote globs too: `--include='*.go'`.
 - `grep` here is ugrep: it ignores `--` as end of options. Use `/usr/bin/grep` or `-e PATTERN` when it matters.
 - macOS has no `timeout`. Put it inside the container command.
@@ -86,6 +86,9 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - `syncCache` downloads only manifests whose md5(name) is NOT in the cache; it never re-reads a cached name. A receive that shares `work` with the send reads the sender's cache, not the destination. To prove a restore from the destination alone, receive with `t.TempDir()` as `--workingDirectory`.
 - `snapshot()` in the integration tests avoids ties on purpose. For a tie use `snapshotTie`: zfs takes ONE snapshot of a dataset per `zfs snapshot` call ("multiple snapshots of same fs not allowed") and per channel program (EAGAIN), so it is separate calls in one second, checked, retried.
 - A test that restores with the sender's `work` proves nothing about the manifest at the destination. But a manifest DELETED at the destination fails both: receive takes names from the listing, only a cached name's CONTENT from the cache.
+- Fake `zfs send -R` streams differ from non-`-R` ones; their receive also makes the children's snapshots (2026-10-13). A `-R` test that needs children on the target gets them from the stream now.
+- `refuseDestroy` takes the whole chain: `AutoRestore` checks before step 1, steps call `receive(..., false)`. A new `-F` rule goes in `refuseDestroy`, never only per step.
+- Dry-run and `plan` must never call `PreDownload` (S3 Glacier restore = money): `syncCacheMode(..., noRestore)` and `backends.Archiver` (2026-10-13). An archived, uncached manifest of the dataset makes them FAIL (`archivedManifestsError`): dropping it gave a false broken-chain full.
 - Explicit `receive` of an incremental needs `-i <source>`, else it looks for a full set; since 2026-10-12 the error lists the backups of that snapshot and the flags for each.
 - `receive --origin` of an incremental and the `--properties` mount-over-source trap are fixed (2026-10-12); `TestIntegrationS3ReceiveSafety` is green on both. The fake's `zfs get mountpoint` source comes from `FAKEZFS_MOUNTPOINTS`.
 - zfs sync tasks in flight together share one txg sync: `snapshotTie` takes its snapshots in goroutines (one `zfs snapshot` per kind), which cuts a 3-snapshot tie from ~1.5 s to ~0.5 s on the VM.
@@ -126,7 +129,21 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - gpg's default ed25519 key fails until the pgp-ed25519 branch lands; use RSA. Ring files must be ASCII-armored.
 - `dev.nix`: bump `rev`, set `hash = lib.fakeHash`, build, paste the "got:" hash. The user must run nix.
 
+- Fixed 2026-10-12 (review findings 1-20): explicit `-i` checks the source's GUID; smart send refuses a broken chain (`broken-chain`) and drops snapshots/backups > 1 day in the future; `--auto` links by Unix time; `--origin` on step 1 only; receive checks GUID, `-R` children's and the recorded `SourceMountpoint`; `-F` needs `--allowDestroy` to destroy; `send -n` runs the read-only refusals and connects to destinations.
+- The smart planner reads `backup.Now`. A root e2e test that sends at simulated or future dates must `pinPlanClock(t, sc.Clock(at))`.
+- Smart-flag help (`--fullIfOlderThan`...) lives in `backup/plan_fixtures.go` `AddSmartFlags`; README embeds copies.
+- Fake guid = fnv(name, creation), NOT dataset: a received copy keeps its guid. Mismatch: `FAKEZFS_GUIDS=ds@snap=N`. `FAKEZFS_DATASETS` = datasets with no snapshots; `FAKEZFS_MOUNTPOINTS` takes `ds=local:/path`.
+- `err = vol.Close()` after a failed copy loses the copy error (it hid a never-retried download). Keep the first error.
+- A pipe volume on receive must get `WillExtract()` before it goes to the reader.
+- s3manager aborts with the upload's own ctx: on cancel we abort with a fresh 30 s ctx (`abortCanceledUpload`).
+- `validSendJob` in `files/jobinfo_validate_test.go` must keep `VolumeSize > 0`; `--volsize` over 9900 x chunk is refused for s3://.
+- `-F` guards must fail closed: a `zfs list` error is "does not exist" only when `zfs.IsNotExist` says so (`refuseUnlistedTarget`, 2026-10-13).
+- The lock's boot id is `kern.boottime` where `/proc/sys/kernel/random/boot_id` is missing (`bootid_bsd.go`). Lock tests set `platformBootID`: on the macOS host it is real.
+- Prove a test of a NEW API fails on base: a compile-only shim in the base copy (same names, base behavior), or break the fix in a copy of the fixed tree.
+- A test that guards against a double action passes on base by design; prove it with a break copy.
+
 ## Open plans
+- `docs/specs/2026-10-12--adversarial-review-plan-send-restore/`: 20 findings FIXED 2026-10-13 (651b84d); VM checks for 7, 8, 9, 10, 12, 14 still to run (`plan.md`).
 - `docs/specs/2026-10-12--integration-test-clean/`: EXECUTED 2026-10-12 (e432d5f..); four TestIntegrationS3Clean* tests; findings F1-F3 (in `integration/README.md`) fixed the same day; notes at the end of its plan.md.
 - `docs/specs/2026-10-11--integration-test-more/`: EXECUTED 2026-10-11 (01e927f..); thirteen TestIntegrationS3* tests; `ReceiveSafety/Mounted` and `/Origin` red on purpose (findings); notes at the end of its plan.md.
 - A chain keeps one stream kind: send (smart and `-i`), plan and `receive --auto` refuse an incremental whose `--raw` differs from its source's backup (`MixedChainError`, 0c038d2). A full starts a new chain.

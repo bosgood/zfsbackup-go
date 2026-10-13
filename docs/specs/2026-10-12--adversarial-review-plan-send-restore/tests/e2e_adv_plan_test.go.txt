@@ -1,0 +1,59 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/files"
+)
+
+// ADV-E1: `send --dry-run` of a backup set that already exists at the destination reports
+// "would perform a full backup" and exits 0, while the real send refuses the set
+// (refuseExistingSet runs after the dry-run return in Backup). Want: the dry run refuses too.
+func TestAdvDryRunOfExistingSetIsRefused(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(1<<20))
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+	args := []string{"tank/data@a", "file://" + env.dest}
+	if logs, err := env.send(args...); err != nil {
+		t.Fatalf("first send: %v\n%s", err, logs)
+	}
+	logs, err := env.send(append([]string{"-n"}, args...)...)
+	t.Logf("send -n of an existing set: err=%v\n%s", err, logs)
+	if err == nil || !strings.Contains(logs, "already exists") {
+		t.Errorf("send -n of an existing set: got %v, want the refusal the real send gives", err)
+	}
+	logs, err = env.send(args...)
+	if err == nil || !strings.Contains(logs, "already exists") {
+		t.Errorf("the real send did not refuse: %v\n%s", err, logs)
+	}
+}
+
+// ADV-E2: a smart send whose incremental source is left only as a bookmark plans
+// `zfs send -i tank/data#d2`. With --replication (-R) real zfs refuses a bookmark source
+// ("Unsupported flag with filesystem or bookmark"); the fake accepts it, so this test only
+// records what the planner and the dry run report. The dry run's size estimate failure is
+// logged at Debug, so on real zfs `send -n -R` would still exit 0.
+func TestAdvBookmarkSourceWithReplication(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(1<<20))
+	flags := []string{"--fullIfOlderThan", "720h", "--fullSnapshotSuffix", "_monthly", "--incrementalSnapshotSuffix", "_daily", "-R"}
+	target := "file://" + env.dest
+	m1 := files.SnapshotInfo{Name: "m1_monthly", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
+	d2 := files.SnapshotInfo{Name: "d2_daily", CreationTime: time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)}
+	d3 := files.SnapshotInfo{Name: "d3_daily", CreationTime: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)}
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{m1})
+	env.sendOK(t, append(flags, "tank/data", target)...)
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{d2, m1})
+	env.sendOK(t, append(flags, "tank/data", target)...)
+	bm := d2
+	bm.Bookmark = true
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{d3, bm, m1})
+	logs, err := env.send(append(append([]string{"-n"}, flags...), "tank/data", target)...)
+	t.Logf("send -n -R with a bookmark source: err=%v\n%s", err, logs)
+	if !strings.Contains(logs, "send -R -i tank/data#d2_daily tank/data@d3_daily") {
+		t.Errorf("the dry run does not show the -R send from the bookmark:\n%s", logs)
+	}
+}

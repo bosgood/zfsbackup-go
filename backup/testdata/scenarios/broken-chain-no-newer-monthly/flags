@@ -1,0 +1,4 @@
+# Monthly fulls, daily incrementals.
+--fullIfOlderThan=4320h
+--fullSnapshotSuffix=_monthly
+--incrementalSnapshotSuffix=_daily

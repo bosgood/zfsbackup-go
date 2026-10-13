@@ -1,0 +1,4 @@
+next  FULL  autosnap_2026-10-01_00:00:00_monthly  broken-chain
+    warning: The chain of tank/data at the destination is broken: it holds no backup of autosnap_2026-09-02_00:00:00_daily, so its newest backup, autosnap_2026-09-03_00:00:00_daily, and every incremental after it cannot be restored. The full backup of autosnap_2026-10-01_00:00:00_monthly starts a new chain.
+checks: 1 violation(s)
+  chain-links  INCR autosnap_2026-09-03_00:00:00_daily from autosnap_2026-09-02_00:00:00_daily cannot be restored: no backup of autosnap_2026-09-02_00:00:00_daily

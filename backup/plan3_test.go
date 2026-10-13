@@ -77,8 +77,9 @@ func adoptionScenario(t *testing.T, dated ...time.Time) *Scenario {
 }
 
 // A manifest time that cannot be the snapshot's own (a 2099 backup of a 2026
-// name: another host or a forged manifest) is not adopted. plan then fails
-// the way send does against the live pool, instead of saying OK.
+// name: another host or a forged manifest) is not adopted. plan then ignores
+// that backup with a warning, as send does against the live pool. A backup
+// dated after every snapshot, but not in the future, is still an error.
 func TestAdoptionRefusesImplausibleManifestTime(t *testing.T) {
 	sc := adoptionScenario(t, time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC))
 	if got := sc.AdoptCreationTimes(); got != 0 {
@@ -87,9 +88,18 @@ func TestAdoptionRefusesImplausibleManifestTime(t *testing.T) {
 	if len(sc.AdoptionWarnings) != 1 || !strings.Contains(sc.AdoptionWarnings[0], "autosnap_2026-10-01_00:00:00_monthly") {
 		t.Errorf("AdoptionWarnings = %q, want one naming the October monthly", sc.AdoptionWarnings)
 	}
-	sim := sc.Run()
-	if err := sim.Steps[0].Err; !errors.Is(err, ErrLastBackupInFuture) {
-		t.Errorf("plan from a names-only capture: %v, want ErrLastBackupInFuture as send reports", err)
+	sc.Now = time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)
+	st := sc.Run().Steps[0]
+	if st.Err != nil || st.Plan.Action != PlanFull || len(st.Plan.Warnings) != 1 || !strings.Contains(st.Plan.Warnings[0], "Ignoring the backup") {
+		t.Errorf("plan from a names-only capture: %s, %v, warnings %q; want a full and a warning that ignores the 2099 backup",
+			st.Plan, st.Err, st.Plan.Warnings)
+	}
+
+	sc = adoptionScenario(t, time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC))
+	sc.AdoptCreationTimes()
+	sc.Now = time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)
+	if err := sc.Run().Steps[0].Err; !errors.Is(err, ErrLastBackupInFuture) {
+		t.Errorf("a backup dated after every snapshot, not in the future: %v, want ErrLastBackupInFuture as send reports", err)
 	}
 }
 

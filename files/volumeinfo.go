@@ -114,7 +114,7 @@ type VolumeInfo struct {
 	counter   *datacounter.WriterCounter
 	usingPipe bool
 	// extracted marks a pipe volume that Extract reads: rw and cmd are then the reader's, and
-	// the writer's Close leaves them to the reader's. Set under lock.
+	// the writer's Close leaves them to the reader's. Set under lock, by WillExtract or Extract.
 	extracted bool
 	isClosed  bool
 	isOpened  bool
@@ -373,12 +373,14 @@ func ExtractLocal(ctx context.Context, j *JobInfo, path string, isManifest bool)
 // Extract will setup the volume for reading such that reading from it will handle any
 // decryption, signature verification, and decompression that was used on it.
 func (v *VolumeInfo) Extract(ctx context.Context, j *JobInfo, isManifest bool) error {
-	if v.usingPipe {
+	if v.usingPipe && !v.extracted {
 		// Before the first read: the writer cannot finish, and Close, until this side reads.
+		// Close holds the lock while it flushes the last bytes into the pipe, so a volume that
+		// fits in the buffer waits here forever: mark it with WillExtract before the reader gets it.
 		v.lock.Lock()
 		v.extracted = true
 		v.lock.Unlock()
-	} else {
+	} else if !v.usingPipe {
 		f, ferr := os.Open(v.filename)
 		if ferr != nil {
 			return ferr
@@ -463,6 +465,16 @@ func (v *VolumeInfo) Extract(ctx context.Context, j *JobInfo, isManifest bool) e
 		}
 	}
 	return nil
+}
+
+// WillExtract marks a pipe volume that Extract will read. Call it before the volume goes to its
+// reader. Then Extract does not take the lock, which the writer's Close holds while it flushes
+// the last bytes into the pipe: a volume that fits in the buffer (files.BufferSize) has no write
+// that waits for the reader before Close, and Close and Extract would wait for each other.
+func (v *VolumeInfo) WillExtract() {
+	v.lock.Lock()
+	v.extracted = true
+	v.lock.Unlock()
 }
 
 // DeleteVolume will delete the volume from the temporary directory it was written to.

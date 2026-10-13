@@ -1,0 +1,36 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/files"
+)
+
+// PROBE: linkManifests keys a parent by fmt "%v" of its creation time, zone included. The same
+// instant written by a sender in another zone (the job moved hosts, or TZ changed in cron) is
+// another key, and --auto cannot walk the chain although every link is at the destination.
+func TestAdvAutoChainAcrossTimeZones(t *testing.T) {
+	env := newE2EEnv(t)
+	receiveLog := advChain(t, env)
+	dest := "file://" + env.dest
+	// The incremental b->c was written by a host in UTC+1: same instants, another zone.
+	plusOne := time.FixedZone("CET", 3600)
+	reforgeManifest(t, env, "manifests|tank/data|b|to|c.manifest.gz", func(m *files.JobInfo) {
+		m.BaseSnapshot.CreationTime = m.BaseSnapshot.CreationTime.In(plusOne)
+		m.IncrementalSnapshot.CreationTime = m.IncrementalSnapshot.CreationTime.In(plusOne)
+	})
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive("--auto", "tank/data@c", dest, "restored/data")
+	})
+	if err != nil {
+		t.Errorf("CONFIRMED: receive --auto of a chain whose last link was written in another zone: %v; zfs receive ran %d times\n%s",
+			err, advReceives(t, receiveLog), logs)
+	}
+	_ = os.ReadFile
+	_ = filepath.Join
+	_ = strings.Contains
+}

@@ -1,0 +1,5 @@
+# The set autosnap_2026-09-01_00:00:00_monthly to autosnap_2026-09-02_00:00:00_daily
+# was deleted (clean --force, or by hand): the chain of the newest backup does not
+# reach the full any more.
+autosnap_2026-09-01_00:00:00_monthly
+autosnap_2026-09-02_00:00:00_daily to autosnap_2026-09-03_00:00:00_daily

@@ -1,0 +1,7 @@
+# The pool at 2026-09-04 01:00. An incremental from the September 3rd daily
+# could not be restored, and no monthly newer than it exists yet: nothing is
+# sent, with a warning, until October's monthly.
+autosnap_2026-09-04_00:00:00_daily
+autosnap_2026-09-03_00:00:00_daily
+autosnap_2026-09-02_00:00:00_daily
+autosnap_2026-09-01_00:00:00_monthly

@@ -79,6 +79,16 @@ func init() {
 		false,
 		"See the -F flag for zfs recv for more information.",
 	)
+	receiveCmd.Flags().BoolVar(
+		&jobInfo.AllowDestroy,
+		"allowDestroy",
+		false,
+		"with --force, accept that zfs destroys data: a target with no snapshots that a full backup replaces, local "+
+			"snapshots newer than the source of an incremental (or taken in the same second), and with a --replication "+
+			"incremental the snapshots and datasets that the sending side did not have (any local snapshot other than "+
+			"the source, and any dataset below the target). Without it, --force refuses those receives. --auto checks "+
+			"the whole chain before its first receive.",
+	)
 	receiveCmd.Flags().BoolVarP(
 		&jobInfo.NotMounted,
 		"unmounted",
@@ -146,6 +156,7 @@ func ResetReceiveJobInfo() {
 	jobInfo.FullPath = false
 	jobInfo.LastPath = false
 	jobInfo.Force = false
+	jobInfo.AllowDestroy = false
 	jobInfo.NotMounted = false
 	jobInfo.Origin = ""
 	jobInfo.BaseSnapshot = files.SnapshotInfo{}
@@ -210,7 +221,11 @@ func validateReceiveFlags(cmd *cobra.Command, args []string) error {
 	jobInfo.Origin = strings.TrimPrefix(jobInfo.Origin, "origin=")
 
 	if jobInfo.IncrementalSnapshot.Name != "" {
-		jobInfo.IncrementalSnapshot.Name = strings.TrimPrefix(jobInfo.IncrementalSnapshot.Name, jobInfo.VolumeName)
+		// As in send: remove the dataset name only when a separator follows it.
+		if rest, ok := strings.CutPrefix(jobInfo.IncrementalSnapshot.Name, jobInfo.VolumeName); ok &&
+			(strings.HasPrefix(rest, "@") || strings.HasPrefix(rest, "#")) {
+			jobInfo.IncrementalSnapshot.Name = rest
+		}
 		jobInfo.IncrementalSnapshot.Name = strings.TrimPrefix(jobInfo.IncrementalSnapshot.Name, "@")
 	}
 

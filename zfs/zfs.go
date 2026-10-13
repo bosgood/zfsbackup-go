@@ -94,6 +94,13 @@ func GetSnapshotsAndBookmarks(ctx context.Context, target string) ([]files.Snaps
 	return snapshots, nil
 }
 
+// IsNotExist reports whether err is a zfs error for a dataset that does not exist, as zfs
+// prints it: "cannot open 'tank/x': dataset does not exist". Other errors (no permission, a
+// listing that does not parse) say nothing about whether the dataset is there.
+func IsNotExist(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "dataset does not exist")
+}
+
 // parseListOutput reads what `zfs list -H -p -o name,creation,type` prints:
 // exactly three tab-separated fields per line. Unlike ParseSnapshotList it
 // takes names verbatim, since ZFS names may contain spaces.
@@ -361,6 +368,93 @@ func GetMountpoint(ctx context.Context, dataset string) (value, source string, e
 		return "", "", fmt.Errorf("unexpected zfs get output %q", b.String())
 	}
 	return fields[0], fields[1], nil
+}
+
+// Mountpoint is one row of `zfs get -o name,value,source mountpoint`.
+type Mountpoint struct {
+	Dataset string
+	Value   string
+	Source  string
+}
+
+// GetMountpoints returns the mountpoint property of dataset and, when recursive, of each
+// filesystem below it, dataset first. A send -R stream carries the local mountpoint of every
+// child, not only of the top dataset.
+func GetMountpoints(ctx context.Context, dataset string, recursive bool) ([]Mountpoint, error) {
+	args := []string{"get"}
+	if recursive {
+		args = append(args, "-r", "-t", "filesystem")
+	}
+	args = append(args, "-H", "-o", "name,value,source", "mountpoint", dataset)
+	b := new(bytes.Buffer)
+	errB := new(bytes.Buffer)
+	cmd := exec.CommandContext(ctx, ZFSPath, args...)
+	log.AppLogger.Debugf("Getting ZFS mountpoints with command \"%s\"", strings.Join(cmd.Args, " "))
+	cmd.Stdout = b
+	cmd.Stderr = errB
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("%s (%v)", strings.TrimSpace(errB.String()), err)
+	}
+	var rows []Mountpoint
+	for _, line := range strings.Split(strings.TrimSpace(b.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("unexpected zfs get output %q", line)
+		}
+		rows = append(rows, Mountpoint{Dataset: fields[0], Value: fields[1], Source: fields[2]})
+	}
+	return rows, nil
+}
+
+// Descendants returns the filesystems and volumes below dataset (not dataset itself). An error
+// says nothing about them: dataset may not exist, or zfs failed.
+func Descendants(ctx context.Context, dataset string) ([]string, error) {
+	b := new(bytes.Buffer)
+	errB := new(bytes.Buffer)
+	cmd := exec.CommandContext(ctx, ZFSPath, "list", "-H", "-r", "-t", "filesystem,volume", "-o", "name", dataset)
+	log.AppLogger.Debugf("Listing the datasets below %s with command \"%s\"", dataset, strings.Join(cmd.Args, " "))
+	cmd.Stdout = b
+	cmd.Stderr = errB
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("%s (%v)", strings.TrimSpace(errB.String()), err)
+	}
+	var below []string
+	for _, line := range strings.Split(strings.TrimSpace(b.String()), "\n") {
+		if strings.HasPrefix(line, dataset+"/") {
+			below = append(below, line)
+		}
+	}
+	return below, nil
+}
+
+// MountedFilesystems returns the filesystems that are mounted now, by mountpoint path.
+func MountedFilesystems(ctx context.Context) (map[string]string, error) {
+	b := new(bytes.Buffer)
+	errB := new(bytes.Buffer)
+	cmd := exec.CommandContext(ctx, ZFSPath, "list", "-H", "-t", "filesystem", "-o", "name,mountpoint,mounted")
+	log.AppLogger.Debugf("Listing mounted ZFS filesystems with command \"%s\"", strings.Join(cmd.Args, " "))
+	cmd.Stdout = b
+	cmd.Stderr = errB
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("%s (%v)", strings.TrimSpace(errB.String()), err)
+	}
+	mounted := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(b.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("unexpected zfs list output %q", line)
+		}
+		if fields[2] == "yes" {
+			mounted[fields[1]] = fields[0]
+		}
+	}
+	return mounted, nil
 }
 
 // GetSnapshotGUID returns the guid of volume's snapshot (or bookmark) snap.

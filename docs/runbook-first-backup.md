@@ -34,6 +34,8 @@ concatenated the path without a `/` (objects named `prefixmanifests|...` and
 `prefixpool/dataset|...`). Against such a destination every command now fails
 with `found prefixmanifests|..., a backup written by an older version`; move
 every object whose name starts with `prefix` to `prefix/` and rerun.
+These URIs take no user or password (`s3://key:secret@bucket` fails); set the
+credentials in the environment (`AWS_ACCESS_KEY_ID` and the others).
 
 `4320h` is 180 days (Go durations have no `d` unit). Once it has elapsed since
 the last full, the next full is taken of the first monthly newer than the last
@@ -309,10 +311,11 @@ second signal exits at once, without that cleanup. If a systemd unit runs the
 job, set `TimeoutStopSec=120`: an upload worker in the middle of a request can
 take some seconds to see the stop. The default 90 s is enough in most cases;
 when it runs out, systemd sends SIGKILL and nothing is cleaned up. For SIGKILL
-and an OOM kill, add an S3 lifecycle rule as the backstop: abort incomplete
-multipart uploads (`AbortIncompleteMultipartUpload`) after 1 day. Without it, the
-parts of a killed upload stay in the bucket, and are billed, until a later
-upload or someone aborts them.
+and an OOM kill, and for an abort that fails (the network is down), add an S3
+lifecycle rule as the backstop: abort incomplete multipart uploads
+(`AbortIncompleteMultipartUpload`) after 1 day. Without it, the parts of a
+killed upload stay in the bucket, and are billed, until someone aborts them.
+`list` and `clean` do not see them.
 
 A weekly job works the same way with a pool that keeps only three monthlies
 (`monthly=3`): the run on the first day after each 1st sends the new monthly as

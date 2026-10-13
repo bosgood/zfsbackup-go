@@ -1,0 +1,3 @@
+# The destination's chain is broken before the first run (a set was deleted from
+# its middle): chain-links reports the backup that cannot be restored. The run
+# does not continue that chain.

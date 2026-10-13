@@ -52,6 +52,14 @@ type Sizer interface {
 	Size(ctx context.Context, filename string) (uint64, error) // Size of the stored object in bytes
 }
 
+// Archiver is implemented by backends whose PreDownload can start a restore from an archive
+// storage class (S3 Glacier), which takes hours and costs money. NotReadable returns the objects
+// a download cannot read before a PreDownload. It only reads: it starts no restore. A run that
+// must not change anything (send --dry-run, plan) uses it instead of PreDownload.
+type Archiver interface {
+	NotReadable(ctx context.Context, objects []string) ([]string, error)
+}
+
 // Option lets users inject functionality to specific backends
 type Option interface {
 	Apply(Backend)
@@ -135,6 +143,12 @@ func parseObjectURI(uri, scheme string) (bucket, rawPrefix, prefix string, err e
 		return "", "", "", ErrInvalidURI
 	}
 	bucket, path, _ := strings.Cut(clean, "/")
+	if strings.ContainsAny(bucket, ":@") {
+		// No bucket or container name holds these: it is "user:password@bucket". An SDK error
+		// quotes the bucket, so do not keep it, and do not echo it here.
+		return "", "", "", fmt.Errorf("%s backend: the bucket name holds ':' or '@'; "+
+			"the %s:// URI takes no user or password, set the credentials in the environment", scheme, scheme)
+	}
 	return bucket, strings.Trim(path, "/"), objectPrefix(path), nil
 }
 

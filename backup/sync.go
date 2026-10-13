@@ -130,6 +130,18 @@ func adoptCacheDir(from, to string) error {
 // manifests cached but not at backend.
 // nolint:gocritic // Don't need to name the results
 func syncCache(ctx context.Context, j *files.JobInfo, localCache string, backend backends.Backend) ([]string, []string, error) {
+	return syncCacheMode(ctx, j, localCache, backend, false, "")
+}
+
+// syncCacheMode is syncCache. With noRestore (send --dry-run, plan) it never calls PreDownload,
+// which can start a restore from an archive storage class (S3 Glacier: hours, and it costs money).
+// A manifest that a download cannot read without one is left out of the names it returns. When
+// it may be a manifest of volume, syncCacheMode fails instead: without it a plan would see holes
+// in volume's chain and plan a full that the real send would not (an archivedManifestsError).
+// nolint:gocritic // Don't need to name the results
+func syncCacheMode(
+	ctx context.Context, j *files.JobInfo, localCache string, backend backends.Backend, noRestore bool, volume string,
+) ([]string, []string, error) {
 	// List all manifests at the destination
 	listed, merr := backend.List(ctx, j.ManifestPrefix)
 	if merr != nil {
@@ -184,8 +196,25 @@ func syncCache(ctx context.Context, j *files.JobInfo, localCache string, backend
 		}
 	}
 
-	pderr := backend.PreDownload(ctx, manifests)
-	if pderr != nil {
+	if noRestore {
+		cold, nerr := notReadable(ctx, backend, manifests)
+		if nerr != nil {
+			return nil, nil, fmt.Errorf("could not check whether the manifests can be downloaded due to error - %v", nerr)
+		}
+		var ours []string
+		for _, name := range cold {
+			if manifestMayBeFor(name, j.ManifestPrefix, volume) {
+				ours = append(ours, name)
+				continue
+			}
+			log.AppLogger.Debugf("Skipping %s: it is in an archive storage class and is not a manifest of %s.", name, volume)
+		}
+		if len(ours) > 0 {
+			return nil, nil, &archivedManifestsError{volume: volume, names: ours}
+		}
+		manifests, safeManifests = withoutNames(manifests, safeManifests, cold)
+		atDestination, _ = withoutNames(atDestination, nil, cold)
+	} else if pderr := backend.PreDownload(ctx, manifests); pderr != nil {
 		return nil, nil, fmt.Errorf("could not prepare manifests for download due to error - %v", pderr)
 	}
 
@@ -206,6 +235,54 @@ func syncCache(ctx context.Context, j *files.JobInfo, localCache string, backend
 	}
 
 	return atDestination, localOnlyFiles, nil
+}
+
+// archivedManifestsError is the error of a run that must not restore anything (send --dry-run,
+// plan) when manifests of volume are in an archive storage class and not in the local cache.
+type archivedManifestsError struct {
+	volume string
+	names  []string
+}
+
+func (e *archivedManifestsError) Error() string {
+	return fmt.Sprintf(
+		"%d manifests of %s are in an archive storage class and not in the local cache (%s): this run does not "+
+			"restore them (a restore takes hours and costs money), and without them its plan would be wrong. "+
+			"Run a real send or receive once from this --workingDirectory to cache them, or restore them by hand",
+		len(e.names), e.volume, strings.Join(e.names, ", "),
+	)
+}
+
+// notReadable returns the objects at backend that a download cannot read without a PreDownload.
+// Only a backends.Archiver can have such objects; it is asked with HEAD requests only.
+func notReadable(ctx context.Context, backend backends.Backend, objects []string) ([]string, error) {
+	archiver, ok := backend.(backends.Archiver)
+	if !ok || len(objects) == 0 {
+		return nil, nil
+	}
+	return archiver.NotReadable(ctx, objects)
+}
+
+// withoutNames returns names without the ones in drop, and the entries of the parallel slice
+// other (nil is allowed) at the same places.
+func withoutNames(names, other, drop []string) (keptNames, keptOther []string) {
+	if len(drop) == 0 {
+		return names, other
+	}
+	dropped := make(map[string]bool, len(drop))
+	for _, name := range drop {
+		dropped[name] = true
+	}
+	for i, name := range names {
+		if dropped[name] {
+			continue
+		}
+		keptNames = append(keptNames, name)
+		if other != nil {
+			keptOther = append(keptOther, other[i])
+		}
+	}
+	return keptNames, keptOther
 }
 
 // staleTempAge is how old a temporary file of WriteFileAtomic in the cache must be before
@@ -412,17 +489,24 @@ func validateSnapShotExists(ctx context.Context, snapshot *files.SnapshotInfo, t
 	return validateSnapShotExistsFromSnaps(snapshot, snapshots, includeBookmarks), nil
 }
 
+// validateSnapShotExistsFromSnaps reports whether snapshots hold snapshot (name and creation
+// time), and flags snapshot as a bookmark when only a bookmark of it is there. A snapshot is
+// preferred to a bookmark of the same name and time, whatever the listing order: zfs send
+// cannot send from a bookmark with some flags (-R, -p, -D, -I).
 func validateSnapShotExistsFromSnaps(snapshot *files.SnapshotInfo, snapshots []files.SnapshotInfo, includeBookmarks bool) bool {
+	found := false
 	for _, snap := range snapshots {
-		if !includeBookmarks && snap.Bookmark {
+		if !snap.Equal(snapshot) {
 			continue
 		}
-		if snap.Equal(snapshot) {
-			// Flag the snapshot as a bookmark if it is one
-			snapshot.Bookmark = snap.Bookmark
+		if !snap.Bookmark {
+			snapshot.Bookmark = false
 			return true
 		}
+		found = found || includeBookmarks
 	}
-
-	return false
+	if found {
+		snapshot.Bookmark = true
+	}
+	return found
 }

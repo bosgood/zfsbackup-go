@@ -1,0 +1,71 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/files"
+)
+
+// Probe: a bare -i name that starts with the dataset name is trimmed as if it were
+// "<dataset>@<name>" (cmd/send.go TrimPrefix(VolumeName)), so the send names another snapshot.
+func TestAdvSendIncrementalNameStartsWithVolume(t *testing.T) {
+	env := newE2EEnv(t)
+	env.writeSnapshots(t, "tank", []files.SnapshotInfo{
+		{Name: "c", CreationTime: time.Unix(400, 0)},
+		{Name: "tanknight", CreationTime: time.Unix(300, 0)},
+		{Name: "night", CreationTime: time.Unix(200, 0)},
+	})
+	logs, err := env.send("--compressor", "", "-i", "tanknight", "tank@c", "file://"+env.dest)
+	if err != nil {
+		t.Fatalf("send: %v\n%s", err, logs)
+	}
+	got := newestBackup(t, "tank", "file://"+env.dest)
+	if got.IncrementalSnapshot.Name != "tanknight" {
+		t.Errorf("manifest records an incremental from %q, want tanknight", got.IncrementalSnapshot.Name)
+	}
+	zlog, _ := os.ReadFile(env.zfsLog)
+	if !strings.Contains(string(zlog), "-i tanknight tank@c") {
+		t.Errorf("zfs send was not asked for -i tanknight; zfs log:\n%s", zlog)
+	}
+}
+
+// Probe: with --maxFileBuffer 0 a volume whose SHA-256 does not match the manifest is fed
+// whole to zfs receive (which sees a clean EOF and commits) before the mismatch is reported.
+func TestAdvPipeReceiveFeedsBadVolumeBeforeHashCheck(t *testing.T) {
+	env := newE2EEnv(t)
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Unix(100, 0)}})
+	logs, err := env.send("--compressor", "", "tank/data@a", "file://"+env.dest)
+	if err != nil {
+		t.Fatalf("send: %v\n%s", err, logs)
+	}
+	flipped := 0
+	for name, data := range destObjects(t, env.dest) {
+		if !strings.Contains(name, ".vol1") {
+			continue
+		}
+		data[len(data)/2] ^= 0xff
+		if err := os.WriteFile(filepath.Join(env.dest, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		flipped++
+	}
+	if flipped != 1 {
+		t.Fatalf("flipped %d volumes, want 1", flipped)
+	}
+	receiveLog := filepath.Join(t.TempDir(), "receive.log")
+	t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+	logs, err = env.receive("--maxFileBuffer", "0", "tank/data@a", "file://"+env.dest, "restored/data")
+	if err == nil {
+		t.Fatalf("receive of a corrupt volume succeeded\n%s", logs)
+	}
+	if data, rerr := os.ReadFile(receiveLog); rerr == nil && len(data) > 0 {
+		t.Errorf("zfs receive read the corrupt stream to a clean EOF (it would commit) before the mismatch was reported.\nreceive log: %sreceive error: %v", data, err)
+	}
+	if !strings.Contains(logs, "does not match its manifest") {
+		t.Errorf("the mismatch was not reported:\n%s", logs)
+	}
+}

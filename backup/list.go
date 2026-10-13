@@ -172,7 +172,9 @@ func readAndSortManifests(
 	return decodedManifests, nil
 }
 
-// linkManifests will group manifests by Volume and link parents to their children
+// linkManifests will group manifests by Volume and link parents to their children. A parent is
+// keyed by the instant of its creation time in Unix seconds, as SnapshotInfo.Equal compares it,
+// not by its text: senders in two time zones write the same instant with other zone names.
 func linkManifests(manifests []*files.JobInfo) map[string][]*files.JobInfo {
 	if manifests == nil {
 		return nil
@@ -184,7 +186,7 @@ func linkManifests(manifests []*files.JobInfo) map[string][]*files.JobInfo {
 
 		// nolint:gosec // MD5 not used for cryptographic purposes here
 		manifestID := fmt.Sprintf("%x", md5.Sum([]byte(
-			fmt.Sprintf("%s%s%v", key, manifests[idx].BaseSnapshot.Name, manifests[idx].BaseSnapshot.CreationTime),
+			fmt.Sprintf("%s\x00%s\x00%d", key, manifests[idx].BaseSnapshot.Name, manifests[idx].BaseSnapshot.CreationTime.Unix()),
 		)))
 
 		manifestTree[key] = append(manifestTree[key], manifests[idx])
@@ -208,7 +210,7 @@ func linkManifests(manifests []*files.JobInfo) map[string][]*files.JobInfo {
 			}
 			// nolint:gosec // MD5 not used for cryptographic purposes here
 			manifestID := fmt.Sprintf("%x", md5.Sum([]byte(
-				fmt.Sprintf("%s%s%v", val.VolumeName, val.IncrementalSnapshot.Name, val.IncrementalSnapshot.CreationTime),
+				fmt.Sprintf("%s\x00%s\x00%d", val.VolumeName, val.IncrementalSnapshot.Name, val.IncrementalSnapshot.CreationTime.Unix()),
 			)))
 			if psnap, ok := manifestsByID[manifestID]; ok {
 				val.ParentSnap = psnap

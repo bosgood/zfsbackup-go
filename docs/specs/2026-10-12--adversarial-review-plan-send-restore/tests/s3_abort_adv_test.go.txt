@@ -1,0 +1,109 @@
+package backends
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/files"
+)
+
+// multipartFake is a path-style S3 that accepts a multipart upload and records the abort. The
+// first part PUT cancels the caller's context (as SIGTERM does) and then fails.
+type multipartFake struct {
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	aborted bool
+	parts   int
+}
+
+func (f *multipartFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	switch {
+	case q.Has("list-type"):
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>bucket</Name><KeyCount>0</KeyCount><IsTruncated>false</IsTruncated></ListBucketResult>`)
+	case r.Method == http.MethodPost && q.Has("uploads"):
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><InitiateMultipartUploadResult><Bucket>bucket</Bucket><Key>k</Key><UploadId>upload-1</UploadId></InitiateMultipartUploadResult>`)
+	case r.Method == http.MethodPut && q.Has("partNumber"):
+		f.mu.Lock()
+		f.parts++
+		cancel := f.cancel
+		f.mu.Unlock()
+		_, _ = io.Copy(io.Discard, r.Body)
+		cancel() // the operator's SIGTERM lands mid-part
+		<-r.Context().Done()
+	case r.Method == http.MethodDelete && q.Has("uploadId"):
+		f.mu.Lock()
+		f.aborted = true
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+}
+
+// Probe: a multipart upload cut by a context cancel (SIGTERM) must still abort the multipart
+// upload, or its parts stay in the bucket, billed, invisible to List and so to clean.
+func TestAdvS3MultipartAbortAfterCancel(t *testing.T) {
+	f := &multipartFake{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	t.Setenv("AWS_S3_CUSTOM_ENDPOINT", srv.URL)
+	t.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("AWS_ACCESS_KEY_ID", "x")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "y")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.cancel = cancel
+
+	conf := &BackendConfig{
+		TargetURI:               "s3://bucket/p/",
+		MaxParallelUploads:      1,
+		MaxParallelUploadBuffer: make(chan bool, 1),
+		UploadChunkSize:         5 * 1024 * 1024,
+	}
+	b := &AWSS3Backend{}
+	if err := b.Init(context.Background(), conf); err != nil {
+		t.Fatal(err)
+	}
+	payload := make([]byte, 11*1024*1024)
+	_, _ = rand.Read(payload)
+	vol, err := files.CreateSimpleVolume(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = io.Copy(vol, bytes.NewReader(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if err = vol.Close(); err != nil {
+		t.Fatal(err)
+	}
+	defer vol.DeleteVolume()
+	vol.ObjectName = "tank/data|a.zstream.vol1"
+	if err = vol.OpenVolume(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = b.Upload(ctx, vol)
+	if err == nil || !strings.Contains(err.Error(), "anceled") {
+		t.Fatalf("want a canceled upload, got %v", err)
+	}
+	time.Sleep(2 * time.Second) // room for an abort request
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	t.Logf("parts seen %d, abort received %v", f.parts, f.aborted)
+	if !f.aborted {
+		t.Errorf("no AbortMultipartUpload reached S3 after the cancel: the parts stay in the bucket")
+	}
+}

@@ -197,8 +197,10 @@ func TestPlanChecksFailed(t *testing.T) {
 	if err != errChecksFailed {
 		t.Fatalf("got error %v, want errChecksFailed (exit status 2)", err)
 	}
-	if !strings.Contains(out, "checks: 1 violation(s)\n  chain-links  ") {
-		t.Errorf("want a chain-links violation, got:\n%s", out)
+	// --increment refuses to continue it (no-errors), and chain-links names the backup.
+	if !strings.Contains(out, "checks: 2 violation(s)\n  no-errors  cannot continue the chain") ||
+		!strings.Contains(out, "\n  chain-links  ") {
+		t.Errorf("want a no-errors and a chain-links violation, got:\n%s", out)
 	}
 }
 

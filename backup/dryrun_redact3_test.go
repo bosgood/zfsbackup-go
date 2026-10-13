@@ -30,7 +30,9 @@ import (
 )
 
 // TestBackupDryRunRedactsDestinations: the dry-run preview names every destination, and
-// must not print the password of one.
+// must not print the password of one. A dry run connects to the destinations (it refuses what
+// the send would refuse), so here, with a host that does not exist, it fails and names the
+// destination in the error.
 func TestBackupDryRunRedactsDestinations(t *testing.T) {
 	fakeZFS(t, "tank/data@snap1\t1700000000\tsnapshot\n")
 	logs := captureLogs(t)
@@ -40,8 +42,8 @@ func TestBackupDryRunRedactsDestinations(t *testing.T) {
 		Destinations: []string{"ssh://backup:hunter2secret@nas.example/backups"},
 		BaseSnapshot: files.SnapshotInfo{Name: "snap1", CreationTime: time.Unix(1700000000, 0)},
 	}
-	if err := Backup(context.Background(), jobInfo, true); err != nil {
-		t.Fatalf("dry-run Backup returned error - %v", err)
+	if err := Backup(context.Background(), jobInfo, true); err == nil {
+		t.Fatalf("dry-run Backup to a host that does not exist succeeded")
 	}
 	if !strings.Contains(logs.String(), "nas.example/backups") {
 		t.Fatalf("dry-run did not name the destination:\n%s", logs.String())

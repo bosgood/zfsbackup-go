@@ -250,6 +250,7 @@ func TestE2ESequenceMatchesPlanner(t *testing.T) {
 
 	for _, step := range sim.Steps {
 		env.writeSnapshots(t, sc.Volume, step.Snapshots)
+		pinPlanClock(t, sc.Clock(step.At))
 		logs, err := env.send(append(flags, sc.Volume, target)...)
 		switch {
 		case step.Err != nil:
@@ -354,6 +355,7 @@ func TestE2ENextRunScenarios(t *testing.T) {
 			}
 
 			env.writeSnapshots(t, sc.Volume, sc.Snapshots)
+			pinPlanClock(t, sc.Clock(time.Time{}))
 			logs, err := env.send(append(scenarioFlags(t, dir), sc.Volume, strings.Join(targets, ","))...)
 			switch {
 			case step.Err != nil:

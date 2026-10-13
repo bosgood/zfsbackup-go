@@ -12,12 +12,17 @@ One `JobInfo` per backup set. It is serialized as the manifest object. Fields ta
 - `Volumes []*VolumeInfo`: each has size and SHA-256 of the **stored** bytes.
 - `Compressor`, `EncryptTo`, `SignFrom`, plus the resolved key fingerprints.
 - `Destinations` are canonical URIs. `DestinationsAsTyped` maps them to the spelling the user typed.
+- `SourceMountpoints` (`map[string]string`, `omitempty`): source dataset -> the mountpoint the stream gives it (not `none`, `legacy` or `-`), when the send has `--properties` or `--replication`. The top dataset's counts when its source is `local` or `received`; with `--replication` also each filesystem below it whose mountpoint is `local`, `received` or `inherited from` a dataset in the stream (`mountpointInStream`). `send` records them (`recordSourceMountpoints`, `zfs.GetMountpoints`). `receive` refuses to mount a restored dataset over another dataset that is mounted at that path. A manifest of an older version has no such field and restores as before.
+
+A received snapshot keeps the GUID of its source. `receive` compares the manifest's `BaseSnapshot.GUID` with the local snapshot of the same name and creation time before it says "already exists"; a manifest with no GUID (an older version) is not compared.
 
 `files/manifest.go`: `ReadManifest` caps a manifest at `MaxManifestBytes` (1 GiB of JSON, about 2 million volumes; `ErrManifestTooLong`); `backup.saveManifest` refuses to write one over it. `files/atomic.go`: `WriteFileAtomic` for cache writes.
 
 ## `files.VolumeInfo` (`files/volumeinfo.go`) = writer layers
 
 `prepareVolume` and `CreateSimpleVolume` build the write stack. `Extract` reverses it on read.
+
+Pipe mode on receive: one `VolumeInfo` has a writer (the download) and a reader (`Extract`). The download calls `WillExtract` before the volume goes to the reader. Then `Extract` does not take `v.lock`, which the writer's `Close` holds while it flushes the last bytes into the pipe. Without it, a volume of 256 KiB or less (`files.BufferSize`) deadlocked.
 
 ```
 bytes → compressor (gzip internal | external cmd | none)

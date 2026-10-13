@@ -50,9 +50,11 @@ A pure-Go `zfs`. The test binary becomes the fake when `FAKEZFS=1` (`RunIfReques
 | `FAKEZFS_RECEIVE_UNKNOWN` | file of `dataset@name` lines; a received stream that matches no fixture snapshot (a shim's) takes the first line |
 | `FAKEZFS_DRYRUN_OUTPUT` | replaces `zfs send -n -P` output |
 | `FAKEZFS_LOG` | one line per invocation |
-| `FAKEZFS_MOUNTPOINTS` | `dataset=source` entries, comma-separated: the source `zfs get mountpoint` reports (`local`, `received`); others are `default`. The value is always `/<dataset>` |
+| `FAKEZFS_MOUNTPOINTS` | `dataset=source` or `dataset=source:/path` entries, comma-separated: the source (`local`, `received`) and the path `zfs get mountpoint` reports; others are `default` at `/<dataset>`. `zfs list -t filesystem -o name,mountpoint,mounted` shows every dataset as mounted |
+| `FAKEZFS_DATASETS` | comma-separated datasets that exist with no snapshots (`zfs list` of their snapshots is empty, not an error) |
+| `FAKEZFS_GUIDS` | `dataset@snapshot=guid` entries, comma-separated. Without one, the guid comes from the snapshot's name and creation time only: a received copy has the guid of its source, as on real zfs |
 
-`zfs receive` adds the snapshot it received to `FAKEZFS_SNAPSHOTS` (as `-d`/`-e` map the name, with the sent creation time), as real zfs lists it afterwards. It finds the snapshot by comparing the stream with what `zfs send` writes for each fixture snapshot, with the current `FAKEZFS_STREAM_SALT`. A second receive of the same snapshot is an error. A test that receives one snapshot again must put the fixture back (see `checkRestores`).
+`zfs send -R` writes other bytes than the same send without `-R` (`replicationMark`); its `zfs receive` also adds the snapshot of that name of each dataset below the source, below the target. `zfs list -H -r -t filesystem,volume -o name <ds>` lists `ds` and the datasets below it (`zfs.Descendants`). `zfs receive` adds the snapshot it received to `FAKEZFS_SNAPSHOTS` (as `-d`/`-e` map the name, with the sent creation time), as real zfs lists it afterwards. It finds the snapshot by comparing the stream with what `zfs send` writes for each fixture snapshot, with the current `FAKEZFS_STREAM_SALT`. A second receive of the same snapshot is an error. A test that receives one snapshot again must put the fixture back (see `checkRestores`).
 
 ## Habits that work
 

@@ -1,0 +1,81 @@
+package backup
+
+import (
+	"context"
+	"crypto/rand"
+	"io"
+	"os/exec"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/config"
+	"github.com/someone1/zfsbackup-go/files"
+)
+
+// advVolume writes n random bytes into a closed file-backed volume.
+func advVolume(t *testing.T, n int64) *files.VolumeInfo {
+	t.Helper()
+	vol, err := files.CreateSimpleVolume(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vol.ObjectName = "tank/data|a.zstream.vol1"
+	if _, err = io.CopyN(vol, rand.Reader, n); err != nil {
+		t.Fatal(err)
+	}
+	if err = vol.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = vol.DeleteVolume() })
+	return vol
+}
+
+// PROBE: a zfs receive that reads the whole stream and then exits non-zero must fail the restore.
+func TestAdvReceiveStreamReportsNonZeroExit(t *testing.T) {
+	ctx := context.Background()
+	vol := advVolume(t, 4096)
+	volumes := make(chan *files.VolumeInfo, 1)
+	volumes <- vol
+	close(volumes)
+	buffer := make(chan interface{}, 1)
+	buffer <- nil
+	cmd := exec.CommandContext(ctx, "sh", "-c", "cat >/dev/null; exit 3")
+	if err := receiveStream(ctx, cmd, &files.JobInfo{}, volumes, buffer); err == nil {
+		t.Fatal("CONFIRMED: receiveStream reported success although zfs receive exited 3")
+	} else {
+		t.Logf("REFUTED: non-zero exit is reported: %v", err)
+	}
+}
+
+// PROBE: a manifest with zero volumes gives zfs receive an empty stream; the program has no
+// guard of its own and trusts zfs's exit status (real zfs: "failed to read from stream").
+func TestAdvReceiveStreamZeroVolumesTrustsZfs(t *testing.T) {
+	ctx := context.Background()
+	volumes := make(chan *files.VolumeInfo)
+	close(volumes)
+	buffer := make(chan interface{}, 1)
+	cmd := exec.CommandContext(ctx, "sh", "-c", "cat >/dev/null; exit 0")
+	err := receiveStream(ctx, cmd, &files.JobInfo{}, volumes, buffer)
+	t.Logf("zero volumes, zfs receive exits 0: receiveStream returned %v (nil = no guard of its own)", err)
+}
+
+// PROBE: a local temp-file failure (full disk, unwritable temp dir) must be permanent, not
+// retried with a fresh download for --maxRetryTime (12 h by default).
+func TestAdvTempFileErrorIsPermanent(t *testing.T) {
+	old := config.BackupTempdir
+	config.BackupTempdir = filepath.Join(t.TempDir(), "does-not-exist")
+	t.Cleanup(func() { config.BackupTempdir = old })
+	b := &cacheBackend{objects: map[string][]byte{"v1": []byte("data")}}
+	j := &files.JobInfo{MaxRetryTime: 1500 * time.Millisecond, MaxBackoffTime: 200 * time.Millisecond}
+	c := make(chan *files.VolumeInfo, 1)
+	buffer := make(chan interface{}, 1)
+	seq := downloadSequence{volume: &files.VolumeInfo{ObjectName: "v1", Size: 4}, c: c}
+	err := downloadSequenceVolume(context.Background(), j, seq, b, buffer, false)
+	if err == nil {
+		t.Fatal("download with an unwritable temp dir succeeded")
+	}
+	if b.downloads != 1 {
+		t.Errorf("CONFIRMED: the temp-file failure was retried: %d downloads of the same object in %v (want 1, a permanent error)", b.downloads, j.MaxRetryTime)
+	}
+}

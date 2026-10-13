@@ -1,0 +1,170 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/files"
+)
+
+var (
+	advTa = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	advTb = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	advTc = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+)
+
+// advChain sends full a, a->b, b->c of tank/data to env.dest and returns the receive log path.
+func advChain(t *testing.T, env *e2eEnv) string {
+	t.Helper()
+	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+		{Name: "c", CreationTime: advTc}, {Name: "b", CreationTime: advTb}, {Name: "a", CreationTime: advTa},
+	})
+	dest := "file://" + env.dest
+	env.sendOK(t, "--compressor", "", "tank/data@a", dest)
+	env.sendOK(t, "--compressor", "", "-i", "a", "tank/data@b", dest)
+	env.sendOK(t, "--compressor", "", "-i", "b", "tank/data@c", dest)
+	receiveLog := filepath.Join(t.TempDir(), "receive.log")
+	t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+	return receiveLog
+}
+
+func advReceives(t *testing.T, receiveLog string) int {
+	t.Helper()
+	data, err := os.ReadFile(receiveLog)
+	if err != nil {
+		return 0
+	}
+	return strings.Count(string(data), "\n")
+}
+
+// PROBE: --auto with --origin naming a snapshot that IS the target snapshot (same name and
+// time) must not report "already exists" for a target dataset that holds nothing.
+func TestAdvAutoOriginEqualsTargetSnapshot(t *testing.T) {
+	env := newE2EEnv(t)
+	receiveLog := advChain(t, env)
+	dest := "file://" + env.dest
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive("--auto", "--origin", "tank/data@c", "tank/data@c", dest, "restored/data")
+	})
+	pool, _ := os.ReadFile(env.snapshots)
+	holds := strings.Contains(string(pool), "restored/data@c")
+	if err == nil && !holds {
+		t.Errorf("CONFIRMED: receive --auto --origin tank/data@c exited 0, zfs receive ran %d times, restored/data holds no @c; "+
+			"log says already exists: %v\n%s", advReceives(t, receiveLog), strings.Contains(logs, "already exists"), logs)
+	}
+}
+
+// PROBE: --auto --origin X@a on a chain a->b->c. Only the first step creates the clone;
+// -o origin= on the second step (an incremental into the now existing dataset) is what real
+// zfs rejects (dmu_recv_begin_check: "Can't recv a clone into an existing fs", EINVAL).
+func TestAdvAutoOriginPassedToEveryStep(t *testing.T) {
+	env := newE2EEnv(t)
+	receiveLog := advChain(t, env)
+	dest := "file://" + env.dest
+	// other/base@a: another dataset's snapshot named a, created when tank/data@a was.
+	pool, err := os.ReadFile(env.snapshots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool = append(pool, []byte(fmt.Sprintf("other/base@a\t%d\tsnapshot\n", advTa.Unix()))...)
+	if err = os.WriteFile(env.snapshots, pool, 0600); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive("--auto", "--origin", "other/base@a", "tank/data@c", dest, "restored/data")
+	})
+	if err != nil {
+		t.Fatalf("receive --auto --origin: %v\n%s", err, logs)
+	}
+	zfsLog, _ := os.ReadFile(env.zfsLog)
+	var receives, withOrigin []string
+	for _, line := range strings.Split(string(zfsLog), "\n") {
+		if strings.HasPrefix(line, "receive ") {
+			receives = append(receives, line)
+			if strings.Contains(line, "origin=") {
+				withOrigin = append(withOrigin, line)
+			}
+		}
+	}
+	if len(receives) != 2 || advReceives(t, receiveLog) != 2 {
+		t.Fatalf("want 2 zfs receives, got %v\n%s", receives, logs)
+	}
+	if len(withOrigin) != 1 {
+		t.Errorf("CONFIRMED: -o origin= on %d of %d zfs receive steps, want only the first (a clone origin for an existing dataset is EINVAL on real zfs):\n%s",
+			len(withOrigin), len(receives), strings.Join(receives, "\n"))
+	}
+}
+
+// PROBE: the mount guard of a -R stream. The top dataset inherits its mountpoint; a child has a
+// local one. The stream carries the child's, so a receive without --unmounted mounts the restored
+// child over the live child. The guard must refuse it as it refuses the top-level case.
+func TestAdvReplicationMountGuardChecksChildren(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", "4096")
+	fixture := fmt.Sprintf("tank/data@a\t%d\tsnapshot\ntank/data/home@a\t%d\tsnapshot\n", advTa.Unix(), advTa.Unix())
+	if err := os.WriteFile(env.snapshots, []byte(fixture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dest := "file://" + env.dest
+	env.sendOK(t, "--compressor", "", "--replication", "tank/data@a", dest)
+	t.Setenv("FAKEZFS_MOUNTPOINTS", "tank/data/home=local")
+	receiveLog := filepath.Join(t.TempDir(), "receive.log")
+	t.Setenv("FAKEZFS_RECEIVE_LOG", receiveLog)
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive("--unmounted=false", "tank/data@a", dest, "restored/data")
+	})
+	if err == nil {
+		t.Errorf("CONFIRMED: a -R stream whose child tank/data/home has a local mountpoint was received without --unmounted "+
+			"(zfs receive ran %d times); the guard asked only about tank/data\n%s", advReceives(t, receiveLog), logs)
+	}
+	zfsLog, _ := os.ReadFile(env.zfsLog)
+	t.Logf("zfs get calls:\n%s", strings.Join(linesWith(string(zfsLog), "get -H -o value,source mountpoint"), "\n"))
+}
+
+func linesWith(s, sub string) []string {
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		if strings.Contains(l, sub) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// PROBE: the chain-walk Notice about a same-name local snapshot must name the TARGET dataset
+// (restored/data), where that snapshot is, not the source (tank/data).
+func TestAdvMismatchNoticeNamesTargetDataset(t *testing.T) {
+	env := newE2EEnv(t)
+	receiveLog := advChain(t, env)
+	dest := "file://" + env.dest
+	pool, err := os.ReadFile(env.snapshots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// restored/data has the backed-up a, and another b (taken a day later).
+	pool = append(pool, []byte(fmt.Sprintf("restored/data@a\t%d\tsnapshot\nrestored/data@b\t%d\tsnapshot\n",
+		advTa.Unix(), advTb.Add(24*time.Hour).Unix()))...)
+	if err = os.WriteFile(env.snapshots, pool, 0600); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := guarded(t, func() (string, error) {
+		return env.receive("--auto", "--force", "tank/data@c", dest, "restored/data")
+	})
+	if err == nil {
+		t.Fatalf("receive --auto -F over another snapshot named b succeeded; zfs receive ran %d times\n%s", advReceives(t, receiveLog), logs)
+	}
+	if n := advReceives(t, receiveLog); n != 0 {
+		t.Errorf("zfs receive ran %d times before the refusal", n)
+	}
+	if strings.Contains(logs, "The local snapshot tank/data@b") {
+		t.Errorf("CONFIRMED: the Notice names the source dataset: %q\n", linesWith(logs, "The local snapshot tank/data@b"))
+	}
+	if !strings.Contains(logs, "The local snapshot restored/data@b") {
+		t.Errorf("want the local snapshot named as restored/data@b\n%s", logs)
+	}
+}

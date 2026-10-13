@@ -1,0 +1,354 @@
+package main
+
+// Adversarial probes of the send path. Each test states the attack in its comment.
+// They live in the scratch copy only.
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/backup"
+	"github.com/someone1/zfsbackup-go/files"
+)
+
+// zfsWrapper writes a bash wrapper for --zfsPath. For a real `zfs send` (not -n) it runs
+// mode's behavior; everything else goes to the fake (this test binary, FAKEZFS=1 is inherited).
+//   exit1: run the fake to completion, then print a message on stderr and exit 1.
+//   warn:  print a warning on stderr, then run the fake (exit 0).
+func zfsWrapper(t *testing.T, env *e2eEnv, mode string) string {
+	t.Helper()
+	var body string
+	switch mode {
+	case "exit1":
+		body = fmt.Sprintf(`%q "$@"; echo "cannot send: late failure after the stream" >&2; exit 1`, env.self)
+	case "warn":
+		body = fmt.Sprintf(`echo "WARNING: could not send tank/data/child@a: does not exist" >&2; exec %q "$@"`, env.self)
+	default:
+		t.Fatalf("unknown mode %q", mode)
+	}
+	script := fmt.Sprintf(`#!/bin/bash
+if [ "$1" = send ] && [[ " $* " != *" -n "* ]]; then
+    %s
+fi
+exec %q "$@"
+`, body, env.self)
+	path := filepath.Join(t.TempDir(), "zfs")
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func oneSnapshot(t *testing.T, env *e2eEnv) {
+	t.Helper()
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}})
+}
+
+// Attack: zfs send writes every byte of a complete-looking stream, then exits 1 (a late error,
+// "warning: cannot send ... : incremental source ... " after the data). Is the manifest published?
+func TestAdvZFSExitNonZeroAfterFullStream(t *testing.T) {
+	for _, mode := range []struct {
+		name string
+		args []string
+	}{
+		{"Buffered", nil},
+		{"Pipe", []string{"--maxFileBuffer", "0"}},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			env := newE2EEnv(t)
+			t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(3<<20))
+			oneSnapshot(t, env)
+			wrapper := zfsWrapper(t, env, "exit1")
+			args := append([]string{"--zfsPath", wrapper, "--volsize", "1", "--compressor", "", "--maxRetryTime", "2s", "--maxBackoffTime", "1s"}, mode.args...)
+			logs, err := guarded(t, func() (string, error) {
+				return env.send(append(args, "tank/data@a", "file://"+env.dest)...)
+			})
+			if err == nil {
+				t.Errorf("send succeeded although zfs send exited 1 after the stream:\n%s", logs)
+			}
+			if !strings.Contains(logs, "late failure after the stream") {
+				t.Errorf("log lacks zfs send's stderr:\n%s", logs)
+			}
+			if names := manifestNames(destObjects(t, env.dest)); len(names) != 0 {
+				t.Errorf("a send whose zfs exited 1 published manifests %q", names)
+			}
+			for _, m := range env.cachedManifests(t) {
+				if !m.EndTime.IsZero() {
+					t.Errorf("the cached manifest was finalized")
+				}
+			}
+		})
+	}
+}
+
+// Attack: zfs send prints a warning on stderr (as -R -s does for a skipped child) and exits 0.
+// Does the operator see it at the default log level?
+func TestAdvZFSStderrWarningIsLogged(t *testing.T) {
+	env := newE2EEnv(t)
+	oneSnapshot(t, env)
+	wrapper := zfsWrapper(t, env, "warn")
+	logs, err := guarded(t, func() (string, error) {
+		return env.send("--zfsPath", wrapper, "-R", "--skip-missing", "tank/data@a", "file://"+env.dest)
+	})
+	if err != nil {
+		t.Fatalf("send: %v\n%s", err, logs)
+	}
+	if !strings.Contains(logs, "could not send tank/data/child@a") {
+		t.Errorf("zfs send's stderr warning is not in the log (default level); the operator never sees a skipped child:\n%s", logs)
+	}
+}
+
+// Attack: an explicit -i from a source snapshot that was destroyed and re-created under the same
+// name (new guid, new data). The destination holds a full of the OLD snapshot. Does send refuse,
+// warn, or publish an incremental nothing at the destination can receive on?
+func TestAdvExplicitIncrementalFromRecreatedSource(t *testing.T) {
+	env := newE2EEnv(t)
+	t1 := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: t1}})
+	dest := "file://" + env.dest
+	if logs, err := env.send("--compressor", "", "tank/data@a", dest); err != nil {
+		t.Fatalf("full: %v\n%s", err, logs)
+	}
+	full := newestBackup(t, "tank/data", dest)
+
+	// a is destroyed and re-created a day later; b follows.
+	t2 := t1.Add(24 * time.Hour)
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{
+		{Name: "b", CreationTime: t2.Add(time.Hour)},
+		{Name: "a", CreationTime: t2},
+	})
+	logs, err := env.send("--compressor", "", "-i", "tank/data@a", "tank/data@b", dest)
+	t.Logf("send -i from the re-created a: err=%v", err)
+	backups := backupsAt(t, "tank/data", dest)
+	var incr *files.JobInfo
+	for _, b := range backups {
+		if b.IncrementalSnapshot.Name == "a" {
+			incr = b
+		}
+	}
+	if err == nil && incr != nil {
+		if incr.IncrementalSnapshot.GUID == full.BaseSnapshot.GUID {
+			t.Fatalf("test setup: the re-created a has the same guid")
+		}
+		notice := false
+		for _, line := range strings.Split(logs, "\n") {
+			if strings.Contains(line, "guid") || strings.Contains(line, "re-created") || strings.Contains(line, "recreated") {
+				notice = true
+			}
+		}
+		if !notice {
+			t.Errorf("send published an incremental %s whose source a has guid %s; the only full of a at the destination has guid %s; "+
+				"no refusal and nothing about it in the log:\n%s", incr.BaseSnapshot.Name, incr.IncrementalSnapshot.GUID, full.BaseSnapshot.GUID, logs)
+		}
+	}
+	// What does receive --auto make of it?
+	rlogs, rerr := guarded(t, func() (string, error) { return env.receive("--auto", "tank/data@b", dest, "restored/data") })
+	t.Logf("receive --auto of b: err=%v\n%s", rerr, rlogs)
+}
+
+// Attack: the snapshot of a complete set is destroyed and re-created with new data; a smart cron
+// send runs again. Exit 0 and nothing sent (silent) or an error?
+func TestAdvRecreatedSnapshotSmartSend(t *testing.T) {
+	env := newE2EEnv(t)
+	t1 := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: t1}})
+	dest := "file://" + env.dest
+	smart := []string{"--fullIfOlderThan", "720h", "--compressor", ""}
+	if logs, err := env.send(append(smart, "tank/data", dest)...); err != nil {
+		t.Fatalf("full: %v\n%s", err, logs)
+	}
+	t.Setenv("FAKEZFS_STREAM_SALT", "new-data")
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "a", CreationTime: t1.Add(24 * time.Hour)}})
+	logs, err := env.send(append(smart, "tank/data", dest)...)
+	t.Logf("smart send after re-creation: err=%v\n%s", err, logs)
+	if err == nil || err == backup.ErrNoOp {
+		t.Errorf("a re-created snapshot with new data was silently treated as backed up: err=%v", err)
+	}
+	if n := len(manifestNames(destObjects(t, env.dest))); n != 1 {
+		t.Errorf("destination holds %d manifests, want the 1 old set untouched", n)
+	}
+}
+
+// Attack: SIGTERM lands after the last volume completed the chain and before the final manifest.
+// The hook cancels the context at exactly that point. Then --resume.
+func TestAdvCancelBeforeFinalManifestThenResume(t *testing.T) {
+	const streamBytes = 3 << 20
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(streamBytes))
+	oneSnapshot(t, env)
+	dest := "file://" + env.dest
+	ctx, cancel := context.WithCancel(context.Background())
+	backup.TestHookBeforeFinalManifest = cancel
+	defer func() { backup.TestHookBeforeFinalManifest = nil }()
+	args := []string{"--volsize", "1", "--compressor", "", "tank/data@a", dest}
+	logs, err := guarded(t, func() (string, error) { return env.sendCtx(ctx, args...) })
+	backup.TestHookBeforeFinalManifest = nil
+	if err == nil {
+		t.Fatalf("send succeeded although the context was canceled before the manifest:\n%s", logs)
+	}
+	if names := manifestNames(destObjects(t, env.dest)); len(names) != 0 {
+		t.Fatalf("a canceled send published manifests %q", names)
+	}
+	var finalized bool
+	for _, m := range env.cachedManifests(t) {
+		finalized = finalized || !m.EndTime.IsZero()
+	}
+	t.Logf("cached manifest finalized (EndTime set): %v", finalized)
+
+	logs, err = guarded(t, func() (string, error) { return env.send(append([]string{"--resume"}, args...)...) })
+	if err != nil {
+		t.Fatalf("resume: %v\n%s", err, logs)
+	}
+	t.Logf("resume log:\n%s", logs)
+	if names := manifestNames(destObjects(t, env.dest)); len(names) != 1 {
+		t.Fatalf("after the resume the destination holds manifests %q, want 1", names)
+	}
+	env.checkRestores(t, dest, "a", streamBytes)
+}
+
+// Attack: --resume with another --volsize, or another --compressionLevel, than the cut attempt.
+// sameStream compares neither. Is the result restorable?
+func TestAdvResumeWithChangedVolsizeOrLevel(t *testing.T) {
+	t.Run("Volsize", func(t *testing.T) {
+		const streamBytes = 4 << 20
+		env := newE2EEnv(t)
+		t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(streamBytes))
+		t.Setenv("FAKEZFS_FAIL_AFTER_BYTES", fmt.Sprint(5<<19))
+		oneSnapshot(t, env)
+		dest := "file://" + env.dest
+		if logs, err := guarded(t, func() (string, error) {
+			return env.send("--volsize", "1", "--compressor", "", "--maxRetryTime", "2s", "tank/data@a", dest)
+		}); err == nil {
+			t.Fatalf("cut send succeeded:\n%s", logs)
+		}
+		os.Unsetenv("FAKEZFS_FAIL_AFTER_BYTES")
+		logs, err := guarded(t, func() (string, error) {
+			return env.send("--resume", "--volsize", "2", "--compressor", "", "tank/data@a", dest)
+		})
+		if err != nil {
+			t.Fatalf("resume with --volsize 2: %v\n%s", err, logs)
+		}
+		if !strings.Contains(logs, "Resuming from volume 3: 2 of") {
+			t.Errorf("want the 2 kept volumes in the log:\n%s", logs)
+		}
+		m := newestBackup(t, "tank/data", dest)
+		for _, v := range m.Volumes {
+			t.Logf("volume %d: %d bytes", v.VolumeNumber, v.Size)
+		}
+		env.checkRestores(t, dest, "a", streamBytes)
+	})
+	t.Run("CompressionLevel", func(t *testing.T) {
+		const streamBytes = 16 << 20
+		env := newE2EEnv(t)
+		t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(streamBytes))
+		t.Setenv("FAKEZFS_FAIL_AFTER_BYTES", fmt.Sprint(12<<20))
+		oneSnapshot(t, env)
+		dest := "file://" + env.dest
+		if logs, err := guarded(t, func() (string, error) {
+			return env.send("--volsize", "1", "--compressionLevel", "9", "--maxRetryTime", "2s", "tank/data@a", dest)
+		}); err == nil {
+			t.Fatalf("cut send succeeded:\n%s", logs)
+		}
+		os.Unsetenv("FAKEZFS_FAIL_AFTER_BYTES")
+		logs, err := guarded(t, func() (string, error) {
+			return env.send("--resume", "--volsize", "1", "--compressionLevel", "1", "tank/data@a", dest)
+		})
+		if err != nil {
+			t.Fatalf("resume with --compressionLevel 1: %v\n%s", err, logs)
+		}
+		if strings.Contains(logs, "Resuming from volume 1:") || !strings.Contains(logs, "Resuming from volume") {
+			t.Errorf("want kept volumes in the log:\n%s", logs)
+		}
+		env.checkRestores(t, dest, "a", streamBytes)
+	})
+}
+
+// Attack: --maxParallelUploads 4 with two destinations and 8 volumes: can the manifest reach a
+// destination before the last volume does, or list volumes out of order?
+func TestAdvParallelUploadsTwoDestinations(t *testing.T) {
+	const streamBytes = 8 << 20
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(streamBytes))
+	oneSnapshot(t, env)
+	dest2 := filepath.Join(t.TempDir(), "dest2")
+	if err := os.Mkdir(dest2, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	d1, d2 := "file://"+env.dest, "file://"+dest2
+	logs, err := guarded(t, func() (string, error) {
+		return env.send("--maxParallelUploads", "4", "--maxFileBuffer", "5", "--volsize", "1", "--compressor", "",
+			"tank/data@a", d1+","+d2)
+	})
+	if err != nil {
+		t.Fatalf("send: %v\n%s", err, logs)
+	}
+	for _, d := range []string{d1, d2} {
+		m := newestBackup(t, "tank/data", d)
+		if len(m.Volumes) != 8 { // 8 MiB: the cut check runs every 512 KiB, so each volume is exactly 1 MiB
+			t.Errorf("%s: manifest lists %d volumes, want 8", d, len(m.Volumes))
+		}
+		for i, v := range m.Volumes {
+			if v.VolumeNumber != int64(i+1) {
+				t.Errorf("%s: volume %d listed at position %d", d, v.VolumeNumber, i)
+			}
+			fi, serr := os.Stat(filepath.Join(strings.TrimPrefix(d, "file://"), v.ObjectName))
+			if serr != nil || uint64(fi.Size()) != v.Size {
+				t.Errorf("%s: %s at the destination is %v bytes, manifest says %d (%v)", d, v.ObjectName, fi, v.Size, serr)
+			}
+		}
+		env.checkRestores(t, d, "a", streamBytes)
+	}
+}
+
+// Attack: --manifestPrefix holding the separator, or a slash.
+func TestAdvManifestPrefixOddCharacters(t *testing.T) {
+	for _, prefix := range []string{"a|b", "m/n", "manifests|"} {
+		t.Run(prefix, func(t *testing.T) {
+			env := newE2EEnv(t)
+			oneSnapshot(t, env)
+			dest := "file://" + env.dest
+			logs, err := env.send("--manifestPrefix", prefix, "--compressor", "", "tank/data@a", dest)
+			if err != nil {
+				t.Fatalf("send: %v\n%s", err, logs)
+			}
+			jobInfo := &files.JobInfo{ManifestPrefix: prefix, MaxParallelUploads: 1, MaxBackoffTime: time.Minute, MaxRetryTime: time.Minute}
+			backups, err := backup.BackupsAtTarget(context.Background(), "tank/data", dest, jobInfo)
+			if err != nil || len(backups) != 1 {
+				t.Fatalf("list with prefix %q: %d backups, %v", prefix, len(backups), err)
+			}
+			// A second send of the same set must be refused (the manifest must be found by name).
+			logs, err = env.send("--manifestPrefix", prefix, "--compressor", "", "tank/data@a", dest)
+			if err == nil || !strings.Contains(logs, "already exists") {
+				t.Errorf("second send with prefix %q: err=%v, want a refusal:\n%s", prefix, err, logs)
+			}
+			rlogs, rerr := guarded(t, func() (string, error) {
+				return env.receive("--manifestPrefix", prefix, "tank/data@a", dest, "restored/data")
+			})
+			if rerr != nil {
+				t.Errorf("receive with prefix %q: %v\n%s", prefix, rerr, rlogs)
+			}
+		})
+	}
+}
+
+// Attack: --volsize 0 (or absurdly large) is accepted by flag validation.
+func TestAdvVolsizeZeroAccepted(t *testing.T) {
+	env := newE2EEnv(t)
+	t.Setenv("FAKEZFS_STREAM_BYTES", fmt.Sprint(3<<20))
+	oneSnapshot(t, env)
+	dest := "file://" + env.dest
+	logs, err := env.send("--volsize", "0", "--compressor", "", "tank/data@a", dest)
+	t.Logf("send --volsize 0: err=%v", err)
+	if err == nil {
+		m := newestBackup(t, "tank/data", dest)
+		t.Logf("--volsize 0 accepted: %d volumes, first %d bytes", len(m.Volumes), m.Volumes[0].Size)
+		t.Errorf("--volsize 0 was accepted and gave one unbounded volume (%d bytes); on S3 an unbounded volume fails after 10,000 parts", m.Volumes[0].Size)
+	} else {
+		t.Logf("logs:\n%s", logs)
+	}
+}

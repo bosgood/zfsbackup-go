@@ -181,6 +181,14 @@ Incremental restore example:
 ./zfsbackup receive --encryptTo user@domain.com --signFrom user@domain.com --publicKeyRingPath pubring.gpg.asc --secretKeyRingPath secring.gpg.asc -d -F -i Tank/Dataset@snapshot-20170101 Tank/Dataset@snapshot-20170201 gs://backup-bucket-target Tank
 ```
 
+`-F` (`--force`) rolls the target back to the incremental's source snapshot before the receive. That removes the changes made in the target since that snapshot, and is all that `-F` does here. When zfs would destroy more, `receive` refuses unless you also give `--allowDestroy`:
+
+- a full backup into a dataset that exists and has no snapshots: zfs replaces the dataset and all its data;
+- an incremental, when the target has snapshots newer than the source (or taken in the same second as it): zfs destroys them;
+- an incremental sent with `--replication`, when the target has snapshots other than the source, or datasets below it: zfs destroys each one that the sending side did not have, and the backup does not record which ones it had.
+
+`receive --auto -F` checks the whole chain before its first receive, so a refusal never leaves a part of the chain restored. A `--replication` chain into a new dataset needs no `--allowDestroy`: what its first steps receive does not count.
+
 ### Listing backups
 
 `list` prints the backup sets whose manifests are at a destination. `--volumeName` filters by dataset (a trailing `*` matches a prefix), and `--before` and `--after` filter by backup time:
@@ -296,7 +304,7 @@ Flags:
   -D, --deduplication                      See the -D flag for zfs send for more information.
   -n, --dry-run                            Do not upload anything; only validate and log what would be backed up.
       --full                               set this flag to take a full backup of the specified volume using the most recent snapshot.
-      --fullIfOlderThan duration           set this flag to do an incremental backup of the most recent snapshot from the most recent snapshot found in the target, unless the last full backup is older than this duration, in which case do a full backup. (default -1m0s)
+      --fullIfOlderThan duration           set this flag to do an incremental backup of the most recent snapshot from the most recent snapshot found in the target, unless the last full backup is older than this duration, in which case do a full backup. A full is due 10 minutes before the duration ends (a duration of 1h or less: when it ends), so the seconds sanoid adds to its snapshot times do not move a full by a month. Snapshots and backups dated more than a day after now are ignored, with a warning. (default -1m0s)
       --fullSnapshotSuffix string          When set, full backups (including those triggered by fullIfOlderThan) are taken from the newest snapshot whose name ends with this suffix (e.g. "_monthly"). Use this to anchor fulls on long-lived snapshots that outlive the fullIfOlderThan window.
   -h, --help                               help for send
       --increment                          set this flag to do an incremental backup of the most recent snapshot from the most recent snapshot found in the target.
@@ -342,6 +350,7 @@ Usage:
   zfsbackup receive [flags] filesystem|volume|snapshot-to-restore uri local_volume
 
 Flags:
+      --allowDestroy              with --force, accept that zfs destroys data: a target with no snapshots that a full backup replaces, local snapshots newer than the source of an incremental (or taken in the same second), and with a --replication incremental the snapshots and datasets that the sending side did not have (any local snapshot other than the source, and any dataset below the target). Without it, --force refuses those receives. --auto checks the whole chain before its first receive.
       --auto                      Automatically restore to the snapshot provided, or to the latest snapshot of the volume provided, from the full backup of that snapshot when there is one; cannot be used with the --incremental flag.
       --compressor string         an external decompressor to run although it is not one of the known ones (gzip, pigz, bzip2, pbzip2, lbzip2, xz, pxz, lzma, zstd, pzstd, lz4, lzop). The backup's manifest names its compressor; a manifest naming any other program is refused unless this flag names the same one.
   -F, --force                     See the -F flag for zfs recv for more information.
@@ -465,7 +474,7 @@ Usage:
 
 Flags:
       --full                               set this flag to take a full backup of the specified volume using the most recent snapshot.
-      --fullIfOlderThan duration           set this flag to do an incremental backup of the most recent snapshot from the most recent snapshot found in the target, unless the last full backup is older than this duration, in which case do a full backup. (default -1m0s)
+      --fullIfOlderThan duration           set this flag to do an incremental backup of the most recent snapshot from the most recent snapshot found in the target, unless the last full backup is older than this duration, in which case do a full backup. A full is due 10 minutes before the duration ends (a duration of 1h or less: when it ends), so the seconds sanoid adds to its snapshot times do not move a full by a month. Snapshots and backups dated more than a day after now are ignored, with a warning. (default -1m0s)
       --fullSnapshotSuffix string          When set, full backups (including those triggered by fullIfOlderThan) are taken from the newest snapshot whose name ends with this suffix (e.g. "_monthly"). Use this to anchor fulls on long-lived snapshots that outlive the fullIfOlderThan window.
   -h, --help                               help for plan
       --increment                          set this flag to do an incremental backup of the most recent snapshot from the most recent snapshot found in the target.

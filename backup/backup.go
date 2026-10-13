@@ -70,8 +70,9 @@ var (
 	TestHookBeforeFinalManifest func()
 )
 
-// ProcessSmartOptions will compute the snapshots to use
-func ProcessSmartOptions(ctx context.Context, jobInfo *files.JobInfo) error {
+// ProcessSmartOptions will compute the snapshots to use. With dryRun (send --dry-run) it starts
+// no restore of an archived manifest (see syncCacheMode).
+func ProcessSmartOptions(ctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	snapshots, err := zfs.GetSnapshotsAndBookmarks(ctx, jobInfo.VolumeName)
 	if err != nil {
 		return err
@@ -81,7 +82,7 @@ func ProcessSmartOptions(ctx context.Context, jobInfo *files.JobInfo) error {
 	// already exists there, rather than a send that would overwrite it.
 	destBackups := make([][]*files.JobInfo, len(jobInfo.Destinations))
 	for idx := range jobInfo.Destinations {
-		b, derr := getBackupsForTarget(ctx, jobInfo.VolumeName, jobInfo.Destinations[idx], jobInfo)
+		b, derr := getBackupsForTarget(ctx, jobInfo.VolumeName, jobInfo.Destinations[idx], jobInfo, dryRun)
 		if derr != nil {
 			return derr
 		}
@@ -221,19 +222,29 @@ func selectSmartSnapshots(
 
 // BackupsAtTarget lists the backups of volume at the target destination,
 // newest-first, as the smart options see them. It syncs the local manifest
-// cache for the target and only reads from the target.
+// cache for the target and only reads from the target: it starts no restore of an
+// archived manifest (see syncCacheMode).
 func BackupsAtTarget(ctx context.Context, volume, target string, jobInfo *files.JobInfo) ([]*files.JobInfo, error) {
-	return getBackupsForTarget(ctx, volume, target, jobInfo)
+	return getBackupsForTarget(ctx, volume, target, jobInfo, true)
 }
 
-// Will list all backups found in the target destination
-func getBackupsForTarget(ctx context.Context, volume, target string, jobInfo *files.JobInfo) ([]*files.JobInfo, error) {
+// getBackupsForTarget lists the backups of volume at the target destination, newest-first. With
+// noRestore it calls no PreDownload, and fails when a manifest of volume is in an archive storage
+// class and not cached (syncCacheMode).
+func getBackupsForTarget(
+	ctx context.Context, volume, target string, jobInfo *files.JobInfo, noRestore bool,
+) ([]*files.JobInfo, error) {
 	// Prepare the backend client
 	backend, berr := prepareBackend(ctx, jobInfo, target, nil)
 	if berr != nil {
 		log.AppLogger.Errorf("Could not initialize backend due to error - %v.", berr)
 		return nil, berr
 	}
+	defer func() {
+		if cerr := backend.Close(); cerr != nil {
+			log.AppLogger.Warningf("Could not properly close backend due to error - %v", cerr)
+		}
+	}()
 
 	// Get the local cache dir
 	localCachePath, cerr := getCacheDir(jobInfo, target)
@@ -243,7 +254,7 @@ func getBackupsForTarget(ctx context.Context, volume, target string, jobInfo *fi
 	}
 
 	// Sync the local cache
-	manifests, _, serr := syncCache(ctx, jobInfo, localCachePath, backend)
+	manifests, _, serr := syncCacheMode(ctx, jobInfo, localCachePath, backend, noRestore, volume)
 	if serr != nil {
 		log.AppLogger.Errorf("Could not sync cache dir for target %s due to error - %v.", backends.RedactURI(target), serr)
 		return nil, serr
@@ -282,8 +293,9 @@ func sortBackupsNewestFirst(manifests []*files.JobInfo) {
 	})
 }
 
-// reportDryRun validates the selected snapshots exist and logs what a real
-// backup would do, without acquiring the lock or uploading anything.
+// reportDryRun validates the selected snapshots exist, runs the read-only refusals of a real
+// send (dryRunRefusals), and logs what a real backup would do, without acquiring the lock or
+// uploading anything.
 func reportDryRun(ctx context.Context, jobInfo *files.JobInfo) error {
 	if ok, verr := validateSnapShotExists(ctx, &jobInfo.BaseSnapshot, jobInfo.VolumeName, false); verr != nil {
 		log.AppLogger.Errorf("Cannot validate if selected base snapshot exists due to error - %v", verr)
@@ -301,6 +313,10 @@ func reportDryRun(ctx context.Context, jobInfo *files.JobInfo) error {
 			log.AppLogger.Errorf("Selected incremental snapshot does not exist!")
 			return fmt.Errorf("selected incremental snapshot does not exist")
 		}
+	}
+
+	if done, err := dryRunRefusals(ctx, jobInfo); err != nil || done {
+		return err
 	}
 
 	backupType := "full"
@@ -329,12 +345,46 @@ func reportDryRun(ctx context.Context, jobInfo *files.JobInfo) error {
 	log.AppLogger.Noticef("Dry-run: ZFS send command: %s", strings.Join(zfs.GetZFSSendCommand(ctx, jobInfo).Args, " "))
 
 	if size, err := zfs.GetZFSSendDryRun(ctx, jobInfo); err != nil {
-		log.AppLogger.Debugf("Dry-run: could not estimate ZFS send size - %v", err)
+		// zfs refuses some sends here that it will also refuse in the real send (a bookmark
+		// source with -R, for example), so the operator must see it.
+		log.AppLogger.Warningf("Dry-run: could not estimate ZFS send size - %v", err)
 	} else {
 		log.AppLogger.Noticef("Dry-run: estimated ZFS stream size: %d (%s)", size, humanize.IBytes(size))
 	}
 
 	return nil
+}
+
+// dryRunRefusals runs the checks of Backup that only read, so that a dry run fails where the send
+// would: a set that is already at the destinations, a manifest over the limit, an incremental that
+// no restore can apply. It writes nothing at the destinations and takes no lock; like a smart send,
+// it can add manifests to the local cache. It does not run tryResume. done reports that the send
+// would only copy a manifest.
+func dryRunRefusals(ctx context.Context, jobInfo *files.JobInfo) (done bool, err error) {
+	dests := make([]destination, 0, len(jobInfo.Destinations))
+	defer func() {
+		for _, d := range dests {
+			if cerr := d.backend.Close(); cerr != nil {
+				log.AppLogger.Warningf("Could not properly close backend due to error - %v", cerr)
+			}
+		}
+	}()
+	for _, uri := range jobInfo.Destinations {
+		backend, berr := prepareBackend(ctx, jobInfo, uri, nil)
+		if berr != nil {
+			log.AppLogger.Errorf("Dry-run: could not initialize the backend of %s due to error - %v.", backends.RedactURI(uri), berr)
+			return false, berr
+		}
+		dests = append(dests, destination{uri: uri, backend: backend})
+	}
+	recordSnapshotGUIDs(ctx, jobInfo)
+	if done, err = refuseExistingSet(ctx, jobInfo, dests, true); err != nil || done {
+		return done, err
+	}
+	if err = checkManifestFits(ctx, jobInfo); err != nil {
+		return false, err
+	}
+	return false, refuseMixedChain(ctx, jobInfo, true)
 }
 
 // pendingVolumes counts the volumes still in the pipeline. zero is closed when the count first
@@ -372,18 +422,123 @@ func (p *pendingVolumes) done() {
 // directory, beside the cache it protects: unlike os.TempDir(), that does not change with TMPDIR
 // (systemd's PrivateTmp, cron vs a shell). So a send and a clean only see each other on the same
 // host, with the same --workingDirectory.
-func volumeLock(volume string) (lock lockfile.Lockfile, path string, err error) {
+func volumeLock(volume string) (lock bootLock, path string, err error) {
 	dir, err := filepath.Abs(filepath.Join(config.WorkingDir, "locks"))
 	if err != nil {
-		return "", "", err
+		return bootLock{}, "", err
 	}
 	if err = os.MkdirAll(dir, 0700); err != nil {
-		return "", "", err
+		return bootLock{}, "", err
 	}
 	// nolint:gosec // MD5 not used for cryptographic purposes
 	path = filepath.Join(dir, fmt.Sprintf("%x.lck", md5.Sum([]byte(volume))))
-	lock, err = lockfile.New(path)
-	return lock, path, err
+	l, err := lockfile.New(path)
+	return bootLock{l}, path, err
+}
+
+// bootIDPath is the file that holds the id of the current boot of the host (Linux). Tests change it.
+var bootIDPath = "/proc/sys/kernel/random/boot_id"
+
+// bootLock is a lockfile.Lockfile that also records, in a file beside it ("<lock>.boot"), the
+// pid of its holder and the boot id of the host. lockfile sees a lock as live while a process
+// with its pid runs. After a power loss and a restart, another process (cron runs as root, so
+// the signal check passes) can have that pid, and the lock blocks every send. A lock whose
+// boot file names this pid and another boot is from before the restart, so it is stale. The boot
+// id is Linux's boot_id, or the boot time on FreeBSD and macOS. Where the host has neither
+// (illumos), or the boot file is missing (an older version took the lock), the lock is live as
+// before. A container that restarts without a host reboot keeps the boot id: its stale lock stays.
+type bootLock struct {
+	lockfile.Lockfile
+}
+
+func (l bootLock) bootFile() string {
+	return string(l.Lockfile) + ".boot"
+}
+
+// platformBootID names the current boot where the host has no bootIDPath: the boot time on
+// FreeBSD and macOS (bootid_bsd.go), "" elsewhere. Tests change it.
+var platformBootID = bootTimeID
+
+// currentBootID is the boot id of the host, or "" when it has none.
+func currentBootID() string {
+	data, err := os.ReadFile(bootIDPath)
+	if err != nil {
+		return platformBootID()
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// fromAnotherBoot reports whether the lock is held by the pid its boot file names, and that file
+// names another boot than the current one.
+func (l bootLock) fromAnotherBoot() (pid int, stale bool) {
+	boot := currentBootID()
+	if boot == "" {
+		return 0, false
+	}
+	owner, err := os.ReadFile(string(l.Lockfile))
+	if err != nil {
+		return 0, false
+	}
+	recorded, err := os.ReadFile(l.bootFile())
+	if err != nil {
+		return 0, false
+	}
+	var lockPid, bootPid int
+	var bootID string
+	if _, err = fmt.Sscanln(string(owner), &lockPid); err != nil {
+		return 0, false
+	}
+	if _, err = fmt.Sscanln(string(recorded), &bootPid, &bootID); err != nil {
+		return 0, false
+	}
+	return lockPid, lockPid == bootPid && bootID != "" && bootID != boot
+}
+
+// TryLock takes the lock as lockfile does, and first removes a lock from another boot. Like the
+// removal of a dead owner's lock in lockfile, this is not atomic: two processes that both find
+// the stale lock at the same time can both take it.
+func (l bootLock) TryLock() error {
+	err := l.Lockfile.TryLock()
+	if errors.Is(err, lockfile.ErrBusy) {
+		if pid, stale := l.fromAnotherBoot(); stale {
+			log.AppLogger.Warningf(
+				"The lock %s is from before the last restart of this host: pid %d is now another process. Removing the lock.",
+				string(l.Lockfile), pid,
+			)
+			if rerr := os.Remove(string(l.Lockfile)); rerr != nil && !os.IsNotExist(rerr) {
+				return rerr
+			}
+			err = l.Lockfile.TryLock()
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if boot := currentBootID(); boot != "" {
+		data := fmt.Sprintf("%d %s\n", os.Getpid(), boot)
+		if werr := os.WriteFile(l.bootFile(), []byte(data), 0600); werr != nil {
+			log.AppLogger.Warningf("Could not record the boot id beside the lock %s: %v", string(l.Lockfile), werr)
+		}
+	} else {
+		// A boot file left by a crash names a pid that this host can give again.
+		_ = os.Remove(l.bootFile())
+	}
+	return nil
+}
+
+// Unlock removes the boot file and the lock, if this process holds the lock.
+func (l bootLock) Unlock() error {
+	if owner, err := l.GetOwner(); err == nil && owner.Pid == os.Getpid() {
+		if rerr := os.Remove(l.bootFile()); rerr != nil && !os.IsNotExist(rerr) {
+			log.AppLogger.Warningf("Could not remove %s: %v", l.bootFile(), rerr)
+		}
+	}
+	return l.Lockfile.Unlock()
+}
+
+// String is the path of the lock.
+func (l bootLock) String() string {
+	return string(l.Lockfile)
 }
 
 // destination is one place a backup set is sent to: its URI and the backend initialized for it.
@@ -449,8 +604,9 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 		// not stale, so do not suggest removing it.
 		if owner, oerr := lock.GetOwner(); oerr == nil && errors.Is(lferr, lockfile.ErrBusy) {
 			log.AppLogger.Errorf(
-				"Another send or a clean of %s is running (pid %d holds %s); exiting. Run again when it is done.",
-				jobInfo.VolumeName, owner.Pid, lockFilePath,
+				"Another send or a clean of %s is running (pid %d holds %s); exiting. Run again when it is done. "+
+					"If pid %d is not %s (after a restart, another process can get its pid), remove %s.",
+				jobInfo.VolumeName, owner.Pid, lockFilePath, owner.Pid, config.ProgramName, lockFilePath,
 			)
 			return lferr
 		}
@@ -468,10 +624,11 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	// What the manifest records about the stream's identity, for a later --resume to compare.
 	jobInfo.RecordKeyFingerprints()
 	recordSnapshotGUIDs(ctx, jobInfo)
+	recordSourceMountpoints(ctx, jobInfo)
 
 	// Only now, holding the lock: checked any earlier, an overlapping send of the same set
 	// could finish between the check and the lock, and this one would then overwrite it.
-	if done, err := refuseExistingSet(ctx, jobInfo, dests); err != nil || done {
+	if done, err := refuseExistingSet(ctx, jobInfo, dests, false); err != nil || done {
 		return err
 	}
 	// Before anything touches the cache or the destinations.
@@ -510,7 +667,7 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 			return fmt.Errorf("selected incremental snapshot does not exist")
 		}
 	}
-	if err := refuseMixedChain(ctx, jobInfo); err != nil {
+	if err := refuseMixedChain(ctx, jobInfo, false); err != nil {
 		return err
 	}
 
@@ -742,29 +899,40 @@ func sameStream(ctx context.Context, original, current *files.JobInfo) error {
 }
 
 // refuseMixedChain fails when an incremental would continue, at some destination, a backup of its
-// source sent with the other --raw setting (see MixedChainError). It runs after the incremental
-// snapshot was validated, which fills in its creation time. A destination without a backup of
-// the source is skipped with a note: the user may have sent the full elsewhere. Smart sends run
-// it too (their manifests are cached by then); --dry-run returns before it runs.
-func refuseMixedChain(ctx context.Context, jobInfo *files.JobInfo) error {
+// source sent with the other --raw setting (see MixedChainError), or a backup of another snapshot
+// with the source's name (see sourceBackup). It runs after the incremental snapshot was validated,
+// which fills in its creation time, and after recordSnapshotGUIDs. A destination without a backup
+// of the source is skipped with a Notice: the user may have sent the full elsewhere. Smart sends
+// and --dry-run run it too (the manifests of a smart send are cached by then). With dryRun it starts
+// no restore of an archived manifest: the check skips that manifest, with a Notice.
+func refuseMixedChain(ctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	if jobInfo.IncrementalSnapshot.Name == "" {
 		return nil
 	}
 	for _, uri := range jobInfo.Destinations {
-		backups, err := getBackupsForTarget(ctx, jobInfo.VolumeName, uri, jobInfo)
+		backups, err := getBackupsForTarget(ctx, jobInfo.VolumeName, uri, jobInfo, dryRun)
 		if err != nil {
 			return err
 		}
-		var source *files.JobInfo
-		for _, b := range backups {
-			if b.BaseSnapshot.Equal(&jobInfo.IncrementalSnapshot) {
-				source = b
-				break
-			}
+		source, other := sourceBackup(backups, &jobInfo.IncrementalSnapshot)
+		if source == nil && other != nil {
+			err = fmt.Errorf(
+				"the backup of %s@%s at %s is of another snapshot with that name (created %v, guid %s); the one on this pool "+
+					"was created %v (guid %s), so it was destroyed and created again. No restore from %s can apply an "+
+					"incremental from it. Send a full backup (without -i), or an incremental from a snapshot that is backed up there",
+				jobInfo.VolumeName, jobInfo.IncrementalSnapshot.Name, backends.RedactURI(uri),
+				other.BaseSnapshot.CreationTime, guidOrUnknown(other.BaseSnapshot.GUID),
+				jobInfo.IncrementalSnapshot.CreationTime, guidOrUnknown(jobInfo.IncrementalSnapshot.GUID),
+				backends.RedactURI(uri),
+			)
+			log.AppLogger.Errorf("%v.", err)
+			return err
 		}
 		if source == nil {
-			log.AppLogger.Infof("No backup of %s at %s; the stream kind cannot be checked there.",
-				jobInfo.IncrementalSnapshot.Name, backends.RedactURI(uri))
+			log.AppLogger.Noticef(
+				"No backup of %s@%s at %s. A restore from there needs that snapshot from another place.",
+				jobInfo.VolumeName, jobInfo.IncrementalSnapshot.Name, backends.RedactURI(uri),
+			)
 			continue
 		}
 		if err = MixedChainError(jobInfo.VolumeName, source, jobInfo.Raw); err != nil {
@@ -775,12 +943,41 @@ func refuseMixedChain(ctx context.Context, jobInfo *files.JobInfo) error {
 	return nil
 }
 
+// sourceBackup finds, in backups, the backup that an incremental from source continues: a backup
+// of a snapshot with source's name and creation time and, when both record one, guid. When there
+// is none, other is a backup of a snapshot with source's name that is not source: that snapshot
+// was destroyed and created again, and an incremental from the new one cannot be received on a
+// restore of the old one.
+func sourceBackup(backups []*files.JobInfo, source *files.SnapshotInfo) (match, other *files.JobInfo) {
+	for _, b := range backups {
+		if b.BaseSnapshot.Name != source.Name {
+			continue
+		}
+		if b.BaseSnapshot.Equal(source) && (b.BaseSnapshot.GUID == "" || source.GUID == "" || b.BaseSnapshot.GUID == source.GUID) {
+			return b, nil
+		}
+		if other == nil {
+			other = b
+		}
+	}
+	return nil, other
+}
+
+// guidOrUnknown is guid for a message; older manifests and failed lookups have none.
+func guidOrUnknown(guid string) string {
+	if guid == "" {
+		return "unknown"
+	}
+	return guid
+}
+
 // refuseExistingSet fails when the manifest of the backup set about to be sent already exists at
 // any destination. Volume boundaries are not reproducible, so a re-send would overwrite the set's
 // volumes in place and leave its manifest pointing at changed objects. A set whose manifest is at
 // only some destinations (its upload failed at the others) is completed instead under --resume, by
 // copying that manifest to the rest; done reports that nothing is left to send.
-func refuseExistingSet(ctx context.Context, jobInfo *files.JobInfo, destinations []destination) (done bool, err error) {
+// With dryRun it only logs the copy it would do.
+func refuseExistingSet(ctx context.Context, jobInfo *files.JobInfo, destinations []destination, dryRun bool) (done bool, err error) {
 	name := jobInfo.ManifestObjectName()
 	var have, missing []int
 	for idx, d := range destinations {
@@ -813,6 +1010,21 @@ func refuseExistingSet(ctx context.Context, jobInfo *files.JobInfo, destinations
 			"backup set %s already exists at %s but not at %s; refusing to overwrite it. Run again with --resume to copy its manifest to %s",
 			name, destinations[have[0]], destinations[missing[0]], destinations[missing[0]],
 		)
+	case dryRun:
+		lagging := make([]string, 0, len(missing))
+		for _, idx := range missing {
+			lagging = append(lagging, destinations[idx].String())
+		}
+		kind := "full"
+		if jobInfo.IncrementalSnapshot.Name != "" {
+			kind = "incremental"
+		}
+		log.AppLogger.Noticef(
+			"Dry-run: would complete the %s backup of %s@%s: its set %s is at %s but not at %s; "+
+				"would check its volumes there and copy its manifest. Nothing else to send.",
+			kind, jobInfo.VolumeName, jobInfo.BaseSnapshot.Name, name, destinations[have[0]], strings.Join(lagging, ", "),
+		)
+		return true, nil
 	default:
 		return true, copyManifest(ctx, jobInfo, destinations, have[0], missing)
 	}
@@ -1356,6 +1568,10 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 		werr := cmd.Wait()
 		if werr != nil {
 			werr = fmt.Errorf("zfs send failed: %w: %s", werr, strings.TrimSpace(buf.String()))
+		} else if msg := strings.TrimSpace(buf.String()); msg != "" {
+			// zfs send can skip data and still exit 0: -R -s prints "WARNING: could not send"
+			// for each child that lacks the snapshot. The backup is then not complete.
+			log.AppLogger.Warningf("zfs send completed, but it wrote this to stderr: %s", msg)
 		}
 		cout.CloseWithError(werr)
 		return werr

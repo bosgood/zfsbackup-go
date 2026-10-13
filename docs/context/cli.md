@@ -30,7 +30,8 @@ Read this when a task adds a flag, a command, or changes exit behavior.
 - Command-specific flags bind to standalone vars in `cmd/` (`cleanLocal`, `cleanDryRun`, `sendDryRun`). Use this style for new command-specific flags.
 - `send` smart flags: `--full`, `--incremental`, `--fullIfOlderThan`, `--fullSnapshotSuffix`, `--incrementalSnapshotSuffix`, `--snapshotPrefix`. `PreRunE` runs `ProcessSmartOptions` before `Backup`. See [send.md](send.md).
 - `receive`, `list`, `clean` reject the smart flags.
-- `--dry-run` / `-n` on `send` is a 3rd argument to `backup.Backup(ctx, jobInfo, dryRun)`. Same shape as `Clean`.
+- `--dry-run` / `-n` on `send` is a 3rd argument to `backup.Backup(ctx, jobInfo, dryRun)`. Same shape as `Clean`. It connects to the destinations and fails where the send would (see [send.md](send.md)).
+- `send --volsize` is checked twice: `ValidateSendFlags` (0 is refused) runs before the destinations are parsed, so `updateJobInfo` calls `ValidateVolumeSize` again for the `s3://` limit.
 
 ## Globals
 

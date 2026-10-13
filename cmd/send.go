@@ -215,6 +215,11 @@ func updateJobInfo(ctx context.Context, args []string) error {
 	parts := strings.Split(args[0], "@")
 	jobInfo.VolumeName = parts[0]
 	jobInfo.Destinations, jobInfo.DestinationsAsTyped = parseDestinations(args[1])
+	// ValidateSendFlags ran before the destinations were known.
+	if err := jobInfo.ValidateVolumeSize(); err != nil {
+		log.AppLogger.Error(err)
+		return err
+	}
 
 	if len(jobInfo.Destinations) > 1 && jobInfo.MaxFileBuffer == 0 {
 		log.AppLogger.Errorf("Specifying multiple destinations and a MaxFileBuffer size of 0 is unsupported.")
@@ -249,7 +254,12 @@ func updateJobInfo(ctx context.Context, args []string) error {
 
 		if jobInfo.IncrementalSnapshot.Name != "" {
 			var targetName string
-			jobInfo.IncrementalSnapshot.Name = strings.TrimPrefix(jobInfo.IncrementalSnapshot.Name, jobInfo.VolumeName)
+			// Remove the dataset name only when "@" or "#" follows it: "tanknight" of tank is a bare
+			// snapshot name, not "tank" + "night".
+			if rest, ok := strings.CutPrefix(jobInfo.IncrementalSnapshot.Name, jobInfo.VolumeName); ok &&
+				(strings.HasPrefix(rest, "@") || strings.HasPrefix(rest, "#")) {
+				jobInfo.IncrementalSnapshot.Name = rest
+			}
 			if strings.HasPrefix(jobInfo.IncrementalSnapshot.Name, "#") {
 				jobInfo.IncrementalSnapshot.Name = strings.TrimPrefix(jobInfo.IncrementalSnapshot.Name, "#")
 				targetName = fmt.Sprintf("%s#%s", jobInfo.VolumeName, jobInfo.IncrementalSnapshot.Name)
@@ -274,7 +284,7 @@ func updateJobInfo(ctx context.Context, args []string) error {
 			log.AppLogger.Errorf("When using a smart option, please only specify the volume to backup, do not include any snapshot information.")
 			return errInvalidInput
 		}
-		if err := backup.ProcessSmartOptions(ctx, &jobInfo); errors.Is(err, backup.ErrNoOp) {
+		if err := backup.ProcessSmartOptions(ctx, &jobInfo, sendDryRun); errors.Is(err, backup.ErrNoOp) {
 			// The normal outcome of most runs with --fullIfOlderThan; Execute exits 0.
 			log.AppLogger.Noticef("Nothing new to back up.")
 			return err

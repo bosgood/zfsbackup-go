@@ -99,6 +99,8 @@ type JobInfo struct {
 	// TrustedCompressor is receive's --compressor: a decompressor a manifest may name although
 	// it is not one of the known ones.
 	TrustedCompressor string `json:"-"`
+	// AllowDestroy is receive's --allowDestroy: with --force, accept that zfs destroys data.
+	AllowDestroy bool `json:"-"`
 
 	Destinations []string `json:"-"`
 	// DestinationsAsTyped maps each of Destinations (canonical URIs) to the spelling given on
@@ -117,6 +119,13 @@ type JobInfo struct {
 	// TrustedSignKeys are --trustSigner's keys: a signature by one of them is accepted as well
 	// as SignKey's, so that what an older signing key signed still verifies after a rotation.
 	TrustedSignKeys []*openpgp.Entity `json:"-"`
+
+	// SourceMountpoints are the mountpoints the stream gives the datasets it creates, by source
+	// dataset: the source's own (local or received) with --properties or --replication; with
+	// --replication also each filesystem below it whose mountpoint is its own or inherited from
+	// a dataset in the stream. Receive refuses to mount a restored dataset over another dataset
+	// that is mounted at that path. A manifest of an older version has none.
+	SourceMountpoints map[string]string `json:",omitempty"`
 }
 
 // SnapshotInfo represents a snapshot with relevant information.
@@ -252,6 +261,35 @@ func (j *JobInfo) ValidateSendFlags() error {
 		return fmt.Errorf("The uploadChunkSize provided (%d) is not between 5 and 100", j.UploadChunkSize)
 	}
 
+	return j.ValidateVolumeSize()
+}
+
+// S3MaxVolumeParts is the largest number of --uploadChunkSize parts a volume may need on S3. S3
+// accepts 10,000 parts. The S3 backend cannot make the parts larger for a large volume (it does
+// not know the size), and a volume can get a little larger than --volsize: the compressor writes
+// the data it holds when the volume closes. So 100 parts are kept for that.
+const S3MaxVolumeParts = 9900
+
+// ValidateVolumeSize checks --volsize. 0 gives one volume of unlimited size. With an s3://
+// destination, a volume must fit in S3MaxVolumeParts parts of --uploadChunkSize, or its upload
+// fails at the last part and is then tried again until --maxRetryTime. It checks the
+// destinations that j has when it is called.
+//
+//nolint:staticcheck // ST1005: Error strings used as log messages for user
+func (j *JobInfo) ValidateVolumeSize() error {
+	if j.VolumeSize == 0 {
+		return fmt.Errorf("The volsize must be set to a value greater than 0 (MiB). Was given 0")
+	}
+	limit := S3MaxVolumeParts * uint64(j.UploadChunkSize)
+	for _, d := range j.Destinations {
+		if strings.HasPrefix(d, "s3://") && j.VolumeSize > limit {
+			return fmt.Errorf(
+				"The volsize provided (%d MiB) is too large for the s3:// destination: S3 accepts at most 10000 parts of "+
+					"--uploadChunkSize (%d MiB) for one volume. Use a volsize of %d MiB or less, or a larger --uploadChunkSize",
+				j.VolumeSize, j.UploadChunkSize, limit,
+			)
+		}
+	}
 	return nil
 }
 

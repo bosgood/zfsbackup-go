@@ -136,15 +136,17 @@ func (sim *Simulation) checkChainLinks() []Violation {
 }
 
 // checkSourcePresent: an incremental can only be sent from a snapshot (or
-// bookmark) that is still on the pool.
+// bookmark) that is still on the pool. With -R, -p, -D or -I zfs send cannot
+// send from a bookmark, so the snapshot must be there.
 func (sim *Simulation) checkSourcePresent() []Violation {
+	bookmarks := sim.Scenario == nil || !needsSnapshotSource(&sim.Scenario.JobInfo)
 	var found []Violation
 	for _, st := range sim.Steps {
 		if st.Err != nil || st.Plan.Action != PlanIncremental {
 			continue
 		}
 		source := st.Plan.Source
-		if !validateSnapShotExistsFromSnaps(&source, st.Snapshots, true) {
+		if !validateSnapShotExistsFromSnaps(&source, st.Snapshots, bookmarks) {
 			found = append(found, Violation{
 				Check:  "source-present",
 				At:     st.At,
@@ -223,8 +225,8 @@ func (sim *Simulation) checkNoOrphanFull() []Violation {
 // more than one window plus the slack after the previous full a run sent: a
 // full is never overdue. The first full after the initial state may come any
 // time later: it may be catching up, as may the first after a completed
-// partial set. Without a known slack (no snapshot period to go by) there is
-// nothing to judge.
+// partial set. A full that repairs a broken chain may come early. Without a
+// known slack (no snapshot period to go by) there is nothing to judge.
 func (sim *Simulation) checkFullCadence() []Violation {
 	window := sim.Scenario.JobInfo.FullIfOlderThan
 	slack := sim.fullSlack()
@@ -256,7 +258,8 @@ func (sim *Simulation) checkFullCadence() []Violation {
 			}
 			if last != nil {
 				gap := st.Plan.Base.CreationTime.Sub(last.CreationTime)
-				if gap < window-slack || (lastSent && gap > window+slack) {
+				early := gap < window-slack && st.Plan.Reason != reasonBrokenChain
+				if early || (lastSent && gap > window+slack) {
 					found = append(found, Violation{
 						Check: "full-cadence",
 						At:    st.At,

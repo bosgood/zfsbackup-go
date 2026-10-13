@@ -1,0 +1,192 @@
+package backup
+
+import (
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/someone1/zfsbackup-go/files"
+)
+
+// Adversarial probes of planSmartSnapshots. Each test asserts the SAFE outcome; a
+// failure on the current code confirms the finding it names.
+
+var advBase = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+func advDay(n int) time.Time { return advBase.Add(time.Duration(n) * 24 * time.Hour) }
+
+var advMonthlyDaily = files.JobInfo{
+	VolumeName: "tank/data", FullIfOlderThan: 720 * time.Hour, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_daily",
+}
+
+// ADV-1: the destination's chain is broken (the set d2<-m1 was deleted by `clean --force`
+// or by hand). The planner continues from the chain head d3 anyway, so d4<-d3 and every
+// later incremental cannot be restored until the next window-elapsed full. Want: a full, or
+// an error that names the missing link.
+func TestAdvBrokenChainIsNotContinued(t *testing.T) {
+	pool := []files.SnapshotInfo{
+		snap("d4_daily", advDay(4)), snap("d3_daily", advDay(3)), snap("d2_daily", advDay(2)), snap("d1_monthly", advDay(1)),
+	}
+	dest := []*files.JobInfo{
+		incrManifest(snap("d3_daily", advDay(3)), snap("d2_daily", advDay(2))),
+		// incrManifest(d2_daily <- d1_monthly) is gone.
+		fullManifest(snap("d1_monthly", advDay(1))),
+	}
+	ji := advMonthlyDaily
+	got, err := planSmartSnapshots(&ji, pool, [][]*files.JobInfo{dest}, false)
+	t.Logf("plan: %+v, err: %v", got, err)
+	if err == nil && got.Action == PlanIncremental {
+		t.Errorf("planner continues a chain whose link d2_daily<-d1_monthly is missing at the destination: %s", got)
+	}
+}
+
+// ADV-2: a snapshot and a bookmark of the same name are both on the pool (zfs bookmark taken,
+// snapshot not yet destroyed). With a creation-time tie the listing order decides which the
+// planner finds first; when the bookmark is listed first the send becomes `-i tank/data#d2`
+// although the snapshot exists. zfs refuses a bookmark source with -R, -p, -D, -h, -b
+// ("Unsupported flag with filesystem or bookmark"). Want: the snapshot when both exist.
+func TestAdvPrefersSnapshotOverSameNamedBookmark(t *testing.T) {
+	for _, order := range []string{"bookmark first", "snapshot first"} {
+		d2 := snap("d2_daily", advDay(2))
+		bm := files.SnapshotInfo{Name: "d2_daily", CreationTime: advDay(2), Bookmark: true}
+		pool := []files.SnapshotInfo{snap("d3_daily", advDay(3))}
+		if order == "bookmark first" {
+			pool = append(pool, bm, d2)
+		} else {
+			pool = append(pool, d2, bm)
+		}
+		pool = append(pool, snap("d1_monthly", advDay(1)))
+		dest := []*files.JobInfo{incrManifest(d2, snap("d1_monthly", advDay(1))), fullManifest(snap("d1_monthly", advDay(1)))}
+		ji := advMonthlyDaily
+		got, err := planSmartSnapshots(&ji, pool, [][]*files.JobInfo{dest}, false)
+		if err != nil || got.Action != PlanIncremental {
+			t.Fatalf("%s: got %+v, %v; want an incremental", order, got, err)
+		}
+		if got.Source.Bookmark {
+			t.Errorf("%s: the source is marked as a bookmark although the snapshot d2_daily is on the pool", order)
+		}
+	}
+}
+
+// ADV-3: one snapshot taken with a wrong clock (2099) is backed up as the newest. Every real
+// snapshot after it is "not newer", so each run is a no-op with exit 0, with no warning, as
+// long as the bad snapshot exists; --full does not unstick the chain either (the next smart
+// run still reads the 2099 backup as the newest). Only destroying the snapshot turns it into
+// ErrLastBackupInFuture. Want: the planner notices that a backup is newer than every
+// candidate by more than the window, or `--full` restarts the chain.
+func TestAdvFutureDatedSnapshotPoisonsTheChain(t *testing.T) {
+	bad := snap("autosnap_2099-01-01_00:00:00_daily", time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC))
+	m1 := snap("d1_monthly", advDay(1))
+	ji := advMonthlyDaily
+
+	// Run 1: the bad snapshot is sent (nothing can tell it apart yet).
+	got, err := planSmartSnapshots(&ji, []files.SnapshotInfo{bad, m1}, [][]*files.JobInfo{{fullManifest(m1)}}, false)
+	if err != nil || got.Action != PlanIncremental || got.Base.Name != bad.Name {
+		t.Fatalf("run 1: %+v, %v", got, err)
+	}
+	dest := []*files.JobInfo{incrManifest(bad, m1), fullManifest(m1)}
+
+	// Run 2..n: real snapshots, months later; the window has long elapsed.
+	pool := []files.SnapshotInfo{bad, snap("d200_daily", advDay(200)), snap("d190_monthly", advDay(190)), m1}
+	got, err = planSmartSnapshots(&ji, pool, [][]*files.JobInfo{dest}, false)
+	t.Logf("run 2 (bad snapshot still on the pool): %+v, %v", got, err)
+	if err == nil && got.Action == PlanNoop {
+		t.Errorf("200 days of snapshots after the last real backup, window 30d: NOOP %s (exit 0, no warning)", got.Reason)
+	}
+
+	// --full does not help: it sends a full of d190_monthly...
+	full := ji
+	full.Full = true
+	full.FullIfOlderThan = -1 * time.Minute
+	got, err = planSmartSnapshots(&full, pool, [][]*files.JobInfo{dest}, false)
+	t.Logf("--full: %+v, %v", got, err)
+	dest2 := []*files.JobInfo{fullManifest(snap("d190_monthly", advDay(190)))}
+	dest2 = append(dest2, dest...)
+	sortBackupsNewestFirst(dest2)
+	// ...and the next smart run is stuck again, since the 2099 backup sorts newest.
+	got, err = planSmartSnapshots(&ji, pool, [][]*files.JobInfo{dest2}, false)
+	t.Logf("smart run after --full: %+v, %v (newest backup read as %s)", got, err, dest2[0].BaseSnapshot.Name)
+	if err == nil && got.Action == PlanNoop {
+		t.Errorf("after an explicit --full of d190_monthly the smart run is still a NOOP %s", got.Reason)
+	}
+
+	// Destroying the bad snapshot makes the next run fail loudly (this part is fine).
+	pool = pool[1:]
+	_, err = planSmartSnapshots(&ji, pool, [][]*files.JobInfo{dest}, false)
+	if !errors.Is(err, ErrLastBackupInFuture) {
+		t.Errorf("after the bad snapshot is destroyed: %v, want ErrLastBackupInFuture", err)
+	}
+}
+
+// ADV-4 (documentation): --fullIfOlderThan 720h is a strict `>` on the newest snapshot's
+// creation time minus the last full's. On the 1st of a month that follows a 30-day month the
+// age is 720h plus or minus sanoid's jitter in seconds: a 1 s earlier monthly means no full
+// this month (the chain runs 2 months), a 1 s later one means a full. This test passes: it
+// records the flip.
+func TestAdvWindowBoundaryFlipsOnOneSecond(t *testing.T) {
+	ji := files.JobInfo{
+		VolumeName: "tank/data", FullIfOlderThan: 720 * time.Hour, FullSnapshotSuffix: "_monthly", IncrementalSnapshotSuffix: "_monthly",
+	}
+	apr := snap("autosnap_2026-04-01_00:00:00_monthly", time.Date(2026, 4, 1, 0, 0, 5, 0, time.UTC))
+	for _, tc := range []struct {
+		jitter int
+		want   PlanAction
+		reason string
+	}{
+		{4, PlanIncremental, reasonNewerCandidate},
+		{5, PlanIncremental, reasonNewerCandidate},
+		{6, PlanFull, reasonWindowElapsed},
+	} {
+		may := snap("autosnap_2026-05-01_00:00:00_monthly", time.Date(2026, 5, 1, 0, 0, tc.jitter, 0, time.UTC))
+		got, err := planSmartSnapshots(&ji, []files.SnapshotInfo{may, apr}, [][]*files.JobInfo{{fullManifest(apr)}}, false)
+		if err != nil || got.Action != tc.want || got.Reason != tc.reason {
+			t.Errorf("May monthly at :%02d: got %+v, %v; want %s %s", tc.jitter, got, err, tc.want, tc.reason)
+		}
+		t.Logf("April full at :05, May monthly at :%02d -> %s", tc.jitter, got)
+	}
+}
+
+// ADV-5 (refutation): complete-partial never adopts a set whose incremental source differs
+// between destinations: sameSets compares the source too, so two destinations that disagree
+// are "out of sync", not a partial set.
+func TestAdvCompletePartialNeedsSameSource(t *testing.T) {
+	m1, m0 := snap("m1_monthly", advDay(1)), snap("m0_monthly", advDay(-30))
+	d2 := snap("d2_daily", advDay(2))
+	leader := []*files.JobInfo{incrManifest(snap("d3_daily", advDay(3)), d2), incrManifest(d2, m1), fullManifest(m1)}
+	lagging := []*files.JobInfo{incrManifest(d2, m0), fullManifest(m0)}
+	ji := advMonthlyDaily
+	ji.Resume = true
+	got, err := planSmartSnapshots(&ji, []files.SnapshotInfo{snap("d3_daily", advDay(3)), d2, m1}, [][]*files.JobInfo{leader, lagging}, true)
+	if err == nil || !strings.Contains(err.Error(), "out of sync") {
+		t.Errorf("got %+v, %v; want an out-of-sync error", got, err)
+	}
+}
+
+// ADV-6 (documentation): --full --raw when a plaintext full of the candidate is at the
+// destination is a no-op (already-backed-up): the kind of the existing full is not read.
+func TestAdvExplicitFullRawOverPlaintextFullIsNoop(t *testing.T) {
+	m1 := snap("m1_monthly", advDay(1))
+	ji := files.JobInfo{VolumeName: "tank/data", Full: true, Raw: true, FullIfOlderThan: -1 * time.Minute, FullSnapshotSuffix: "_monthly"}
+	got, err := planSmartSnapshots(&ji, []files.SnapshotInfo{m1}, [][]*files.JobInfo{{fullManifest(m1)}}, false)
+	if err != nil || got.Action != PlanNoop || got.Reason != reasonAlreadyBackedUp {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	t.Logf("--full --raw over a plaintext full: %s", got)
+}
+
+// ADV-7 (refutation): the --increment path does not check that the source is still on the
+// pool, but plan's source-present check and send's validateSnapShotExists both catch it.
+func TestAdvExplicitIncrementPrunedSource(t *testing.T) {
+	m1, d2 := snap("m1_monthly", advDay(1)), snap("d2_daily", advDay(2))
+	ji := files.JobInfo{VolumeName: "tank/data", Incremental: true, FullIfOlderThan: -1 * time.Minute}
+	pool := []files.SnapshotInfo{snap("d3_daily", advDay(3)), m1} // d2 pruned, no bookmark
+	got, err := planSmartSnapshots(&ji, pool, [][]*files.JobInfo{{incrManifest(d2, m1), fullManifest(m1)}}, false)
+	if err != nil || got.Action != PlanIncremental || got.Source.Name != "d2_daily" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	sim := &Simulation{Steps: []Step{{Snapshots: pool, Plan: got}}}
+	if v := sim.checkSourcePresent(); len(v) != 1 {
+		t.Errorf("plan's source-present check did not flag the pruned source: %v", v)
+	}
+}

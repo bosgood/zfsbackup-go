@@ -25,6 +25,7 @@ import (
 	"crypto/md5" //nolint:gosec // MD5 not used cryptographically here
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -233,10 +234,14 @@ func (r *reader) Read(p []byte) (int, error) {
 }
 
 // Upload will upload the provided volume to this AWSS3Backend's configured bucket+prefix
-// It utilizes multipart uploads to upload a single file in chunks concurrently. Impartial
-// uploads are cleaned up by the s3manager provided by the AWS Go SDK, but users can also
-// implement lifecycle rules, see:
-// https://docs.aws.amazon.com/AmazonS3/latest/dev/mpuoverview.html#mpu-abort-incomplete-mpu-lifecycle-config
+// It utilizes multipart uploads to upload a single file in chunks concurrently.
+//
+// A failed multipart upload must be aborted, or its parts stay in the bucket: S3 bills them, and
+// List (so clean) does not see them. s3manager aborts it with the context of the upload. When
+// that context is canceled (SIGTERM, a deadline), s3manager cannot send the abort, so Upload
+// sends it with a new context (abortCanceledUpload). If that abort also fails, the parts stay
+// until a bucket lifecycle rule (AbortIncompleteMultipartUpload) removes them, see:
+// https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpu-abort-incomplete-mpu-lifecycle-config.html
 //
 // The body is always the Read-only reader adapter, never the *files.VolumeInfo. s3manager reads a
 // body that implements io.ReaderAt through io.SectionReader, which calls VolumeInfo.ReadAt and
@@ -280,8 +285,37 @@ func (a *AWSS3Backend) Upload(ctx context.Context, vol *files.VolumeInfo) error 
 
 	if err != nil {
 		log.AppLogger.Debugf("s3 backend: Error while uploading volume %s - %v", vol.ObjectName, err)
+		if ctx.Err() != nil {
+			a.abortCanceledUpload(key, err)
+		}
 	}
 	return err
+}
+
+// abortUploadTimeout is how long abortCanceledUpload waits for S3.
+const abortUploadTimeout = 30 * time.Second
+
+// abortCanceledUpload aborts the multipart upload of key that err (from a canceled upload) names.
+// s3manager sent its abort with the canceled context, so that abort never reached S3. Upload calls
+// this only when its context is canceled: on any other failure s3manager's own abort was sent.
+func (a *AWSS3Backend) abortCanceledUpload(key string, err error) {
+	var mErr s3manager.MultiUploadFailure
+	if !errors.As(err, &mErr) || mErr.UploadID() == "" {
+		return // no multipart upload was started
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), abortUploadTimeout)
+	defer cancel()
+	_, aerr := a.client.AbortMultipartUploadWithContext(ctx, &s3.AbortMultipartUploadInput{
+		Bucket:   aws.String(a.bucketName),
+		Key:      aws.String(key),
+		UploadId: aws.String(mErr.UploadID()),
+	})
+	if aerr != nil {
+		log.AppLogger.Warningf("s3 backend: could not abort the canceled multipart upload of %s - %v. "+
+			"Its parts stay in the bucket until a lifecycle rule (AbortIncompleteMultipartUpload) removes them.", key, aerr)
+		return
+	}
+	log.AppLogger.Debugf("s3 backend: aborted the canceled multipart upload of %s.", key)
 }
 
 // Delete will delete the given object from the configured bucket
@@ -337,6 +371,29 @@ func (a *AWSS3Backend) PreDownload(ctx context.Context, keys []string) error {
 		}
 		keys = readable
 	}
+}
+
+// NotReadable returns the keys that a GET cannot read now: in an archive storage class or tier
+// (needsRestore), with no restored copy. Unlike PreDownload it only sends HEAD requests: it
+// starts no restore.
+func (a *AWSS3Backend) NotReadable(ctx context.Context, keys []string) ([]string, error) {
+	var cold []string
+	for _, rel := range keys {
+		resp, err := a.client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
+			Bucket: aws.String(a.bucketName),
+			Key:    aws.String(a.prefix + rel),
+		})
+		if err != nil {
+			if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == "NotFound" || aerr.Code() == s3.ErrCodeNoSuchKey) {
+				return nil, &notFoundError{err}
+			}
+			return nil, err
+		}
+		if needsRestore(resp) && !restored(resp) {
+			cold = append(cold, rel)
+		}
+	}
+	return cold, nil
 }
 
 // maxRestoreRounds is how many times PreDownload waits for restores and checks the copies that

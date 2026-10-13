@@ -44,6 +44,13 @@
 //	                       a stream that matches no fixture snapshot takes the first line
 //	FAKEZFS_DRYRUN_OUTPUT  replaces what `zfs send -n -P` prints
 //	FAKEZFS_LOG            file every invocation's arguments are appended to, one line each
+//	FAKEZFS_MOUNTPOINTS    comma-separated dataset=source[:path] entries: the source (local,
+//	                       received) and the path `zfs get mountpoint` reports; the default
+//	                       is source "default" and path /<dataset>. Every filesystem is mounted
+//	FAKEZFS_DATASETS       comma-separated datasets that exist with no snapshots
+//	FAKEZFS_GUIDS          comma-separated dataset@snapshot=guid entries. Without one, a
+//	                       snapshot's guid comes from its name and creation time only, so a
+//	                       received copy has the guid of its source, as with real zfs
 //
 // Only the invocations zfs/zfs.go issues are understood; anything else exits
 // 1 with its arguments on stderr, so an unexpected call fails loudly.
@@ -59,6 +66,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -114,7 +122,15 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 var errUnexpected = errors.New("unexpected invocation")
 
 // list: list -H -d 1 -p -t snapshot,bookmark -r -o name,creation,type -S creation <dataset>
+// Also list -H -t filesystem -o name,mountpoint,mounted: every dataset, mounted. And
+// list -H -r -t filesystem,volume -o name <dataset>: dataset and each dataset below it.
 func list(args []string, stdout io.Writer) error {
+	if strings.Join(args, " ") == "-H -t filesystem -o name,mountpoint,mounted" {
+		return listFilesystems(stdout)
+	}
+	if dataset, ok := trailingArg(args, "-H", "-r", "-t", "filesystem,volume", "-o", "name"); ok {
+		return listTree(dataset, stdout)
+	}
 	dataset, ok := trailingArg(args, "-H", "-d", "1", "-p", "-t", "snapshot,bookmark", "-r", "-o", "name,creation,type", "-S", "creation")
 	if !ok {
 		return errUnexpected
@@ -148,13 +164,20 @@ func list(args []string, stdout io.Writer) error {
 }
 
 // get: get -H -p -o value creation|guid <dataset>[@snapshot|#bookmark]. A snapshot's guid is
-// derived from its name and creation time, so a snapshot recreated under the same name gets a
-// new one; a bookmark has its snapshot's guid.
-// Also get -H -o value,source mountpoint <dataset>: the mountpoint is /<dataset>, and its source
-// is what FAKEZFS_MOUNTPOINTS (comma-separated dataset=source entries) says, else "default".
+// derived from its name and creation time (not its dataset), so a snapshot recreated under the
+// same name gets a new one and a received copy keeps it; a bookmark has its snapshot's guid.
+// FAKEZFS_GUIDS overrides it.
+// Also get -H -o value,source mountpoint <dataset>, and get [-r -t filesystem] -H -o
+// name,value,source mountpoint <dataset>: see mountpoint.
 func get(args []string, stdout io.Writer) error {
 	if dataset, ok := trailingArg(args, "-H", "-o", "value,source", "mountpoint"); ok {
 		return getMountpoint(dataset, stdout)
+	}
+	if dataset, ok := trailingArg(args, "-H", "-o", "name,value,source", "mountpoint"); ok {
+		return getMountpoints(dataset, false, stdout)
+	}
+	if dataset, ok := trailingArg(args, "-r", "-t", "filesystem", "-H", "-o", "name,value,source", "mountpoint"); ok {
+		return getMountpoints(dataset, true, stdout)
 	}
 	if len(args) != 6 || (args[4] != "creation" && args[4] != "guid") {
 		return errUnexpected
@@ -181,13 +204,46 @@ func get(args []string, stdout io.Writer) error {
 		return err
 	}
 	if prop == "guid" {
-		h := fnv.New64a()
-		_, _ = fmt.Fprintf(h, "%s@%s\x00%d", dataset, s.Name, s.CreationTime.Unix())
-		_, err = fmt.Fprintln(stdout, h.Sum64())
+		_, err = fmt.Fprintln(stdout, snapshotGUID(dataset, s))
 		return err
 	}
 	_, err = fmt.Fprintln(stdout, s.CreationTime.Unix())
 	return err
+}
+
+// snapshotGUID is the guid of dataset's snapshot s: FAKEZFS_GUIDS's, else one from its name and
+// creation time.
+func snapshotGUID(dataset string, s files.SnapshotInfo) string {
+	if guid, ok := envEntries("FAKEZFS_GUIDS")[dataset+"@"+s.Name]; ok {
+		return guid
+	}
+	h := fnv.New64a()
+	_, _ = fmt.Fprintf(h, "%s\x00%d", s.Name, s.CreationTime.Unix())
+	return strconv.FormatUint(h.Sum64(), 10)
+}
+
+// envEntries reads the comma-separated key=value entries of the environment variable name.
+func envEntries(name string) map[string]string {
+	entries := make(map[string]string)
+	for _, entry := range strings.Split(os.Getenv(name), ",") {
+		if key, value, found := strings.Cut(entry, "="); found {
+			entries[key] = value
+		}
+	}
+	return entries
+}
+
+// mountpoint returns the mountpoint of dataset and its source: FAKEZFS_MOUNTPOINTS's entry
+// (source or source:path), else /<dataset> and "default".
+func mountpoint(dataset string) (value, source string) {
+	value, source = "/"+dataset, "default"
+	if entry, ok := envEntries("FAKEZFS_MOUNTPOINTS")[dataset]; ok {
+		source = entry
+		if s, path, found := strings.Cut(entry, ":"); found {
+			source, value = s, path
+		}
+	}
+	return value, source
 }
 
 func getMountpoint(dataset string, stdout io.Writer) error {
@@ -197,19 +253,90 @@ func getMountpoint(dataset string, stdout io.Writer) error {
 	if _, err := datasetSnapshots(dataset); err != nil {
 		return err
 	}
-	source := "default"
-	for _, entry := range strings.Split(os.Getenv("FAKEZFS_MOUNTPOINTS"), ",") {
-		if name, s, found := strings.Cut(entry, "="); found && name == dataset {
-			source = s
+	value, source := mountpoint(dataset)
+	_, err := fmt.Fprintf(stdout, "%s\t%s\n", value, source)
+	return err
+}
+
+// getMountpoints prints name, mountpoint and source of dataset and, when recursive, of each
+// dataset below it.
+func getMountpoints(dataset string, recursive bool, stdout io.Writer) error {
+	if strings.ContainsAny(dataset, "@#") {
+		return errUnexpected
+	}
+	if _, err := datasetSnapshots(dataset); err != nil {
+		return err
+	}
+	for _, name := range allDatasets() {
+		if name != dataset && (!recursive || !strings.HasPrefix(name, dataset+"/")) {
+			continue
+		}
+		value, source := mountpoint(name)
+		if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\n", name, value, source); err != nil {
+			return err
 		}
 	}
-	_, err := fmt.Fprintf(stdout, "/%s\t%s\n", dataset, source)
-	return err
+	return nil
+}
+
+// listTree prints dataset and each dataset below it, as zfs list -r does.
+func listTree(dataset string, stdout io.Writer) error {
+	if _, err := datasetSnapshots(dataset); err != nil {
+		return err
+	}
+	for _, name := range allDatasets() {
+		if name != dataset && !strings.HasPrefix(name, dataset+"/") {
+			continue
+		}
+		if _, err := fmt.Fprintln(stdout, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// listFilesystems prints every dataset with its mountpoint, all mounted.
+func listFilesystems(stdout io.Writer) error {
+	for _, name := range allDatasets() {
+		value, _ := mountpoint(name)
+		if _, err := fmt.Fprintf(stdout, "%s\t%s\tyes\n", name, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// allDatasets returns, sorted, the datasets of the fixture rows and of FAKEZFS_DATASETS.
+func allDatasets() []string {
+	var datasets []string
+	if path := os.Getenv("FAKEZFS_SNAPSHOTS"); path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			datasets = fixtureDatasets(string(data))
+		}
+	}
+	for _, name := range emptyDatasets() {
+		if !slices.Contains(datasets, name) {
+			datasets = append(datasets, name)
+		}
+	}
+	sort.Strings(datasets)
+	return datasets
+}
+
+// emptyDatasets returns FAKEZFS_DATASETS: datasets that exist with no snapshots.
+func emptyDatasets() []string {
+	var datasets []string
+	for _, name := range strings.Split(os.Getenv("FAKEZFS_DATASETS"), ",") {
+		if name != "" {
+			datasets = append(datasets, name)
+		}
+	}
+	return datasets
 }
 
 // send: send [-n] [-P] [-RsDpcw...] [-i|-I <source>] <dataset>@<snapshot>
 func send(args []string, stdout io.Writer) error {
-	var dryRun, parsable bool
+	var dryRun, parsable, replication bool
 	var source string
 	for len(args) > 1 {
 		flag := args[0]
@@ -223,7 +350,9 @@ func send(args []string, stdout io.Writer) error {
 				dryRun = true
 			case 'P':
 				parsable = true
-			case 'R', 's', 'D', 'p', 'c', 'w', 'L', 'e', 'b':
+			case 'R':
+				replication = true
+			case 's', 'D', 'p', 'c', 'w', 'L', 'e', 'b':
 			case 'i', 'I':
 				if source != "" || len(args) < 2 {
 					return errUnexpected
@@ -280,6 +409,10 @@ func send(args []string, stdout io.Writer) error {
 	}
 
 	salt := os.Getenv("FAKEZFS_STREAM_SALT")
+	if replication {
+		// A -R stream also holds the datasets below: receive makes their snapshots too.
+		target += replicationMark
+	}
 	if value, ok := os.LookupEnv("FAKEZFS_FAIL_AFTER_BYTES"); ok {
 		failAfter, perr := strconv.ParseInt(value, 10, 64)
 		if perr != nil || failAfter < 0 {
@@ -295,6 +428,10 @@ func send(args []string, stdout io.Writer) error {
 	_, err = io.CopyN(stdout, StreamSalted(source, target, salt, size), size)
 	return err
 }
+
+// replicationMark ends the target of a -R stream in Stream: the bytes differ from those of the
+// same send without -R, and receive knows to make the snapshots of the datasets below too.
+const replicationMark = "\x00-R"
 
 // Stream returns the size bytes `zfs send` writes for an incremental from source (or a full
 // when source is "") to target: a stream that differs for every pair, reproducibly.
@@ -411,14 +548,48 @@ func recordReceived(target string, fullPath, lastPath bool, head []byte, n int64
 					sources = append(sources, s.Name)
 				}
 			}
+			received := receivedDataset(target, dataset, fullPath, lastPath)
 			for _, source := range sources {
 				if sameStream(StreamSalted(source, sent, salt, n), head, sum) {
-					return addSnapshot(path, data, receivedDataset(target, dataset, fullPath, lastPath), snap)
+					return addSnapshot(path, data, received, snap)
+				}
+				if sameStream(StreamSalted(source, sent+replicationMark, salt, n), head, sum) {
+					return addReplicated(path, data, dataset, received, snap)
 				}
 			}
 		}
 	}
 	return receiveUnknown(path, data, target, fullPath, lastPath)
+}
+
+// addReplicated adds snap to received, the dataset a -R stream of dataset@snap goes to, and the
+// snapshot of that name of each dataset below dataset to the same place below received.
+func addReplicated(path string, data []byte, dataset, received string, snap files.SnapshotInfo) error {
+	if err := addSnapshot(path, data, received, snap); err != nil {
+		return err
+	}
+	for _, child := range fixtureDatasets(string(data)) {
+		if !strings.HasPrefix(child, dataset+"/") {
+			continue
+		}
+		snaps, err := datasetSnapshots(child)
+		if err != nil {
+			return err
+		}
+		for _, s := range snaps {
+			if s.Name != snap.Name || s.Bookmark {
+				continue
+			}
+			now, err := os.ReadFile(path)
+			if err != nil {
+				return fmt.Errorf("fakezfs: %v", err)
+			}
+			if err = addSnapshot(path, now, received+strings.TrimPrefix(child, dataset), s); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // receiveUnknown adds the snapshot that the first line of FAKEZFS_RECEIVE_UNKNOWN names, and
@@ -564,7 +735,7 @@ func datasetSnapshots(dataset string) ([]files.SnapshotInfo, error) {
 		exists = true
 		rows.WriteString(line + "\n")
 	}
-	if !exists {
+	if !exists && !slices.Contains(emptyDatasets(), dataset) {
 		return nil, fmt.Errorf("cannot open '%s': dataset does not exist", dataset)
 	}
 	snaps, err := zfs.ParseSnapshotList(strings.NewReader(rows.String()), time.UTC)

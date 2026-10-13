@@ -14,6 +14,16 @@ Diagram 11 in [../architecture.md](../architecture.md). Design: [../specs/2026-0
 | `backup/plan_checks.go` | `Simulation.Check`: no-errors, chain-links, source-present, no-duplicate-send, no-orphan-full, full-cadence, restore-depth, coverage, only |
 | `backup/plan_fixtures.go` | parsers for `--snapshots` and `--manifests` files |
 
+## Planner rules that are easy to miss
+
+`planSmartAt` (`backup/plan.go`) is pure; `planSmartSnapshots` calls it with `Now()` and logs `Plan.Warnings` at Warning. `plan` prints each warning under its run (`    warning: ...`) and in `--json` (`warnings`).
+
+- **Future dates.** Snapshots and backups dated more than a day (`futureSlack`) after now are ignored, with a warning. A backup is dated by its base snapshot. `ErrLastBackupInFuture` is left for a backup after every snapshot but not in the future (a rollback, another host).
+- **Clock.** `backup.Now` (tests set it, like `HostZone`). A simulated run uses `Scenario.Clock(at)`: the later of `at` and `Scenario.Now` (zero: `backup.Now()`). `LoadScenario` sets `Now` to the newest time in its files, so goldens do not depend on the day. Root e2e tests that send at simulated times call `pinPlanClock(t, sc.Clock(at))`.
+- **Broken chain** (reason `broken-chain`). When the newest backup at a destination does not reach a full there (`brokenLink`, links as `parentOf` finds them), smart mode does what it does for `source-pruned`: a full of a full candidate newer than the last backup, else a no-op until one exists. The warning names the missing link. A window-elapsed full still wins, with the warning. `--increment` refuses with an error; when there is nothing newer to send, it is a no-op `nothing-newer` with the same Warning, so the next run's refusal is no surprise.
+- **Bookmark sources.** A snapshot wins over a bookmark of the same name and time (`validateSnapShotExistsFromSnaps`), whatever the listing order. With `-R`, `-p`, `-D` or `-I` (`needsSnapshotSource`), a last backup left only as a bookmark is a pruned source (`source-pruned`, with a warning): zfs send refuses a bookmark source with those flags. `source-present` checks the same.
+- **Window slack.** A full is due when the last full is older than `--fullIfOlderThan` minus 10 minutes (`fullWindowSlack`); a window of 1h or less has no slack. sanoid's seconds then cannot move a full by a month.
+
 ## Inputs
 
 - Snapshots from `zfs list`, or a `--snapshots` text file.

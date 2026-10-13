@@ -40,7 +40,7 @@ What this plan does NOT do:
 | `zfs send`, `zfs receive` and the external compressor run through `exec.CommandContext`, so a cancel kills them with SIGKILL. | `zfs/zfs.go:406,477`, `files/volumeinfo.go:408,664` |
 | The send-side stop path kills and reaps the `zfs send` child, then aborts the volume. | `backup/backup.go:1300-1340` |
 | Every retry loop uses `backoff.WithContext`. | `backup/backup.go:1607`, `backup/clean.go:591`, `backup/restore.go:483` |
-| The S3 uploader keeps the default `LeavePartsOnError` (false). The SDK aborts the multipart upload when `Upload` fails, a cancel included. | `backends/aws_s3_backend.go:147` |
+| The S3 uploader keeps the default `LeavePartsOnError` (false). The SDK aborts the multipart upload when `Upload` fails. CORRECTION (2026-10-12, finding 12 of `2026-10-12--adversarial-review-plan-send-restore`): on a cancel the SDK sends that abort with the canceled context, so it never reaches S3. `AWSS3Backend.Upload` now sends it again with a new context (`abortCanceledUpload`). | `backends/aws_s3_backend.go`, `Upload` |
 | The S3 Glacier wait loop selects on `ctx.Done()`. | `backends/aws_s3_backend.go`, `waitForRestores` |
 | Cache writes are atomic (`WriteFileAtomic`), so a cancel mid-write leaves no truncated manifest. | `files/atomic.go` |
 | The e2e harness runs commands in-process with `cmd.RootCmd.ExecuteContext(context.Background())`. A test can pass its own context. | `e2e_failure_test.go:104` |

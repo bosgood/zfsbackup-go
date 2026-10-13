@@ -139,7 +139,8 @@ func TestE2EPlanFullResumeMatchesSend(t *testing.T) {
 	if serr != nil {
 		t.Fatalf("send -n --full --resume: %v\n%s", serr, slogs)
 	}
-	if !strings.Contains(slogs, "would perform a full backup of tank/data@a_monthly") {
+	// The dry run of a set at one of two destinations says it would complete it (copy its manifest).
+	if !strings.Contains(slogs, "would complete the full backup of tank/data@a_monthly") {
 		t.Errorf("send -n --full --resume does not send a full of a_monthly:\n%s", slogs)
 	}
 }
@@ -165,7 +166,7 @@ func TestE2EPlanResumeWithManifestsFile(t *testing.T) {
 	if serr != nil {
 		t.Fatalf("send -n --resume: %v\n%s", serr, slogs)
 	}
-	if !strings.Contains(slogs, "would perform a full backup of tank/data@a_monthly") {
+	if !strings.Contains(slogs, "would complete the full backup of tank/data@a_monthly") {
 		t.Errorf("send -n --resume does not complete the full of a_monthly:\n%s", slogs)
 	}
 }
@@ -277,22 +278,27 @@ func TestE2EPlanNamesOnlyCaptureInHostZone(t *testing.T) {
 }
 
 // A last backup dated after everything on the pool (another host writing the same prefix and
-// dataset name, a forged manifest, or a clock that was wrong) used to make every smart send
-// "Nothing new to back up" with exit 0. send and plan refuse it instead.
+// dataset name, a forged manifest, or a pool rolled back) used to make every smart send
+// "Nothing new to back up" with exit 0. send and plan refuse it instead. A backup dated more
+// than a day after now is ignored with a warning instead (TestE2EReviewFutureDatedBackupIsIgnored).
 func TestE2ESendRefusesLastBackupNewerThanPool(t *testing.T) {
 	env := newE2EEnv(t)
+	pinPlanClock(t, time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC))
 	flags := []string{"--fullIfOlderThan", "4320h", "--fullSnapshotSuffix", "_monthly", "--incrementalSnapshotSuffix", "_monthly"}
 	target := "file://" + env.dest
-	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{{Name: "autosnap_2099-01-01_00:00:00_monthly", CreationTime: time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)}})
+	monthly := func(m int) files.SnapshotInfo {
+		d := time.Date(2026, time.Month(m), 1, 0, 0, 7, 0, time.UTC)
+		return files.SnapshotInfo{Name: "autosnap_" + d.Format("2006-01-02_15:04:05") + "_monthly", CreationTime: d}
+	}
+	env.writeSnapshots(t, "tank/data", []files.SnapshotInfo{monthly(9)})
 	env.sendOK(t, append(flags, "tank/data", target)...)
 
 	var pool []files.SnapshotInfo
-	for m := 12; m >= 1; m-- {
-		d := time.Date(2026, time.Month(m), 1, 0, 0, 7, 0, time.UTC)
-		pool = append(pool, files.SnapshotInfo{Name: "autosnap_" + d.Format("2006-01-02_15:04:05") + "_monthly", CreationTime: d})
+	for m := 8; m >= 1; m-- {
+		pool = append(pool, monthly(m))
 	}
 	env.writeSnapshots(t, "tank/data", pool)
-	const want = "the destination's last backup of tank/data is autosnap_2099-01-01_00:00:00_monthly, dated 2099-01-01T00:00:00Z, " +
+	const want = "the destination's last backup of tank/data is autosnap_2026-09-01_00:00:07_monthly, dated 2026-09-01T00:00:07Z, " +
 		"after every snapshot on the pool"
 
 	logs, err := env.send(append(flags, "tank/data", target)...)

@@ -1,0 +1,31 @@
+package backends
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// Probe: an s3:// URI with user:password@ (not a supported form, but the ssh:// one has it)
+// puts the password in the bucket name; a network error from the SDK quotes the request URL,
+// password included, and the callers log that error without RedactURI.
+func TestAdvS3InitErrorLeaksURIPassword(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	endpoint := srv.URL
+	srv.Close() // connection refused from now on
+	t.Setenv("AWS_S3_CUSTOM_ENDPOINT", endpoint)
+	t.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("AWS_ACCESS_KEY_ID", "x")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "y")
+	b := &AWSS3Backend{}
+	err := b.Init(context.Background(), &BackendConfig{TargetURI: "s3://AKIAEXAMPLE:hunter2secret@bucket/prefix/", ManifestPrefix: "manifests"})
+	if err == nil {
+		t.Fatal("want an error from a refused connection")
+	}
+	t.Logf("error: %v", err)
+	if strings.Contains(err.Error(), "hunter2secret") {
+		t.Errorf("Init error text holds the URI password")
+	}
+}
