@@ -364,6 +364,61 @@ func TestCleanOwnManifestOfAnotherSeparator(t *testing.T) {
 	if strings.Contains(logs.String(), "another --manifestPrefix") {
 		t.Errorf("clean called our own manifest another prefix's:\n%s", logs.String())
 	}
+	// It reads that manifest as ours, so it must not call it "not a backup volume" either.
+	if strings.Contains(logs.String(), "Skipping unrecognized object manifests#") {
+		t.Errorf("clean called our own manifest an unrecognized object:\n%s", logs.String())
+	}
+}
+
+// TestCleanNestedDestinationOfTheSameSet: one snapshot sent to the destination and to sub/ nested
+// in it gives both a set of one name (volume names hold no prefix). sub/'s manifest is sub/'s:
+// it is not another --manifestPrefix ("sub/manifests") here, so an orphan of that set here is
+// deleted, and sub/'s objects stay.
+func TestCleanNestedDestinationOfTheSameSet(t *testing.T) {
+	targetDir, jobInfo := setupCleanTest(t)
+	ourSet, volA := prefixedSet(t, targetDir, "tank/data", "a", "", "manifests", nil, "")
+	nestedSet, nestedVol := prefixedSet(t, filepath.Join(targetDir, "sub"), "tank/data", "a", "", "manifests", nil, "")
+	nestedManifest := filepath.Join(targetDir, "sub", nestedSet.ManifestObjectName())
+	orphan := writeTestObject(t, targetDir, ourSet.BackupVolumeObjectName(2))
+
+	logs := captureLogs(t)
+	if err := Clean(context.Background(), jobInfo, false, false); err != nil {
+		t.Fatalf("clean: %v\n%s", err, logs.String())
+	}
+	for _, kept := range []string{volA, nestedVol, nestedManifest} {
+		if !exists(t, kept) {
+			t.Errorf("clean deleted %s\n%s", kept, logs.String())
+		}
+	}
+	if exists(t, orphan) {
+		t.Errorf("clean kept the orphan %s of our own set:\n%s", orphan, logs.String())
+	}
+	if strings.Contains(logs.String(), "another --manifestPrefix") {
+		t.Errorf("clean called the nested destination's manifest another prefix's:\n%s", logs.String())
+	}
+}
+
+// TestCleanSparesSetsOfPrefixWithSlash: a job whose --manifestPrefix is "x/manifests" puts its
+// manifests under x/, but its volumes here (names hold no prefix). x/ looks like a nested
+// destination, yet it holds no volume of that set: the manifest still names a set that is not
+// ours, and its volume stays.
+func TestCleanSparesSetsOfPrefixWithSlash(t *testing.T) {
+	targetDir, jobInfo := setupCleanTest(t)
+	_, volA := prefixedSet(t, targetDir, "tank/data", "a", "", "manifests", nil, "")
+	other, volB := prefixedSet(t, targetDir, "tank/data", "b", "", "x/manifests", nil, "")
+	otherManifest := filepath.Join(targetDir, other.ManifestObjectName())
+
+	for _, dryRun := range []bool{true, false} {
+		logs := captureLogs(t)
+		if err := Clean(context.Background(), jobInfo, false, dryRun); err != nil {
+			t.Fatalf("clean dryRun=%v: %v\n%s", dryRun, err, logs.String())
+		}
+		for _, kept := range []string{volA, volB, otherManifest} {
+			if !exists(t, kept) {
+				t.Fatalf("clean dryRun=%v deleted %s\n%s", dryRun, kept, logs.String())
+			}
+		}
+	}
 }
 
 // TestCleanSkipsSiblingPrefixStartingWithSymbol: a sibling job under --manifestPrefix

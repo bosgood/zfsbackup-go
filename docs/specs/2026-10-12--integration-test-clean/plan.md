@@ -619,3 +619,24 @@ the baseline does not have.
 | no `PutBucketVersioning` | Versioned | fails: no delete marker |
 | `AWSS3Backend.List` reads one page | CleanMany | fails: dry-run count, objects left |
 | delete pool ignores ctx (no `ctx.Done`, `Delete` with `Background`, no `backoff.WithContext`) | Interrupted | fails: no error after SIGTERM |
+
+### Fixes of F1 to F3 (2026-10-12, same day)
+
+- F1, `files.(*VolumeInfo).Extract`: with no keys, a manifest whose first byte is
+  an OpenPGP packet header (`checkNotPGP`; gzip starts with 0x1f, never one) is a
+  `KeyError`: an encrypted session key gives `NeedsSecretKey` ("pass --encryptTo
+  and --secretKeyRingPath"; the cached copy stays), a signature a plain one.
+  Unit test `TestReadCachedManifestNoKeysAdvice`.
+- F2, `withoutNestedOwnManifests` (`backup/clean.go`): before `otherPrefixSets`,
+  drop a manifest under a nested root x/ only when its set also has a volume
+  under x/. A job whose `--manifestPrefix` really is `x/manifests` keeps its
+  volumes outside x/, so its sets stay protected
+  (`TestCleanSparesSetsOfPrefixWithSlash`; a naive "drop every nested
+  manifest" fails it). `TestCleanNestedDestinationOfTheSameSet`.
+- F3: the listing loop also skips what `isManifestObject` reads as ours.
+  `TestCleanOwnManifestOfAnotherSeparator` now checks there is no
+  "unrecognized object" line.
+- Break proofs (scratch copy, `make test-one PKG=./backup`): each fix reverted
+  fails its test; the naive F2 fails the slash-prefix test.
+- `make test-one PKG=./...` ok; `make lint` 0 issues; on the VM the four clean
+  tests pass, and the whole suite passes (18 of 18).

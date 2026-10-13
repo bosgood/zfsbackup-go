@@ -111,6 +111,43 @@ func nestedDestinations(objects []string, manifestPrefix string) []string {
 	return roots
 }
 
+// withoutNestedOwnManifests returns allObjects without the manifests that a nested destination
+// keeps for its own sets: a manifest under the root x/ whose set has a volume under x/ too. Seen
+// from here, "x/manifests|<set>.manifest" also reads as a manifest of another --manifestPrefix
+// ("x/manifests"), and would spare an orphan of <set> here. Volume names hold no prefix, so a job
+// whose --manifestPrefix really is "x/manifests" keeps its volumes outside x/: its manifests stay
+// in the list and keep protecting their sets' volumes.
+func withoutNestedOwnManifests(allObjects, roots []string, manifestPrefix, separator string, separators []string) []string {
+	if len(roots) == 0 {
+		return allObjects
+	}
+	nestedSets := make(map[string]bool) // root + "<sep><set>" of every volume under a nested root
+	for _, obj := range allObjects {
+		root := nestedUnder(obj, roots)
+		if root == "" {
+			continue
+		}
+		rel := obj[len(root):]
+		if _, sep, ok := parseBackupVolume(rel, separators); ok {
+			nestedSets[root+sep+backupSetName(rel)] = true
+		}
+	}
+	kept := make([]string, 0, len(allObjects))
+	for _, obj := range allObjects {
+		if root := nestedUnder(obj, roots); root != "" {
+			own := false
+			for set := range otherPrefixSets([]string{obj}, manifestPrefix, separator, separators) {
+				own = own || nestedSets[root+set]
+			}
+			if own {
+				continue
+			}
+		}
+		kept = append(kept, obj)
+	}
+	return kept
+}
+
 // nestedUnder returns the root of roots that obj is under, or "".
 func nestedUnder(obj string, roots []string) string {
 	for _, root := range roots {
@@ -433,14 +470,17 @@ func Clean(pctx context.Context, jobInfo *files.JobInfo, cleanLocal, dryRun bool
 	// The manifests under another --manifestPrefix are never read (nothing lists them, and they
 	// may be another key's), so the volumes of the sets they are for would look like orphans of a
 	// dataset this run knows. Their names say which sets they are for; those sets are not ours.
-	otherSets := otherPrefixSets(allObjects, jobInfo.ManifestPrefix, jobInfo.Separator, separators)
+	// A nested destination's manifests for its own sets are not another prefix's.
+	otherSets := otherPrefixSets(withoutNestedOwnManifests(allObjects, nested, jobInfo.ManifestPrefix, jobInfo.Separator, separators),
+		jobInfo.ManifestPrefix, jobInfo.Separator, separators)
 	otherSetVolumes := make(map[string]int)
 	present := make(map[string]bool, len(allObjects))
 	candidates := make([]string, 0, len(allObjects))
 	skipped := 0
 	for _, obj := range allObjects {
 		present[obj] = true
-		if strings.HasPrefix(obj, manifestPrefix) {
+		// Ours with any separator too: syncCache reads "manifests#..." as ours (isManifestObject).
+		if strings.HasPrefix(obj, manifestPrefix) || isManifestObject(obj, jobInfo.ManifestPrefix, jobInfo.Separator) {
 			continue
 		}
 		if root := nestedUnder(obj, nested); root != "" && !named[obj] {

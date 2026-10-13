@@ -155,6 +155,33 @@ func secretKeyErrorf(format string, args ...interface{}) error {
 	return &KeyError{msg: fmt.Sprintf(format, args...), NeedsSecretKey: true}
 }
 
+// checkNotPGP returns a KeyError when v starts with an OpenPGP packet: a run with no keys
+// cannot read it. A gzip stream starts with 0x1f, never a packet header (bit 7 set). It
+// puts a bufio.Reader in front of v.r to peek.
+func checkNotPGP(v *VolumeInfo) error {
+	br := bufio.NewReader(v.r)
+	v.r = br
+	first, err := br.Peek(1)
+	if err != nil || first[0]&0x80 == 0 {
+		return nil // what follows reports a short or non-OpenPGP object
+	}
+	tag := (first[0] & 0x3c) >> 2 // old packet format
+	if first[0]&0x40 != 0 {
+		tag = first[0] & 0x3f // new packet format
+	}
+	name := v.ObjectName
+	if name == "" {
+		name = v.filename
+	}
+	switch tag {
+	case 1, 3: // a public-key or symmetric-key encrypted session key: an encrypted message
+		return secretKeyErrorf("%s is encrypted, and this run has no key: pass --encryptTo and --secretKeyRingPath", name)
+	case 2, 4: // a signature or one-pass signature: a signed message
+		return keyErrorf("%s is signed, and this run has no key: pass --signFrom and --publicKeyRingPath", name)
+	}
+	return nil
+}
+
 // Read will passthru the command to the underlying io.Reader, which will be setup
 // to ratelimit where applicable.
 func (v *VolumeInfo) Read(p []byte) (int, error) {
@@ -392,6 +419,12 @@ func (v *VolumeInfo) Extract(ctx context.Context, j *JobInfo, isManifest bool) e
 			v.signers = append([]*openpgp.Entity{j.SignKey}, j.TrustedSignKeys...)
 		}
 		v.r = pgpReader.UnverifiedBody
+	} else if isManifest {
+		// With no keys the bytes go straight to gzip, which calls an encrypted manifest an
+		// "invalid header": a damaged object, not a backup written with a key.
+		if err := checkNotPGP(v); err != nil {
+			return err
+		}
 	}
 
 	var err error

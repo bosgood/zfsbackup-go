@@ -111,3 +111,45 @@ func TestReadCachedManifestUnsignedKeepsNoCopy(t *testing.T) {
 		}
 	}
 }
+
+// A run with no keys at all reads an encrypted manifest as plain gzip unless it looks first: the
+// error must still be the "needs the secret key" one (pass the ring, do not delete, keep the copy),
+// never gzip's "invalid header" with the advice to delete the object.
+func TestReadCachedManifestNoKeysAdvice(t *testing.T) {
+	targetDir, jobInfo := setupCleanTest(t)
+	k1 := prefixedKey(t, "k1@example.com")
+	loadPrefixedRings(t, k1)
+	t.Cleanup(func() { loadPrefixedRings(t) }) // leave the package rings empty
+
+	set, _ := prefixedSet(t, targetDir, "tank/data", "a", "", "manifests", k1, "k1@example.com")
+	name := set.ManifestObjectName()
+	data, err := os.ReadFile(filepath.Join(targetDir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadPrefixedRings(t) // no rings, no --encryptTo: jobInfo has no keys
+	b := &cacheBackend{objects: map[string][]byte{name: data}}
+	cache := t.TempDir()
+
+	for round := 1; round <= 2; round++ {
+		_, err := readCachedManifest(context.Background(), jobInfo, cache, b, name)
+		var kerr *files.KeyError
+		if !errors.As(err, &kerr) || !kerr.NeedsSecretKey {
+			t.Fatalf("round %d: got %v, want a KeyError that needs the secret key", round, err)
+		}
+		if strings.Contains(err.Error(), "delete that object") {
+			t.Errorf("round %d: the error tells the user to delete a backup: %v", round, err)
+		}
+		for _, want := range []string{"--secretKeyRingPath", "--encryptTo"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("round %d: the error does not name %s: %v", round, want, err)
+			}
+		}
+		if _, serr := os.Stat(filepath.Join(cache, cachedManifestName(name))); serr != nil {
+			t.Errorf("round %d: the cached copy is gone: %v", round, serr)
+		}
+		if b.downloads != 1 {
+			t.Errorf("round %d: %d downloads, want 1", round, b.downloads)
+		}
+	}
+}

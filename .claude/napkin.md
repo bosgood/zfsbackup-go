@@ -21,7 +21,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - OrbStack NixOS + ZFS IS possible (laris/orbstack-nixos-openzfs): build OpenZFS 2.4.1 against `/sys/kernel/kheaders.tar.xz` with 5 patches, load with a systemd unit. Rebuild after every OrbStack kernel update. Rejected for the test env 2026-10-11 (fragile); Lima VM instead.
 - A privileged container sees the HOST's zpools. A test entrypoint must refuse an existing pool name and destroy only the pool it made.
 - The zfs module opens a file vdev by its path in the HOST's mount namespace: a pool file only the container has gives "cannot create 'zbtest': no such pool or dataset". Bind-mount the dir at the same path. Same for `.zfs/snapshot` automount (a host helper mounts it): in a container compare with a `zfs clone` instead.
-- Two sessions share ONE compose project in the VM (`zfsbackup-integration`): a second `make integration-vm` recreates the running zfs container (exit 143), both logs interleave, and `down -v` kills the other run. Check `limactl shell zfsbackup -- docker ps` first (bitten 2026-10-12).
+- Two sessions share ONE compose project in the VM (`zfsbackup-integration`): a second `make integration-vm` recreates the running zfs container (exit 143), both logs interleave, and `down -v` kills the other run. Check `limactl shell zfsbackup -- docker ps` first (bitten 2026-10-12). `docker ps` empty is not enough: a run is invisible while its image builds. Ask the busy zfsbackup sessions first (ListAgents, SendMessage) and wait for their "done" (worked 2026-10-12).
 - The Lima VM sees only `~`, read-only. Scratch copies for VM runs go under `~/.cache/`, then `make -C <copy> integration-vm`.
 - `limactl shell` reuses one ssh connection: a group added later does not apply. The VM's Docker socket group is wheel for that reason.
 - A VM run can stall when the Mac sleeps (compile 12 s -> 34 min) and DNS can fail right after. Rerun before you debug.
@@ -127,7 +127,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - `dev.nix`: bump `rev`, set `hash = lib.fakeHash`, build, paste the "got:" hash. The user must run nix.
 
 ## Open plans
-- `docs/specs/2026-10-12--integration-test-clean/`: EXECUTED 2026-10-12 (uncommitted); four TestIntegrationS3Clean* tests; `CleanEncrypted` and `CleanLayout` red on purpose (findings F1-F3 in `integration/README.md`); notes at the end of its plan.md.
+- `docs/specs/2026-10-12--integration-test-clean/`: EXECUTED 2026-10-12 (e432d5f..); four TestIntegrationS3Clean* tests; findings F1-F3 (in `integration/README.md`) fixed the same day; notes at the end of its plan.md.
 - `docs/specs/2026-10-11--integration-test-more/`: EXECUTED 2026-10-11 (01e927f..); thirteen TestIntegrationS3* tests; `ReceiveSafety/Mounted` and `/Origin` red on purpose (findings); notes at the end of its plan.md.
 - A chain keeps one stream kind: send (smart and `-i`), plan and `receive --auto` refuse an incremental whose `--raw` differs from its source's backup (`MixedChainError`, 0c038d2). A full starts a new chain.
 - `docs/specs/2026-10-11--integration-test-inc/`: EXECUTED 2026-10-11; five more TestIntegrationS3* tests; notes at the end of its plan.md.

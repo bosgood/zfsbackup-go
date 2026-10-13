@@ -31,8 +31,8 @@ The other `TestIntegrationS3*` tests run in the same environment:
 | `TestIntegrationS3ManifestPrefix` | two `--manifestPrefix` jobs in one bucket: `list` and `clean` keep to their prefix |
 | `TestIntegrationS3NativeEncryption` | ZFS native encryption: a `--raw` chain with the key unloaded, a raw restore that opens only with the sender's key, a raw incremental from a bookmark, a forgotten `--raw` refused, a plaintext send, raw + GPG |
 | `TestIntegrationS3CleanLocal` | `clean` on a cut send's cached partial: kept without `--cleanLocal` and with `--force`, kept for a busy dataset, deleted with its volumes by `--cleanLocal`; a partial that lost a volume; subtests `Repair` (`clean --force` at one of two destinations, then a send) and `Denied` (a user without `s3:DeleteObject`) |
-| `TestIntegrationS3CleanEncrypted` | `clean` at an encrypted destination with no rings, `--force` and no rings, another key's rings: refused, nothing deleted; RED on purpose with no rings (finding, below) |
-| `TestIntegrationS3CleanLayout` | `clean` of nested (`run/`, `run/sub/`) and sibling (`other/`) prefixes, the bucket root, two destinations; subtests `Separator` (`--separator '#'`), `Legacy` (a volume under the old key prefix), `Versioned` (versioning on); RED on purpose (findings, below) |
+| `TestIntegrationS3CleanEncrypted` | `clean` at an encrypted destination with no rings, `--force` and no rings, another key's rings: refused, nothing deleted, the advice is to pass the key (finding F1, fixed) |
+| `TestIntegrationS3CleanLayout` | `clean` of nested (`run/`, `run/sub/`) and sibling (`other/`) prefixes, the bucket root, two destinations; subtests `Separator` (`--separator '#'`), `Legacy` (a volume under the old key prefix), `Versioned` (versioning on); findings F2 and F3, fixed |
 | `TestIntegrationS3CleanMany` | `clean` of 1100 orphans (more than one listing page); subtest `Interrupted`: a SIGTERM in the middle of 3000 deletes, then a clean that finishes |
 | `TestIntegrationS3Large` | 1 GiB with the default flags (`--volsize 200`, `--maxFileBuffer 5`, `--maxParallelUploads 4`, gzip): six volumes, each a multipart upload of 10 MiB parts (checked by ETag), file-buffered and in pipe mode; restores of each; subtest `Replication`: `send -R` of a parent with two children, received as a tree |
 
@@ -53,22 +53,28 @@ What the VM showed (zfs 2.4.4), as assumed by
 - A8: a plaintext stream received under an encryption root inherits its encryption.
 - zfs takes one snapshot of a dataset per `zfs snapshot` call (and per channel program): a tie takes separate calls in one second (`snapshotTie`).
 
-What the `clean` tests found (2026-10-12; red on purpose, not fixed yet):
+What the `clean` tests found (2026-10-12; F1 to F3 fixed the same day):
 
 - F1 (`CleanEncrypted`): with no rings at all, clean reads an encrypted
   manifest as plain gzip (`gzip: invalid header`) and says to "delete that
   object from the destination". It is a backup encrypted to a key this run
   does not have. It also deletes that manifest's cached copy. Nothing at the
   destination is deleted. With another key's rings the advice is right
-  (`--secretKeyRingPath`).
+  (`--secretKeyRingPath`). Fixed: with no keys, a manifest that starts with an
+  OpenPGP packet is a `KeyError` (encrypted: needs the secret key; the copy
+  stays), not a gzip error.
 - F2 (`CleanLayout`): the manifest of a nested destination
   (`run/sub/manifests|...`) is read as a manifest of another
   `--manifestPrefix` (`sub/manifests`). An orphan at `run/` of a set that
   `run/sub/` also names is spared, with the Notice "under another
-  --manifestPrefix". Nothing wrong is deleted.
+  --manifestPrefix". Nothing wrong is deleted. Fixed: a manifest under a
+  nested root whose set also has a volume under that root is the nested
+  destination's own and names no other prefix's set. A job whose
+  `--manifestPrefix` is `x/manifests` (volumes outside `x/`) is still spared.
 - F3 (`CleanLayout/Separator`): clean reads `manifests#...` as its own
   manifests, but its listing loop names them "unrecognized object ... (not a
   backup volume)": that check uses `manifests|`. Nothing wrong is deleted.
+  Fixed: the loop skips every manifest `isManifestObject` reads as ours.
 - A denied delete (`AccessDenied`) is retried for up to 10 minutes before
   clean fails (`CleanLocal/Denied` ends it with a 20 s deadline).
 

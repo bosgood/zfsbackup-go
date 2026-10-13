@@ -1,9 +1,12 @@
 # CHANGELOG
 
 * [ADD] test: integration helpers: one paged version delete for both bucket modes (a shared bucket loses no versions), cutSend takes the expected volume count, a sleep child holds the busy lock, the SIGTERM test signals only with deletes done and 1000 orphans left, the log assertions live in log_assert_test.go, the mc image is pinned by digest and checks the nodelete policy; setupS3Bucket refuses an existing bucket
+* [FIX] clean, list, receive: with no keys, an encrypted manifest is reported as encrypted to a key this run lacks (pass --encryptTo and --secretKeyRingPath; the cached copy stays), not as a damaged object to delete from the destination
+* [FIX] clean: the manifest of a nested destination (run/sub/ seen from run/) no longer counts as another --manifestPrefix's, so an orphan here of a set the nested destination also holds is deleted; a --manifestPrefix with a slash still protects its sets
+* [FIX] clean: a manifest of ours written with another --separator (manifests#...) is no longer logged as an unrecognized object
 * [ADD] test: TestIntegrationS3CleanLocal: clean on a cut send's cached partial (kept without --cleanLocal and with --force, kept for a busy dataset, deleted with its volumes by --cleanLocal), a partial that lost a volume; subtests Repair (clean --force at one of two destinations, then a send) and Denied (a user without s3:DeleteObject)
-* [ADD] test: TestIntegrationS3CleanEncrypted: clean at an encrypted destination with no rings, --force and no rings, another key's rings; red on purpose: with no rings clean advises deleting the manifest (finding F1)
-* [ADD] test: TestIntegrationS3CleanLayout: clean of nested and sibling prefixes, the bucket root, two destinations; subtests Separator, Legacy, Versioned; red on purpose (findings F2, F3)
+* [ADD] test: TestIntegrationS3CleanEncrypted: clean at an encrypted destination with no rings, --force and no rings, another key's rings
+* [ADD] test: TestIntegrationS3CleanLayout: clean of nested and sibling prefixes, the bucket root, two destinations; subtests Separator, Legacy, Versioned
 * [ADD] test: TestIntegrationS3CleanMany: clean of 1100 orphans (more than one listing page); a SIGTERM in the middle of 3000 deletes
 * [ADD] test: integration compose adds the MinIO user nodelete (no s3:DeleteObject) through a pinned pgsty/mc service; the test bucket cleanup deletes every version, more than 1000 objects too; snapshot() waits out a clock stepped back
 * [ADD] docs: runbook section on natively encrypted datasets (--raw on every run, a new chain with --full, zfs load-key -L for a raw restore); the integration README lists thirteen tests and what the VM showed about zfs
