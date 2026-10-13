@@ -23,6 +23,7 @@ package files
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"io"
 	"os"
@@ -190,6 +191,59 @@ func TestVolumePGPRoundTrip(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestEncryptedVolumeStreamBytes splits a stream as backup's send loop does (copy steps of
+// 2*BufferSize, a new volume once Counter reaches --volsize less 50 KiB) and bounds the
+// stream bytes in one volume at --volsize 1. The counter sits under the PGP layer and
+// go-crypto's packet writer holds data back, so an encrypted volume ends up to one copy
+// step late: 1 to 1.5 MiB of stream. TestIntegrationS3EncryptedResume and
+// TestE2EResumeDoesNotTrustOtherDestinationsCache size their streams for this bound.
+func TestEncryptedVolumeStreamBytes(t *testing.T) {
+	config.BackupTempdir = t.TempDir()
+	const (
+		step  = 2 * BufferSize
+		limit = 1<<20 - 50<<10
+		least = 1 << 20
+		most  = 1<<20 + step
+	)
+	stream := make([]byte, 4<<20) // random: openpgp must not shrink it
+	if _, err := rand.Read(stream); err != nil {
+		t.Fatal(err)
+	}
+	type mode struct {
+		name string
+		j    *JobInfo
+	}
+	modes := []mode{{"plain", testJob(nil, nil)}}
+	for _, prefix := range []string{"ed25519", "rsa"} {
+		pub, sec := loadKeys(t, prefix, prefix+"@example.com")
+		modes = append(modes, mode{prefix + "/encrypt", testJob(pub, nil)}, mode{prefix + "/encrypt+sign", testJob(pub, sec)})
+	}
+	for _, m := range modes {
+		t.Run(m.name, func(t *testing.T) {
+			v, err := CreateBackupVolume(context.Background(), m.j, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := bytes.NewReader(stream)
+			var n int64
+			for v.Counter() < limit {
+				copied, cerr := io.CopyN(v, r, step)
+				n += copied
+				if cerr != nil {
+					t.Fatalf("after %d bytes of stream the counter is %d: %v", n, v.Counter(), cerr)
+				}
+			}
+			t.Logf("%d bytes of stream, counter %d", n, v.Counter())
+			if err = v.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if n < least || n > most {
+				t.Errorf("the volume holds %d bytes of stream, want %d to %d", n, least, most)
+			}
+		})
 	}
 }
 

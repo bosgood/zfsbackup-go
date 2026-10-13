@@ -30,6 +30,10 @@ The other `TestIntegrationS3*` tests run in the same environment:
 | `TestIntegrationS3TwoDestinations` | one send to two S3 prefixes; `complete-partial` without re-upload; out-of-sync destinations refused; each restores alone |
 | `TestIntegrationS3ManifestPrefix` | two `--manifestPrefix` jobs in one bucket: `list` and `clean` keep to their prefix |
 | `TestIntegrationS3NativeEncryption` | ZFS native encryption: a `--raw` chain with the key unloaded, a raw restore that opens only with the sender's key, a raw incremental from a bookmark, a forgotten `--raw` refused, a plaintext send, raw + GPG |
+| `TestIntegrationS3PGPKeys` | each `testdata/pgp` fixture (`ed25519`, `ed25519-pass` with `PGP_PASSPHRASE`, `rsa`): send, list, restore from an empty cache; manifest key fingerprints; another fixture's key refused with ring advice; a wrong passphrase uploads nothing |
+| `TestIntegrationS3PGPModes` | encrypt-only and sign-only sends restore; encrypted pipe-mode receive (`--maxFileBuffer 0`); a tampered signed volume fails its manifest check |
+| `TestIntegrationS3PGPRotation` | a chain signed with the RSA fixture, then the Ed25519 key: smart send and `receive --auto` refuse the old signatures without `--trustSigner` and work with it |
+| `TestIntegrationS3PGPInterop` | stock `gpg` (in the image) decrypts and verifies every object; the decrypted volumes feed `zfs receive`; subtests `ed25519`, `rsa`, and `runbook` (a key made with the runbook's `gpg` commands, gpg 2.4, with a passphrase). Skipped without `gpg` |
 | `TestIntegrationS3Large` | 1 GiB with the default flags (`--volsize 200`, `--maxFileBuffer 5`, `--maxParallelUploads 4`, gzip): six volumes, each a multipart upload of 10 MiB parts (checked by ETag), file-buffered and in pipe mode; restores of each; subtest `Replication`: `send -R` of a parent with two children, received as a tree |
 
 Every restore of a whole chain runs with an empty working directory, so the
@@ -79,7 +83,8 @@ container. Docker makes the directory when it is missing.
 
 `RUN` selects tests (a `go test -run` pattern; the default runs all
 `TestIntegrationS3*`): `make integration-vm RUN=TestIntegrationS3Resume`, or
-`RUN=TestIntegrationS3/Pipe` for one subtest.
+`RUN=TestIntegrationS3/Pipe` for one subtest, or `RUN=TestIntegrationS3PGP` for
+the four OpenPGP tests.
 
 On a Linux host the image's zfs userland (Ubuntu 24.04, zfs 2.2) must match
 the host's module. Use an Ubuntu 24.04 host, or set `ZFS_USERLAND` as the VM

@@ -229,13 +229,58 @@ make lint && make vet                         # lll, funlen, dupl, shadow
 
 ## Checklist
 
-- [ ] Task 0 green on the merged branch
-- [ ] Task 1 helpers; `writeRingsFor` refactor; e2e tests unchanged and green
-- [ ] Task 2 `TestIntegrationS3PGPKeys` (+ `resetRootFlags` passphrase move)
-- [ ] Task 3 `TestIntegrationS3PGPModes`
-- [ ] Task 4 `TestIntegrationS3PGPRotation`
-- [ ] Task 5 `TestIntegrationS3PGPInterop` (+ `gnupg` in the image)
-- [ ] Task 6 RSA in the unit interop test
-- [ ] Task 7 two proofs, scratch copy deleted
-- [ ] Task 8 docs, napkin, implementation notes
+- [x] Task 0 green on the merged branch (after the `EncryptedResume` fix, notes)
+- [x] Task 1 helpers; `writeRingsFor` refactor; e2e tests unchanged and green
+- [x] Task 2 `TestIntegrationS3PGPKeys` (+ `resetRootFlags` passphrase read)
+- [x] Task 3 `TestIntegrationS3PGPModes`
+- [x] Task 4 `TestIntegrationS3PGPRotation`
+- [x] Task 5 `TestIntegrationS3PGPInterop` (+ `gnupg` in the image)
+- [x] Task 6 RSA in the unit interop test
+- [x] Task 7 two proofs, scratch copy deleted
+- [x] Task 8 docs, napkin, implementation notes
 - [ ] `make integration-vm` whole suite green; `make lint`, `make vet`
+
+## Implementation notes (2026-10-12)
+
+- **Task 0 was red.** `TestIntegrationS3EncryptedResume` failed on the merged
+  branch, every run: the cut send left 1 volume, not 2. go-crypto's
+  `partialLengthWriter` (vendor `openpgp/packet/packet.go`) holds data back
+  and writes at most one chunk per `Write`; x/crypto wrote through. The
+  volume counter sits under the PGP layer, so after 1 MiB of stream it sees
+  less than 974 KiB, and the check after each 512 KiB copy step ends the
+  volume one step late: an encrypted volume at `--volsize 1` holds 1.5 MiB of
+  stream. Not a production defect (the overshoot is at most one copy step,
+  as before). Fix in the test: cut at 3.5 MiB and accept 2 or 3 complete
+  volumes. Same root cause, flaky on the fake zfs:
+  `TestE2EResumeDoesNotTrustOtherDestinationsCache/partial_manifest` needs a
+  volume 3 of a 3 MiB stream (red 3 of 3 at HEAD in Docker); its stream is
+  now 5 MiB.
+- **`init()` does not call `resetRootFlags()`** (the plan said it did). The
+  `PGP_PASSPHRASE` read stays in `init()` and is also in `resetRootFlags()`.
+- **Tampered signed volume**: it fails the SHA-256 check against the signed
+  manifest before zfs reads it ("<vol> does not match its manifest"); the
+  volume's own signature is never reached. The test asserts that message.
+- **Manifests are always gzipped** (`InternalCompressor`), also with
+  `--compressor ""`: the interop test gunzips what gpg decrypts.
+- **Empty bucket cleanup**: `setupS3Bucket`'s cleanup sent a `DeleteObjects`
+  with no keys, which MinIO rejects (MalformedXML). The wrong-passphrase
+  bucket is empty on purpose; the cleanup now skips an empty delete.
+- `writeRingsFor` writes with `SerializePrivateWithoutSigning`: a fixture's
+  GnuPG self-signatures stay as exported. newKey's keys are signed in newKey.
+- `fixtureRings` takes the prefix only (the email is `<prefix>@example.com`);
+  `fixtureEntities` became `fixtureKey` (the secret ring's entity serves as
+  both public and secret key).
+- **Proofs** (scratch copy under `~/.cache`, deleted): `|| true` on the
+  fingerprint match in `signatureError` turns `PGPRotation` red at step 3.
+  Without `t.Setenv` the `ed25519-pass` subtest is red through the known
+  `validatePassphrase` panic ("inappropriate ioctl for device", no TTY), not
+  through "Error decrypting private key"; the panic kills the test binary.
+- **Restore proofs** (asked for after the plan; scratch copies deleted).
+  (A) Flip byte 100000 of each decrypted volume, after the signature check:
+  zfs rejects the stream ("checksum mismatch"); `PGPKeys` (all 3 subtests),
+  `PGPModes` and `PGPRotation` turn red. (B) The same, and `backup.Receive`
+  returns nil after a failed restore: `wantSnapshots` fails on the missing
+  dataset in `PGPKeys` and `PGPModes`; `PGPRotation` fails when `--auto`
+  goes on to the next link. `PGPInterop` stays green in both (gpg decrypts,
+  not our code). A first try of (B) returned nil inside `receiveStream`: the
+  download goroutine then blocks and the run hangs to the 45 min timeout.

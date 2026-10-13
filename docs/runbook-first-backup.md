@@ -53,17 +53,15 @@ the local manifest cache.
 
 ## 0. Create the backup key
 
-One PGP key encrypts and signs. The key must be RSA: this version reads
-neither ed25519 nor cv25519 keys (gpg 2.3 and later generate those by default;
-loading one fails with `openpgp: unsupported feature: public key type: 22`).
-The key rings are ASCII-armored files, so export with `--armor`. As root on the
-pool host:
+One PGP key encrypts and signs. Ed25519 with a cv25519 encryption subkey (the
+default of gpg 2.3 and later) and RSA both work. The key rings are
+ASCII-armored files, so export with `--armor`. As root on the pool host:
 
 ```bash
 export GNUPGHOME="$(mktemp -d)"     # a scratch gpg home; only the exported files are kept
-gpg --quick-gen-key "zfsbackup <$KEY>" rsa4096 sign,cert never
+gpg --quick-gen-key "zfsbackup <$KEY>" ed25519 sign,cert never
 FPR=$(gpg --list-keys --with-colons "$KEY" | awk -F: '/^fpr/ {print $10; exit}')
-gpg --quick-add-key "$FPR" rsa4096 encr never
+gpg --quick-add-key "$FPR" cv25519 encr never
 install -d -m 700 /etc/zfsbackup
 gpg --armor --export "$KEY" > /etc/zfsbackup/pubring.asc
 (umask 077; gpg --armor --export-secret-keys "$KEY" > /etc/zfsbackup/secring.asc)
@@ -74,7 +72,10 @@ rm -rf "$GNUPGHOME"; unset GNUPGHOME
 `gpg --quick-gen-key` asks for the passphrase; type the same one into the
 `passphrase` file, which every command reads through `PGP_PASSPHRASE` (with
 the variable unset, `zfsbackup` prompts on the terminal, so a cron job fails).
-Both `gpg` commands are checked against gpg 2.2 and 2.5.
+`TestIntegrationS3PGPInterop/runbook` runs the `gpg` commands above with the
+gpg of Ubuntu 24.04 (2.4), with a passphrase, then backs up and restores with
+the key. The fixtures in `testdata/pgp` are from gpg 2.2. For an RSA key, put
+`rsa4096` in place of both `ed25519` and `cv25519`.
 
 The secret key is the only way to read the backups. If it exists only on the
 pool host, it is lost with the pool it was meant to restore. Before the first

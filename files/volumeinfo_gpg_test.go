@@ -10,9 +10,13 @@ import (
 	"github.com/someone1/zfsbackup-go/config"
 )
 
-// gpgHome imports the ed25519 fixture into a throwaway GNUPGHOME and returns
-// a runner for gpg commands against it.
-func gpgHome(t *testing.T) func(args ...string) ([]byte, error) {
+// gpgFixtures are the testdata/pgp prefixes the gpg tests run over; neither
+// secret key has a passphrase.
+var gpgFixtures = []string{"ed25519", "rsa"}
+
+// gpgHome imports the secret key of one testdata/pgp fixture into a throwaway
+// GNUPGHOME and returns a runner for gpg commands against it.
+func gpgHome(t *testing.T, prefix string) func(args ...string) ([]byte, error) {
 	t.Helper()
 	if _, err := exec.LookPath("gpg"); err != nil {
 		t.Skip("gpg not installed")
@@ -40,7 +44,7 @@ func gpgHome(t *testing.T) func(args ...string) ([]byte, error) {
 		_ = kill.Run()
 		os.RemoveAll(home)
 	})
-	if _, err = run("--import", pgpFixtures+"ed25519-secret.asc"); err != nil {
+	if _, err = run("--import", pgpFixtures+prefix+"-secret.asc"); err != nil {
 		t.Fatalf("gpg --import: %v", err)
 	}
 	return run
@@ -54,9 +58,15 @@ type gpgError struct {
 func (e *gpgError) Error() string { return e.err.Error() + ": " + e.stderr }
 
 func TestGPGDecryptsAndVerifiesOurVolume(t *testing.T) {
-	run := gpgHome(t)
+	for _, prefix := range gpgFixtures {
+		t.Run(prefix, func(t *testing.T) { testGPGDecryptsAndVerifiesOurVolume(t, prefix) })
+	}
+}
+
+func testGPGDecryptsAndVerifiesOurVolume(t *testing.T, prefix string) {
+	run := gpgHome(t, prefix)
 	config.BackupTempdir = t.TempDir()
-	pub, sec := loadKeys(t, "ed25519", "ed25519@example.com")
+	pub, sec := loadKeys(t, prefix, prefix+"@example.com")
 	payload := bytes.Repeat([]byte("interop "), 1024)
 	path := writeVolume(t, testJob(pub, sec), payload)
 
@@ -82,17 +92,24 @@ func TestGPGDecryptsAndVerifiesOurVolume(t *testing.T) {
 }
 
 func TestWeDecryptGPGEncryptedVolume(t *testing.T) {
-	run := gpgHome(t)
+	for _, prefix := range gpgFixtures {
+		t.Run(prefix, func(t *testing.T) { testWeDecryptGPGEncryptedVolume(t, prefix) })
+	}
+}
+
+func testWeDecryptGPGEncryptedVolume(t *testing.T, prefix string) {
+	run := gpgHome(t, prefix)
 	config.BackupTempdir = t.TempDir()
-	pub, sec := loadKeys(t, "ed25519", "ed25519@example.com")
+	email := prefix + "@example.com"
+	pub, sec := loadKeys(t, prefix, email)
 	payload := bytes.Repeat([]byte("from gpg "), 1024)
 	plain := filepath.Join(t.TempDir(), "plain")
 	if err := os.WriteFile(plain, payload, 0600); err != nil {
 		t.Fatal(err)
 	}
 	enc := plain + ".pgp"
-	if _, err := run("--trust-model", "always", "--recipient", "ed25519@example.com",
-		"--local-user", "ed25519@example.com", "--compress-algo", "none",
+	if _, err := run("--trust-model", "always", "--recipient", email,
+		"--local-user", email, "--compress-algo", "none",
 		"--output", enc, "--sign", "--encrypt", plain); err != nil {
 		t.Fatalf("gpg --encrypt: %v", err)
 	}

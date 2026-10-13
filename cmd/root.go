@@ -206,6 +206,8 @@ func resetRootFlags() {
 	trustSigners = nil
 	zfs.ZFSPath = "zfs"
 	config.JSONOutput = false
+	// init read it already; the tests set PGP_PASSPHRASE per run.
+	passphrase = []byte(os.Getenv("PGP_PASSPHRASE"))
 }
 
 // nolint:gocyclo,funlen // Will do later

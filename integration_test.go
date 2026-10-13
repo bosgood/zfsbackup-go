@@ -139,13 +139,16 @@ func setupS3Bucket(t *testing.T, bucket string) (*s3.S3, func()) {
 			objectsToDelete = append(objectsToDelete, &obj)
 		}
 
-		if _, err := client.DeleteObjects(&s3.DeleteObjectsInput{
-			Bucket: aws.String(bucket),
-			Delete: &s3.Delete{
-				Objects: objectsToDelete,
-			},
-		}); err != nil {
-			t.Errorf("could not delete objects: %v", err)
+		// An empty Delete is MalformedXML to S3 and MinIO: a test may leave no objects.
+		if len(objectsToDelete) > 0 {
+			if _, err := client.DeleteObjects(&s3.DeleteObjectsInput{
+				Bucket: aws.String(bucket),
+				Delete: &s3.Delete{
+					Objects: objectsToDelete,
+				},
+			}); err != nil {
+				t.Errorf("could not delete objects: %v", err)
+			}
 		}
 		if _, err := client.DeleteBucket(&s3.DeleteBucketInput{
 			Bucket: aws.String(bucket),

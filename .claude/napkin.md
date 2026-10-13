@@ -86,6 +86,11 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - Volume names hold no `--manifestPrefix`: two prefixes that send one snapshot share its objects, and clean spares orphans of a set both name.
 - Smart send to out-of-sync destinations errors before it looks for anything newer (never a noop).
 - `t.Cleanup` is LIFO: a cleanup that must run BEFORE `destroyAfter` is registered AFTER it.
+- An ENCRYPTED volume at `--volsize 1` holds 1 to 1.5 MiB of stream: go-crypto's packet writer holds data back, so the counter ends the volume one 512 KiB copy step late. Never assume N MiB of stream = N encrypted volumes; leave a whole volume of slack. `files.TestEncryptedVolumeStreamBytes` pins it (exactly 1.5 MiB today).
+- `VolumeInfo.Counter()` panics after `Close` (the counter is nil). Read it first.
+- `setupS3Bucket` cleanup: S3/MinIO reject a `DeleteObjects` with 0 keys (MalformedXML). A test may leave a bucket empty.
+- `make fmt-check` fails in a git worktree (the `.git` link does not resolve in the container). Use `make fmt-write FILES=...` and check `git diff`.
+- `PGP_PASSPHRASE` is read in `init()` AND `resetRootFlags()`: `t.Setenv` + a `Reset*JobInfo` run sees it. Unset with an encrypted key and no TTY panics the test binary.
 
 ## Git and a shared tree
 - Another session can edit this tree at the same time. Run `git status` right before staging; stage BY NAME, never `git add -A`.
@@ -126,7 +131,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - `docs/specs/2026-10-11--integration-test-env/`: EXECUTED 2026-10-11 (d426bec..); NixOS VM instead of Ubuntu; notes at the end of its plan.md.
 - `docs/specs/2026-10-11--sigterm-handling/`: EXECUTED 2026-10-11 (a2c0636..069eeba); notes at the end of its plan.md.
 - `docs/specs/2026-10-11--third-pass-fixes/`: EXECUTED 2026-10-11 (caed77d..525b133); notes at the end of its plan.md.
-- `docs/specs/2026-10-12--pgp-integration-tests/`: written 2026-10-12, unexecuted. Four `TestIntegrationS3PGP*` tests (fixtures, passphrase, modes, RSA->Ed25519 rotation, gpg interop); needs `gnupg` in the integration image and `PGP_PASSPHRASE` read in `resetRootFlags`.
+- `docs/specs/2026-10-12--pgp-integration-tests/`: tasks done 2026-10-12; four `TestIntegrationS3PGP*` tests, `gnupg` in the integration image; notes at the end of its plan.md. Open: whole-suite run and proofs, see its remaining.md.
 - `docs/specs/2026-09-29--pgp-ed25519/`: EXECUTED 2026-10-02 on branch pgp-ed25519, replayed onto master 2026-10-12 by cherry-pick (11 commits, 2 superseded); notes at the end of its plan.md.
 - `send --dry-run` audit (2026-09-07), items 1-5, 7, 8: status unknown, see the archive.
 - Prune spec gap: deleting a destination manifest leaves a cached copy that `clean` treats as live. Prune must delete the cached copy too.
