@@ -126,6 +126,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - `docs/specs/2026-10-11--integration-test-env/`: EXECUTED 2026-10-11 (d426bec..); NixOS VM instead of Ubuntu; notes at the end of its plan.md.
 - `docs/specs/2026-10-11--sigterm-handling/`: EXECUTED 2026-10-11 (a2c0636..069eeba); notes at the end of its plan.md.
 - `docs/specs/2026-10-11--third-pass-fixes/`: EXECUTED 2026-10-11 (caed77d..525b133); notes at the end of its plan.md.
+- `docs/specs/2026-10-12--pgp-integration-tests/`: written 2026-10-12, unexecuted. Four `TestIntegrationS3PGP*` tests (fixtures, passphrase, modes, RSA->Ed25519 rotation, gpg interop); needs `gnupg` in the integration image and `PGP_PASSPHRASE` read in `resetRootFlags`.
 - `docs/specs/2026-09-29--pgp-ed25519/`: EXECUTED 2026-10-02 on branch pgp-ed25519, replayed onto master 2026-10-12 by cherry-pick (11 commits, 2 superseded); notes at the end of its plan.md.
 - `send --dry-run` audit (2026-09-07), items 1-5, 7, 8: status unknown, see the archive.
 - Prune spec gap: deleting a destination manifest leaves a cached copy that `clean` treats as live. Prune must delete the cached copy too.
