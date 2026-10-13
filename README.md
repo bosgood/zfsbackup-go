@@ -243,6 +243,7 @@ gpg --output private.pgp --armor --export-secret-key backup@example.com
 - PGP Passphrase will be prompted during execution if it is not found in the `PGP_PASSPHRASE` environment variable.
 - `receive` runs the external decompressor a backup's manifest names only if it is one of gzip, pigz, bzip2, pbzip2, lbzip2, xz, pxz, lzma, zstd, pzstd, lz4 or lzop; for any other, pass the same name to `receive --compressor` if you trust it.
 - `--maxFileBuffer=0` will disable parallel uploading for some backends, multiple destinations, and upload hash verification but will use virtually no disk space.
+- PGP keys with an expiry date are refused unless you pass `--allowKeyExpiry`: the signature check runs at restore time, so a volume signed by a key that has expired since does not verify. To remove an expiry: `gpg --quick-set-expire <fingerprint> 0`, then `gpg --quick-set-expire <fingerprint> 0 '*'` for the subkeys, and export the rings again.
 - `--trustSigner <email|fingerprint>` (repeatable, with `--signFrom`) also accepts manifests and volumes signed by that key from the public keyring, so backups signed before a signing-key rotation still verify. See [Rotating the signing key](docs/runbook-first-backup.md#7-rotating-the-signing-key).
 - `receive --maxFileBuffer=0` streams each volume into `zfs receive` before its checksum and signature are checked, so it cannot be combined with `--signFrom`.
 - A duration string is a possibly signed sequence of decimal numbers, each with optional fraction and a unit suffix, such as "300ms", "-1.5h" or "2h45m". Valid time units are "ns", "us" (or "µs"), "ms", "s", "m", "h".
@@ -275,6 +276,7 @@ Available Commands:
   version     Print the version of zfsbackup in use and relevant compile information
 
 Flags:
+      --allowKeyExpiry             accept PGP keys (--encryptTo, --signFrom, --trustSigner) that have an expiry date. Without it they are refused: a volume signed by a key that has since expired does not verify, and its restore fails.
       --encryptTo string           the email of the user to encrypt the data to from the provided public keyring.
   -h, --help                       help for zfsbackup
       --jsonOutput                 dump results as a JSON string - on success only
@@ -334,6 +336,7 @@ Flags:
       --volsize uint                       the maximum size (in MiB) a volume should be before splitting to a new volume. Note: zfsbackup will try its best to stay close/under this limit but it is not guaranteed. (default 200)
 
 Global Flags:
+      --allowKeyExpiry             accept PGP keys (--encryptTo, --signFrom, --trustSigner) that have an expiry date. Without it they are refused: a volume signed by a key that has since expired does not verify, and its restore fails.
       --encryptTo string           the email of the user to encrypt the data to from the provided public keyring.
       --jsonOutput                 dump results as a JSON string - on success only
       --logLevel string            this controls the verbosity level of logging. Possible values are critical, error, warning, notice, info, debug. (default "notice")
@@ -372,6 +375,7 @@ Flags:
   -u, --unmounted                 See the -u flag for zfs recv for more information.
 
 Global Flags:
+      --allowKeyExpiry             accept PGP keys (--encryptTo, --signFrom, --trustSigner) that have an expiry date. Without it they are refused: a volume signed by a key that has since expired does not verify, and its restore fails.
       --encryptTo string           the email of the user to encrypt the data to from the provided public keyring.
       --jsonOutput                 dump results as a JSON string - on success only
       --logLevel string            this controls the verbosity level of logging. Possible values are critical, error, warning, notice, info, debug. (default "notice")
@@ -401,6 +405,7 @@ Flags:
       --volumeName string   Filter results to only this volume name, can end with a '*' to match as only a prefix
 
 Global Flags:
+      --allowKeyExpiry             accept PGP keys (--encryptTo, --signFrom, --trustSigner) that have an expiry date. Without it they are refused: a volume signed by a key that has since expired does not verify, and its restore fails.
       --encryptTo string           the email of the user to encrypt the data to from the provided public keyring.
       --jsonOutput                 dump results as a JSON string - on success only
       --logLevel string            this controls the verbosity level of logging. Possible values are critical, error, warning, notice, info, debug. (default "notice")
@@ -443,6 +448,7 @@ Flags:
   -h, --help         help for clean
 
 Global Flags:
+      --allowKeyExpiry             accept PGP keys (--encryptTo, --signFrom, --trustSigner) that have an expiry date. Without it they are refused: a volume signed by a key that has since expired does not verify, and its restore fails.
       --encryptTo string           the email of the user to encrypt the data to from the provided public keyring.
       --jsonOutput                 dump results as a JSON string - on success only
       --logLevel string            this controls the verbosity level of logging. Possible values are critical, error, warning, notice, info, debug. (default "notice")
@@ -492,6 +498,7 @@ Flags:
       --snapshots string                   read the snapshots from this file (- for stdin) instead of the pool: the output of "zfs list -H -p -t snapshot,bookmark -o name,creation,type -S creation <volume>", bare sanoid names, or a JSON array of rows with a name and optionally a creation epoch and a type.
 
 Global Flags:
+      --allowKeyExpiry             accept PGP keys (--encryptTo, --signFrom, --trustSigner) that have an expiry date. Without it they are refused: a volume signed by a key that has since expired does not verify, and its restore fails.
       --encryptTo string           the email of the user to encrypt the data to from the provided public keyring.
       --jsonOutput                 dump results as a JSON string - on success only
       --logLevel string            this controls the verbosity level of logging. Possible values are critical, error, warning, notice, info, debug. (default "notice")

@@ -1,5 +1,6 @@
 # CHANGELOG
 
+* [CHANGE] pgp: keys with an expiry date (the key, a subkey or a self-signature) are refused by send, plan, receive, list and clean unless `--allowKeyExpiry`; go-crypto checks a signer's expiry at restore time, so a backup signed by a key that has expired since does not verify. With the flag, each expiry date is logged
 * [ADD] docs: runbook section on natively encrypted datasets (--raw on every run, a new chain with --full, zfs load-key -L for a raw restore); the integration README lists thirteen tests and what the VM showed about zfs
 * [ADD] test: TestIntegrationS3NativeEncryption: ZFS native encryption under an encryption root, as in production: a --raw chain with and without the key loaded, a raw restore that opens only with the sender's key, a raw incremental from a bookmark, a forgotten --raw refused, a plaintext send of the encrypted dataset, raw + GPG
 * [ADD] test: TestIntegrationS3ManifestPrefix: two --manifestPrefix jobs in one bucket; list and clean keep to their prefix; an orphan of a set both name is spared

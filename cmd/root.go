@@ -53,6 +53,7 @@ var (
 	publicKeyRingPath string
 	workingDirectory  string
 	trustSigners      []string
+	allowKeyExpiry    bool
 	errInvalidInput   = errors.New("invalid input")
 )
 
@@ -177,6 +178,13 @@ func init() {
 		"also accept manifests and volumes signed by this key (an email or fingerprint in the public keyring), e.g. "+
 			"the key --signFrom named before a rotation. Repeatable; needs --signFrom.",
 	)
+	RootCmd.PersistentFlags().BoolVar(
+		&allowKeyExpiry,
+		"allowKeyExpiry",
+		false,
+		"accept PGP keys (--encryptTo, --signFrom, --trustSigner) that have an expiry date. Without it they are refused: "+
+			"a volume signed by a key that has since expired does not verify, and its restore fails.",
+	)
 	RootCmd.PersistentFlags().StringVar(
 		&zfs.ZFSPath,
 		"zfsPath",
@@ -204,6 +212,7 @@ func resetRootFlags() {
 	jobInfo.EncryptTo = ""
 	jobInfo.SignFrom = ""
 	trustSigners = nil
+	allowKeyExpiry = false
 	zfs.ZFSPath = "zfs"
 	config.JSONOutput = false
 	// init read it already; the tests set PGP_PASSPHRASE per run.
@@ -341,7 +350,10 @@ func loadSendKeys() error {
 		}
 	}
 
-	return loadTrustedSigners()
+	if err := loadTrustedSigners(); err != nil {
+		return err
+	}
+	return checkKeyExpiry()
 }
 
 func loadReceiveKeys() error {
@@ -370,7 +382,47 @@ func loadReceiveKeys() error {
 		}
 	}
 
-	return loadTrustedSigners()
+	if err := loadTrustedSigners(); err != nil {
+		return err
+	}
+	return checkKeyExpiry()
+}
+
+// checkKeyExpiry refuses keys that expire, unless --allowKeyExpiry: go-crypto checks the
+// signer's expiry at the time of the restore, not of the backup, so a backup signed by such
+// a key cannot be restored once the key has expired.
+func checkKeyExpiry() error {
+	keys := append([]*openpgp.Entity{jobInfo.EncryptKey, jobInfo.SignKey}, jobInfo.TrustedSignKeys...)
+	seen := make(map[string]bool)
+	var expiries []pgp.KeyExpiry
+	for _, e := range keys {
+		if e == nil {
+			continue
+		}
+		for _, x := range pgp.Expiries(e) {
+			if id := x.Fingerprint + x.At.String(); !seen[id] {
+				seen[id] = true
+				expiries = append(expiries, x)
+			}
+		}
+	}
+	if len(expiries) == 0 {
+		return nil
+	}
+	for _, x := range expiries {
+		if allowKeyExpiry {
+			log.AppLogger.Noticef("PGP %v. After that date, a send with it fails, and a volume it signed does not verify: its restore fails.", x)
+		} else {
+			log.AppLogger.Errorf("PGP %v.", x)
+		}
+	}
+	if allowKeyExpiry {
+		return nil
+	}
+	log.AppLogger.Errorf("Refusing PGP keys with an expiry date: after it, a send with them fails, and a volume they " +
+		"signed does not verify, so its restore fails. Remove the expiry (gpg --quick-set-expire <fingerprint> 0, and again with '*' for the " +
+		"subkeys), export the rings again, or pass --allowKeyExpiry.")
+	return errInvalidInput
 }
 
 // loadTrustedSigners resolves each --trustSigner to the keys in the public ring it names. The

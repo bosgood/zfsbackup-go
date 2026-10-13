@@ -77,6 +77,13 @@ gpg of Ubuntu 24.04 (2.4), with a passphrase, then backs up and restores with
 the key. The fixtures in `testdata/pgp` are from gpg 2.2. For an RSA key, put
 `rsa4096` in place of both `ed25519` and `cv25519`.
 
+Keep `never` on both keys. `zfsbackup` refuses a key or subkey with an expiry
+date unless you pass `--allowKeyExpiry`: the signature check runs at restore
+time, so a backup signed by a key that has expired since does not restore. To
+remove an expiry from an existing key: `gpg --quick-set-expire "$FPR" 0`, then
+`gpg --quick-set-expire "$FPR" 0 '*'` for the subkeys, and export the rings
+again.
+
 The secret key is the only way to read the backups. If it exists only on the
 pool host, it is lost with the pool it was meant to restore. Before the first
 send, put a copy of `secring.asc` and the passphrase somewhere that depends on
