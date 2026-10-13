@@ -151,17 +151,16 @@ func TestReviewPrefersSnapshotOverSameNamedBookmark(t *testing.T) {
 	}
 }
 
-// Finding 14: zfs send refuses a bookmark source with -R, -p, -D and -I. With one of those
+// Finding 14: zfs send refuses a bookmark source with -R and -I (zfs 2.4.4). With one of those
 // flags, a last backup left only as a bookmark is a pruned source: a full of a newer full
-// candidate, or nothing until one exists, with a warning. Without them the bookmark is used.
+// candidate, or nothing until one exists, with a warning. Without them (also with -p and -D,
+// which zfs accepts) the bookmark is used.
 func TestReviewBookmarkSourceWithSnapshotOnlyFlags(t *testing.T) {
 	m1, d2, d3 := snap("d1_monthly", reviewDay(1)), snap("d2_daily", reviewDay(2)), snap("d3_daily", reviewDay(3))
 	bm := files.SnapshotInfo{Name: d2.Name, CreationTime: d2.CreationTime, Bookmark: true}
 	dest := func() [][]*files.JobInfo { return [][]*files.JobInfo{{incrManifest(d2, m1), fullManifest(m1)}} }
 	flags := map[string]func(*files.JobInfo){
 		"-R": func(j *files.JobInfo) { j.Replication = true },
-		"-p": func(j *files.JobInfo) { j.Properties = true },
-		"-D": func(j *files.JobInfo) { j.Deduplication = true },
 		"-I": func(j *files.JobInfo) { j.IntermediaryIncremental = true },
 	}
 	for name, set := range flags {
@@ -182,10 +181,17 @@ func TestReviewBookmarkSourceWithSnapshotOnlyFlags(t *testing.T) {
 		}
 	}
 
-	ji := reviewMonthlyDaily()
-	got, err := planSmartAt(reviewDay(4), &ji, []files.SnapshotInfo{d3, bm, m1}, dest(), false)
-	if err != nil || got.Action != PlanIncremental || !got.Source.Bookmark || len(got.Warnings) != 0 {
-		t.Errorf("without those flags: got %s, %v (source %+v); want an incremental from the bookmark #d2_daily", got, err, got.Source)
+	for name, set := range map[string]func(*files.JobInfo){
+		"none": func(*files.JobInfo) {},
+		"-p":   func(j *files.JobInfo) { j.Properties = true },
+		"-D":   func(j *files.JobInfo) { j.Deduplication = true },
+	} {
+		ji := reviewMonthlyDaily()
+		set(&ji)
+		got, err := planSmartAt(reviewDay(4), &ji, []files.SnapshotInfo{d3, bm, m1}, dest(), false)
+		if err != nil || got.Action != PlanIncremental || !got.Source.Bookmark || len(got.Warnings) != 0 {
+			t.Errorf("%s: got %s, %v (source %+v); want an incremental from the bookmark #d2_daily", name, got, err, got.Source)
+		}
 	}
 }
 

@@ -216,10 +216,10 @@ func brokenLink(backups []*files.JobInfo) *files.SnapshotInfo {
 }
 
 // needsSnapshotSource reports whether jobInfo has a zfs send flag that cannot send from a bookmark:
-// zfs send refuses a bookmark source with -R, -p, -D and -I ("Unsupported flag with filesystem or
-// bookmark").
+// zfs send refuses a bookmark source with -R and -I ("multiple snapshots cannot be sent from a
+// bookmark", zfs 2.4.4). It accepts one with -p and -D (TestIntegrationS3ReviewBookmarkReplication).
 func needsSnapshotSource(jobInfo *files.JobInfo) bool {
-	return jobInfo.Replication || jobInfo.Properties || jobInfo.Deduplication || jobInfo.IntermediaryIncremental
+	return jobInfo.Replication || jobInfo.IntermediaryIncremental
 }
 
 // planSmart is planSmartAt without the future-dated check.
@@ -454,7 +454,7 @@ func planSmart(
 	// data already backed up, so wait for the next one instead. The copy keeps
 	// the destination state untouched: the existence check flags the source as
 	// a bookmark if only a bookmark of it is left. zfs send cannot send from a
-	// bookmark with -R, -p, -D or -I: with those, a source left only as a
+	// bookmark with -R or -I: with those, a source left only as a
 	// bookmark is a pruned source too.
 	source := *lastBackup[0]
 	present := validateSnapShotExistsFromSnaps(&source, snapshots, true)
@@ -467,7 +467,7 @@ func planSmart(
 		if onlyBookmark {
 			warnings = []string{fmt.Sprintf(
 				"Only a bookmark of %s, the last backup, is left on the pool, and zfs send cannot send from a "+
-					"bookmark with -R, -p, -D or -I: no incremental can be sent from it.",
+					"bookmark with -R or -I: no incremental can be sent from it.",
 				source.Name,
 			)}
 		}

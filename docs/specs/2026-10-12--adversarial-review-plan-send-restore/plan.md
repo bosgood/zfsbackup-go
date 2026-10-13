@@ -25,3 +25,9 @@ Decision changes: 3 uses a new reason `broken-chain` (acts like `source-pruned`)
 9,900 parts, not 10,000 (a volume can pass `--volsize` a little); 10's `-R` rule refuses only
 when the target has children or snapshots other than the source; `--auto` checks `-F` for
 the whole chain before step 1.
+
+## VM checks (2026-10-13)
+
+`TestIntegrationS3Review*` (`integration_s3_review_test.go`) covers 7, 8, 9, 10, 12, 14 on
+zfs 2.4.4 + MinIO: green. One finding was half wrong: zfs accepts a bookmark source with
+`-p` and `-D`; `needsSnapshotSource` now covers `-R` and `-I` only.

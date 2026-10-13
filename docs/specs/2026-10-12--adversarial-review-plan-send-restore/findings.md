@@ -238,6 +238,10 @@ tank@c dest` runs `zfs send -i night tank@c` and records `night` as the source. 
 - VM check: `zfs bookmark tank/x@a tank/x#a; zfs destroy tank/x@a; zfs snapshot tank/x@b; zfs
 send -n -P -R -i tank/x#a tank/x@b; echo $?`; and `zfs list -H -p -t snapshot,bookmark -o
 name,creation,type -S creation tank/x` with `@a` and `#a` both present.
+- CORRECTION (VM, zfs 2.4.4, 2026-10-13): zfs refuses a bookmark source with `-R` and `-I`
+  ("multiple snapshots cannot be sent from a bookmark") but ACCEPTS it with `-p` (a real send
+  works too) and `-D` (dedup is ignored, with a warning). `needsSnapshotSource` now covers `-R`
+  and `-I` only; `TestIntegrationS3ReviewBookmarkReplication` pins this.
 - Fix: prefer a snapshot over a same-named bookmark; with `Replication`/`Properties`/
   `Deduplication`/`IntermediaryIncremental` and a bookmark source, take the `source-pruned`
   path; log the dry-run estimate failure at Warning.

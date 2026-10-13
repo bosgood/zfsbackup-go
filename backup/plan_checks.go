@@ -136,7 +136,7 @@ func (sim *Simulation) checkChainLinks() []Violation {
 }
 
 // checkSourcePresent: an incremental can only be sent from a snapshot (or
-// bookmark) that is still on the pool. With -R, -p, -D or -I zfs send cannot
+// bookmark) that is still on the pool. With -R or -I zfs send cannot
 // send from a bookmark, so the snapshot must be there.
 func (sim *Simulation) checkSourcePresent() []Violation {
 	bookmarks := sim.Scenario == nil || !needsSnapshotSource(&sim.Scenario.JobInfo)

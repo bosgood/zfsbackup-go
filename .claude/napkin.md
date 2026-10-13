@@ -44,7 +44,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - pgzip v1.2.6/v1.2.7 panic in `Reader.WriteTo` after a `Read` (klauspost/pgzip#74). `files.VerifyEnd` hits it; `TestUnknownSignerErrorDoesNotAdviseTrust` catches it. Fix commit e1b5b318 (2026-10-09) is untagged.
 - pkg/sftp >= 1.13.6: `Server.Serve` returns nil on EOF, not io.EOF. The fake sshd in `ssh_backend_test.go` must `channel.Close()` after Serve, or the client's `Close` waits forever.
 - `go test` without `-v` hides stdout of passing tests.
-- Break proofs in `~/.cache` copies fill the VM disk with build cache (18 GB after 15); MinIO then fails with `XMinioStorageFull`. Run `limactl shell zfsbackup -- docker builder prune -f` after them.
+- Break proofs in `~/.cache` copies fill the VM disk with build cache (18 GB after 15); MinIO then fails with `XMinioStorageFull`. Run `limactl shell zfsbackup -- docker builder prune -f` after them. Ordinary runs fill it too (15 GB after one day, 2026-10-13): check `limactl shell zfsbackup -- df -h /` before a FULL suite; a cascade of 0.00 s FAILs after one test = this.
 - `make ... RUN='X$/^$'` breaks: make eats `$/`. To run a parent test without its subtests: `RUN=X/NONE`.
 - compose `--abort-on-container-exit` stops all on ANY exit: a one-shot setup service (`mc`) needs `--no-attach mc` in `integration-docker`. `pgsty/mc` has `/bin/sh` but no grep.
 - After a flag help change, check with `make help CMD=<cmd>`. It also proves the vendor dir is consistent (`go run .` uses `-mod=vendor`); a cheap build check on the host.
@@ -99,6 +99,11 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - Volume names hold no `--manifestPrefix`: two prefixes that send one snapshot share its objects, and clean spares orphans of a set both name.
 - Smart send to out-of-sync destinations errors before it looks for anything newer (never a noop).
 - `t.Cleanup` is LIFO: a cleanup that must run BEFORE `destroyAfter` is registered AFTER it.
+- MinIO `ListMultipartUploads` lists the uploads of ONE object name (Prefix = the exact key), not of a prefix: a bare listing is empty and proves nothing. `multipartUploads` in `integration_s3_review_test.go` does it right.
+- `--maxUploadSpeed` sets `config.BackupUploadBucket` and nothing resets it: an in-process run with it must restore the old value in `t.Cleanup`.
+- zfs 2.4.4 refuses a BOOKMARK source with `-R` and `-I` but accepts `-p` and `-D` (the 2026-10-12 review claimed all four; reading OpenZFS source was wrong). Check zfs facts on the VM before you build a rule on them.
+- `zfs receive -F` DOES destroy a same-second other-named snapshot taken after the source (txg order); `refuseDestroy` counts ties.
+- Same name and second on two datasets with other guids: ONE `zfs snapshot a@n b@n` call (`snapshotAcross`); zfs takes them in one txg.
 
 ## Git and a shared tree
 - Another session can edit this tree at the same time. Run `git status` right before staging; stage BY NAME, never `git add -A`.
@@ -143,9 +148,9 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/napkin-before-2026-10-11.md`
 - A test that guards against a double action passes on base by design; prove it with a break copy.
 
 ## Open plans
-- `docs/specs/2026-10-12--adversarial-review-plan-send-restore/`: 20 findings FIXED 2026-10-13 (651b84d); VM checks for 7, 8, 9, 10, 12, 14 still to run (`plan.md`).
+- `docs/specs/2026-10-12--adversarial-review-plan-send-restore/`: 20 findings FIXED 2026-10-13 (ce9e20f); `TestIntegrationS3Review*` (findings 7, 8, 9, 10, 12, 14) GREEN on the VM 2026-10-13.
 - `docs/specs/2026-10-12--integration-test-clean/`: EXECUTED 2026-10-12 (e432d5f..); four TestIntegrationS3Clean* tests; findings F1-F3 (in `integration/README.md`) fixed the same day; notes at the end of its plan.md.
-- `docs/specs/2026-10-11--integration-test-more/`: EXECUTED 2026-10-11 (01e927f..); thirteen TestIntegrationS3* tests; `ReceiveSafety/Mounted` and `/Origin` red on purpose (findings); notes at the end of its plan.md.
+- `docs/specs/2026-10-11--integration-test-more/`: EXECUTED 2026-10-11 (01e927f..); thirteen TestIntegrationS3* tests; `ReceiveSafety/Mounted` and `/Origin` were red on purpose; green since ce9e20f (full suite 23/23 on the VM 2026-10-13); notes at the end of its plan.md.
 - A chain keeps one stream kind: send (smart and `-i`), plan and `receive --auto` refuse an incremental whose `--raw` differs from its source's backup (`MixedChainError`, 0c038d2). A full starts a new chain.
 - `docs/specs/2026-10-11--integration-test-inc/`: EXECUTED 2026-10-11; five more TestIntegrationS3* tests; notes at the end of its plan.md.
 - `docs/specs/2026-10-11--deps-upgrade/`: EXECUTED 2026-10-11 (0671ffd..), Go 1.26; notes at the end of its plan.md.

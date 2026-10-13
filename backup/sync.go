@@ -492,7 +492,7 @@ func validateSnapShotExists(ctx context.Context, snapshot *files.SnapshotInfo, t
 // validateSnapShotExistsFromSnaps reports whether snapshots hold snapshot (name and creation
 // time), and flags snapshot as a bookmark when only a bookmark of it is there. A snapshot is
 // preferred to a bookmark of the same name and time, whatever the listing order: zfs send
-// cannot send from a bookmark with some flags (-R, -p, -D, -I).
+// cannot send from a bookmark with some flags (-R, -I).
 func validateSnapShotExistsFromSnaps(snapshot *files.SnapshotInfo, snapshots []files.SnapshotInfo, includeBookmarks bool) bool {
 	found := false
 	for _, snap := range snapshots {
