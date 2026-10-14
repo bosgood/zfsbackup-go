@@ -6,6 +6,8 @@ warnings; all four are fixed (below). These items are still open.
 
 ## Open
 
+Items 1 and 2 DONE 2026-10-14 (whole suite 33/33; all three proofs red on a break copy). See `../2026-10-13--integration-test-sweep/plan.md`.
+
 1. **Run the whole suite.** `make integration-vm` (all eighteen
    `TestIntegrationS3*`), then `make lint` and `make vet`. Only
    `RUN=TestIntegrationS3PGP` and `PKG=./files/` ran after the review fixes.

@@ -400,7 +400,11 @@ func wantSnapshots(t *testing.T, dataset string, want ...string) {
 	t.Helper()
 	out := zfsRun(t, "list", "-H", "-o", "name", "-s", "createtxg", "-t", "snapshot", dataset)
 	var got []string
-	for _, line := range strings.Fields(out) {
+	// One name per line, not per field: a dataset name may hold a space.
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
 		got = append(got, strings.TrimPrefix(line, dataset+"@"))
 	}
 	if strings.Join(got, " ") != strings.Join(want, " ") {

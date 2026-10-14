@@ -20,9 +20,15 @@ import (
 // the flags that load them.
 func expiringRings(t *testing.T, email string) []string {
 	t.Helper()
+	return expiringRingsFor(t, email, 10*365*24*time.Hour)
+}
+
+// expiringRingsFor is expiringRings with the key's lifetime.
+func expiringRingsFor(t *testing.T, email string, lifetime time.Duration) []string {
+	t.Helper()
 	e, err := openpgp.NewEntity("expiring", "", email, &packet.Config{
 		Algorithm:       packet.PubKeyAlgoEdDSA,
-		KeyLifetimeSecs: 10 * 365 * 24 * 3600,
+		KeyLifetimeSecs: uint32(lifetime / time.Second),
 	})
 	if err != nil {
 		t.Fatal(err)

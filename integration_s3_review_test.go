@@ -73,7 +73,10 @@ func pathExists(path string) bool {
 func snapshotSet(t *testing.T, dataset string) []string {
 	t.Helper()
 	var names []string
-	for _, line := range strings.Fields(zfsRun(t, "list", "-H", "-o", "name", "-t", "snapshot", dataset)) {
+	for _, line := range strings.Split(strings.TrimSpace(zfsRun(t, "list", "-H", "-o", "name", "-t", "snapshot", dataset)), "\n") {
+		if line == "" {
+			continue
+		}
 		names = append(names, strings.TrimPrefix(line, dataset+"@"))
 	}
 	slices.Sort(names)
