@@ -1800,7 +1800,17 @@ func verifiedVolumes(
 		sizer, _ := d.backend.(backends.Sizer)
 		for n := 0; n < keep; n++ {
 			vol := cached[n]
-			if vol.VolumeNumber != int64(n+1) || !present[vol.ObjectName] {
+			// A gap in the cache: parallel uploads that failed left volume n+1 out, and later
+			// ones in. Name the volume that is not cached, not the first one after the gap.
+			if vol.VolumeNumber != int64(n+1) {
+				log.AppLogger.Noticef(
+					"Volume %s is not in the cached state of the interrupted attempt; it and later volumes will be re-sent.",
+					j.BackupVolumeObjectName(int64(n+1)),
+				)
+				keep = n
+				break
+			}
+			if !present[vol.ObjectName] {
 				log.AppLogger.Noticef(
 					"Volume %s missing at %s; it and later volumes will be re-sent.", vol.ObjectName, d,
 				)
