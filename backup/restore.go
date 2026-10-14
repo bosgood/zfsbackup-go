@@ -457,6 +457,12 @@ func receive(pctx context.Context, jobInfo *files.JobInfo, checkDestroy bool) er
 	}
 	toDownload = nil
 
+	// The download workers read through a progress wrapper; everything else keeps the raw
+	// backend, as the wrapper hides backends.Sizer and the other optional interfaces. The label
+	// names the backup, not the -d/-e mapped target.
+	label := fmt.Sprintf("Downloading %s@%s from %s", manifest.VolumeName, manifest.BaseSnapshot.Name, backends.RedactURI(target))
+	dl := backends.WithDownloadProgress(backend, backends.NewDownloadProgress(label, manifest.Volumes))
+
 	// Prepare Download Pipeline
 	usePipe := false
 	fileBufferSize := jobInfo.MaxFileBuffer
@@ -492,7 +498,7 @@ func receive(pctx context.Context, jobInfo *files.JobInfo, checkDestroy bool) er
 					if !ok {
 						return nil
 					}
-					if derr := downloadSequenceVolume(ctx, jobInfo, sequence, backend, bufferChannel, usePipe); derr != nil {
+					if derr := downloadSequenceVolume(ctx, jobInfo, sequence, dl, bufferChannel, usePipe); derr != nil {
 						return derr
 					}
 				}

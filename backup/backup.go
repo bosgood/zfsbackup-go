@@ -381,7 +381,7 @@ func dryRunRefusals(ctx context.Context, jobInfo *files.JobInfo) (done bool, err
 	if done, err = refuseExistingSet(ctx, jobInfo, dests, true); err != nil || done {
 		return done, err
 	}
-	if err = checkManifestFits(ctx, jobInfo); err != nil {
+	if _, err = checkManifestFits(ctx, jobInfo); err != nil {
 		return false, err
 	}
 	return false, refuseMixedChain(ctx, jobInfo, true)
@@ -631,9 +631,11 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	if done, err := refuseExistingSet(ctx, jobInfo, dests, false); err != nil || done {
 		return err
 	}
-	// Before anything touches the cache or the destinations.
-	if err := checkManifestFits(ctx, jobInfo); err != nil {
-		return err
+	// Before anything touches the cache or the destinations. The estimate is also the total of
+	// the progress lines.
+	streamEstimate, ferr := checkManifestFits(ctx, jobInfo)
+	if ferr != nil {
+		return ferr
 	}
 
 	if jobInfo.Resume {
@@ -716,8 +718,9 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 	var channels []<-chan *files.VolumeInfo
 	channels = append(channels, stepCh)
 
+	deleteURI := backends.DeleteBackendPrefix + "://"
 	if jobInfo.MaxFileBuffer != 0 {
-		uri := backends.DeleteBackendPrefix + "://"
+		uri := deleteURI
 		backend, berr := prepareBackend(ctx, jobInfo, uri, uploadBuffer)
 		if berr != nil {
 			log.AppLogger.Errorf("Could not initialize backend due to error - %v.", berr)
@@ -727,9 +730,16 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 		dests = append(dests, destination{uri: uri, backend: backend})
 	}
 
-	// Setup plumbing
+	// Setup plumbing. Each real destination's chainer uploads through a progress wrapper; dests
+	// keeps the raw backend, as the wrapper hides backends.Sizer and the other optional
+	// interfaces. jobInfo.Volumes holds the resumed volumes here, or nothing.
 	for _, d := range dests {
-		out, waitgroup := retryUploadChainer(ctx, channels[len(channels)-1], d.backend, jobInfo, d.uri)
+		b := d.backend
+		if d.uri != deleteURI {
+			label := fmt.Sprintf("Uploading %s@%s to %s", jobInfo.VolumeName, jobInfo.BaseSnapshot.Name, backends.RedactURI(d.uri))
+			b = backends.WithUploadProgress(b, backends.NewUploadProgress(label, streamEstimate, jobInfo.Volumes))
+		}
+		out, waitgroup := retryUploadChainer(ctx, channels[len(channels)-1], b, jobInfo, d.uri)
 		channels = append(channels, out)
 		group.Go(waitgroup.Wait)
 	}
@@ -1330,25 +1340,26 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 // any volume is uploaded: saveManifest refuses it too, but only once the volumes over the limit
 // are uploaded, and those are then orphans. zfs estimates the stream before --compressor and
 // encryption, so with compression the count of volumes, and so the refusal, may be too high.
-// A send whose stream zfs cannot estimate goes on; saveManifest is the last check.
-func checkManifestFits(ctx context.Context, j *files.JobInfo) error {
+// A send whose stream zfs cannot estimate goes on; saveManifest is the last check. It returns
+// zfs's estimate of the stream in raw bytes, 0 when zfs cannot estimate it.
+func checkManifestFits(ctx context.Context, j *files.JobInfo) (uint64, error) {
 	streamBytes, err := zfs.GetZFSSendDryRun(ctx, j)
 	if err != nil {
 		log.AppLogger.Warningf(
 			"Could not estimate the size of the zfs stream (%v); if the manifest grows over %d MiB, the send fails after it uploads the volumes.",
 			err, files.MaxManifestBytes>>20,
 		)
-		return nil
+		return 0, nil
 	}
 	// sendStream starts a new volume 50 KiB before --volsize.
 	volumeBytes := j.VolumeSize*humanize.MiByte - 50*humanize.KiByte
 	volumes := streamBytes/volumeBytes + 1
 	base, perVolume, err := manifestCost(j, volumes, volumeBytes)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if estimate := base + perVolume*volumes; estimate <= uint64(files.MaxManifestBytes) {
-		return nil
+		return streamBytes, nil
 	}
 	// The smallest --volsize (in MiB) whose manifest fits.
 	maxVolumes := (uint64(files.MaxManifestBytes) - min(base, uint64(files.MaxManifestBytes))) / perVolume
@@ -1360,7 +1371,7 @@ func checkManifestFits(ctx context.Context, j *files.JobInfo) error {
 		(base+perVolume*volumes)>>20, files.MaxManifestBytes>>20, minVolSize,
 	)
 	log.AppLogger.Errorf("%v.", err)
-	return err
+	return 0, err
 }
 
 // manifestCost returns the bytes of JSON that the manifest of j takes without volumes, and that
@@ -1481,6 +1492,8 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 			if volume == nil || volume.Counter() >= (j.VolumeSize*humanize.MiByte)-50*humanize.KiByte {
 				if volume != nil {
 					log.AppLogger.Debugf("Finished creating volume %s", volume.ObjectName)
+					// Before Close: in pipe mode Close ends the upload, and the upload progress
+					// wrapper reads ZFSStreamBytes when the upload returns.
 					volume.ZFSStreamBytes = counter.Count() - lastTotalBytes
 					volume.StreamSHA256 = fmt.Sprintf("%x", streamHash.Sum(nil))
 					lastTotalBytes = counter.Count()
@@ -1533,6 +1546,7 @@ func sendStream(pctx context.Context, j *files.JobInfo, c chan<- *files.VolumeIn
 			if ierr == io.EOF {
 				// We are done!
 				log.AppLogger.Debugf("Finished creating volume %s", volume.ObjectName)
+				// Before Close, as above: the upload progress wrapper depends on the order.
 				volume.ZFSStreamBytes = counter.Count() - lastTotalBytes
 				volume.StreamSHA256 = fmt.Sprintf("%x", streamHash.Sum(nil))
 				if err = volume.Close(); err != nil {
