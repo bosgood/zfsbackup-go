@@ -45,8 +45,14 @@ if [ -n "${AWS_S3_CUSTOM_ENDPOINT:-}" ]; then
 	done
 fi
 
+# sshd on 127.0.0.1:2222 for the ssh:// tests; it exports ZFSBACKUP_IT_SSH_*.
+# Sourced, so the exports reach the test. A failure ends the run: inside the
+# container the ssh tests must never skip silently.
+# shellcheck source=integration/sshd.sh
+source /src/integration/sshd.sh
+
 # No exec: the trap must run.
 cd /src
 status=0
-zfsbackup-integration.test -test.v -test.count=1 -test.timeout 45m -test.run "${RUN:-TestIntegrationS3}" || status=$?
+zfsbackup-integration.test -test.v -test.count=1 -test.timeout 45m -test.run "${RUN:-TestIntegration(S3|File|SSH)}" || status=$?
 exit "$status"

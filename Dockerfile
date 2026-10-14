@@ -158,7 +158,8 @@ CMD ["go", "test", "./..."]
 # in the image.
 FROM ubuntu:24.04 AS integration
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl diffutils gnupg pigz xz-utils zfsutils-linux zstd \
+        ca-certificates curl diffutils gnupg openssh-client openssh-server pigz xz-utils \
+        zfsutils-linux zstd \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 COPY --from=toolchain /usr/local/go /usr/local/go
 ENV PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local GOFLAGS=-mod=vendor
@@ -168,5 +169,8 @@ COPY . .
 # test runs from /src.
 RUN go vet -tags integration . \
     && go test -c -tags integration -o /usr/local/bin/zfsbackup-integration.test .
+# The ssh tests need these at run time; a missing one fails the build here.
+RUN command -v useradd chpasswd usermod ssh-keygen ssh-keyscan ssh-agent ssh-add /usr/sbin/sshd \
+        /usr/lib/openssh/sftp-server
 COPY integration/entrypoint.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

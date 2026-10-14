@@ -38,15 +38,16 @@ test-docker:
 integration-image:
 	$(DOCKER_BUILD) --target integration -t zfsbackup-integration .
 
-# ZFS + S3 integration test (TestIntegrationS3) in Docker against MinIO. Needs a
-# Linux host whose kernel has the zfs module (see integration/README.md); on a
-# Mac use integration-vm. RUN picks tests, e.g. RUN=TestIntegrationS3/Pipe.
+# ZFS integration tests in Docker: s3:// against MinIO, file:// and ssh:// (an sshd
+# in the test container). Needs a Linux host whose kernel has the zfs module (see
+# integration/README.md); on a Mac use integration-vm. RUN picks tests (a Go regexp),
+# e.g. RUN=TestIntegrationS3/Pipe; the default is TestIntegration(S3|File|SSH).
 # `down -v` runs when the test fails too; the target keeps the test's status.
 # INTEGRATION_AWS=1 runs against real AWS S3 instead of MinIO (integration/compose.aws.yaml):
 # set AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and ZFSBACKUP_IT_BUCKET.
 INTEGRATION_AWS_COMPOSE = $(if $(INTEGRATION_AWS),-f integration/compose.aws.yaml)
 INTEGRATION_COMPOSE ?= -f integration/compose.yaml $(INTEGRATION_AWS_COMPOSE)
-INTEGRATION_RUN = $(if $(filter .,$(RUN)),TestIntegrationS3,$(RUN))
+INTEGRATION_RUN = $(if $(filter .,$(RUN)),TestIntegration(S3|File|SSH),$(RUN))
 integration-docker:
 	GO_VERSION=$(GO_VERSION) RUN='$(INTEGRATION_RUN)' docker compose $(INTEGRATION_COMPOSE) up \
 		--build --abort-on-container-exit --exit-code-from zfs --no-attach mc; \

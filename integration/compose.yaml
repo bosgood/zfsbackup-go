@@ -69,4 +69,4 @@ services:
       ZFSBACKUP_TEST_POOL: zbtest
       ZFSBACKUP_IT_NODELETE_KEY: nodelete
       ZFSBACKUP_IT_NODELETE_SECRET: nodelete-secret
-      RUN: "${RUN:-TestIntegrationS3}"
+      RUN: "${RUN:-TestIntegration(S3|File|SSH)}"

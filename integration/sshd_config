@@ -1,0 +1,23 @@
+# sshd of the integration container, for the ssh:// tests (integration/sshd.sh
+# starts it). Loopback only; no port is published.
+Port 2222
+ListenAddress 127.0.0.1
+HostKey /etc/ssh/ssh_host_ed25519_key
+PermitRootLogin prohibit-password
+PubkeyAuthentication yes
+PasswordAuthentication yes
+KbdInteractiveAuthentication no
+# The container has no PAM session setup: sshd checks /etc/shadow itself.
+UsePAM no
+StrictModes yes
+Subsystem sftp /usr/lib/openssh/sftp-server
+# VERBOSE names the key of each login in the log, for the Auth subtests.
+LogLevel VERBOSE
+PidFile /var/tmp/sshd.pid
+
+# jailed sees only /srv/sshjail, as "/": its remote paths are not local
+# paths of the test, as on a real remote host (TestIntegrationSSHFull). Match
+# blocks go last.
+Match User jailed
+	ChrootDirectory /srv/sshjail
+	ForceCommand internal-sftp
