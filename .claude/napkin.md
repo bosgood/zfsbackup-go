@@ -116,7 +116,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/` (`napkin-before-2026-10-11
 - A test that guards against a double action passes on base by design; prove it with a break copy.
 
 ## Open plans
-- `docs/specs/2026-10-14--integration-file-ssh/`: EXECUTED 2026-10-14; 8 tests (41 total), ssh Upload fix 8294d0e. Open: agent blocks SSH_KEY_FILE (Notes 8), misleading "Volume ... missing" Notice on a cache gap (Notes 4).
+- `docs/specs/2026-10-14--integration-file-ssh/`: EXECUTED 2026-10-14; 8 tests (41 total), ssh Upload fix 8294d0e. Notes 4 and 8 (cache-gap Notice, agent blocking SSH_KEY_FILE) fixed after.
 - `docs/specs/2026-10-13--integration-test-sweep/`: EXECUTED 2026-10-14; six new tests (33 total), all green. Open: per-test break proofs; Azure/gs/b2/ssh, SIGTERM in receive, flaky-S3 retry (see intent.md).
 - `send --dry-run` audit (2026-09-07), items 1-5, 7, 8: status unknown, see the archive.
 - Prune spec gap: deleting a destination manifest leaves a cached copy that `clean` treats as live. Prune must delete the cached copy too.

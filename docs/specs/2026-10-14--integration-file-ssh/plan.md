@@ -385,7 +385,9 @@ run on the VM (zfs 2.4.4, OpenSSH of Ubuntu 24.04).
    left a gap in the cached partial manifest (vol9 cached, vol7 and vol8 not).
    `--resume` then re-sent from vol7 with the Notice "Volume ...vol9 missing
    at ...": it names the first volume out of sequence, which IS there, not
-   the missing vol7. A misleading Notice; not fixed here. Tasks 6 and 10 now
+   the missing vol7. Fixed after the run: a gap gets its own Notice, "Volume
+   <vol7> is not in the cached state of the interrupted attempt"
+   (`TestVerifiedVolumesCacheGap`). Tasks 6 and 10 now
    use `--volsize 4 --maxParallelUploads 1` and `refquota=6M`: volume 1
    fits, volume 2 is always cut in the middle of its write.
 5. `send --full` takes a dataset; `--full ds@snap` fails with `invalid input`.
@@ -398,7 +400,9 @@ run on the VM (zfs 2.4.4, OpenSSH of Ubuntu 24.04).
 7. `clean` on a read-only `file://` retries the `EROFS` delete for 10
    minutes, as for `AccessDenied` on S3. The test stops it with a 20 s
    deadline. A read-only `send` fails in 11 to 15 s (`--maxRetryTime 10s`).
-8. Found, not tested, open: x/crypto's ssh client tries the `publickey`
+8. Found, then fixed after the run (`TestSSHBackendAgentThenKeyFile`, and the
+   `SSHAuth/Agent` subtest logs in as `keyonly` with an agent that holds only
+   the `agentonly` key): x/crypto's ssh client tries the `publickey`
    method once (`tried` in `client_auth.go`). With `SSH_AUTH_SOCK` set and
    an agent whose keys the server refuses, `SSH_KEY_FILE` and the default
    keys are never offered. A user with a running agent that lacks the backup
