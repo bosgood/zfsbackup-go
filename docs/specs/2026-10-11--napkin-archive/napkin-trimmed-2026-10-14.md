@@ -1,0 +1,65 @@
+# Napkin entries moved out on 2026-10-14
+
+The napkin grew past its 15 KB limit. These entries are still true as of 2026-10-14 but are
+specialized (module upgrades, VM setup, one-off zfs facts, executed specs).
+
+- Docker containers cannot reach api.anthropic.com from this Mac; the host cannot reach proxy.golang.org. Query the proxy from a container: `docker run --rm golang:1.26-bookworm bash -c 'cd /tmp && go mod init probe >/dev/null 2>&1; go list -m -versions <module>'`.
+- Scratch module upgrade: rsync the tree (no .git/tmp/vendor) to /tmp, run `golang:<ver>-bookworm` with `-v /tmp/zfsb-modcache:/go/pkg/mod -e GOFLAGS=-mod=mod -e GOTOOLCHAIN=local`. Second run is fast. Delete the copies after.
+- OrbStack NixOS + ZFS IS possible (laris/orbstack-nixos-openzfs): build OpenZFS 2.4.1 against `/sys/kernel/kheaders.tar.xz` with 5 patches, load with a systemd unit. Rebuild after every OrbStack kernel update. Rejected for the test env 2026-10-11 (fragile); Lima VM instead.
+- The zfs module opens a file vdev by its path in the HOST's mount namespace: a pool file only the container has gives "cannot create 'zbtest': no such pool or dataset". Bind-mount the dir at the same path. Same for `.zfs/snapshot` automount (a host helper mounts it): in a container compare with a `zfs clone` instead.
+- `limactl shell` reuses one ssh connection: a group added later does not apply. The VM's Docker socket group is wheel for that reason.
+- MinIO publishes no Docker images any more (quay.io and Docker Hub). `pgsty/minio` is a community build; pinned in `integration/compose.yaml`.
+- Try a linter without editing .golangci.yml: `make lint LINT_ARGS="--enable-only X,Y --max-same-issues 0"`. 2026-10-11 probe of 31 extra linters: 1 real bug (ignored ctx), rest noise.
+- Newest `golang.org/x/*` and Google modules need go 1.26 (Go 1.25 is out of support since 2026-08). With `GOTOOLCHAIN=local` on 1.25, `go get -u ./...` aborts as a whole; it never picks an older version.
+- `go get -u ./...` stops with "ambiguous import cloud.google.com/go/compute/metadata": first `go get cloud.google.com/go/storage@latest google.golang.org/api@latest cloud.google.com/go/compute@latest`.
+- `go mod tidy` writes `go 1.26.0` when a dep declares it; `go mod edit -go=1.26` does not survive the next tidy. The Makefile takes only X.Y for the image tag.
+- Right after `sed -i` on go.mod, a container can read a stale, cut file ("unterminated block"). Rerun before you debug.
+- cenkalti/backoff v4 is NOT a drop-in for v2: on a canceled ctx v4's Retry returns ctx.Err(), v2 the last operation error. Kept v2 (2026-10-11).
+- pgzip v1.2.6/v1.2.7 panic in `Reader.WriteTo` after a `Read` (klauspost/pgzip#74). `files.VerifyEnd` hits it; `TestUnknownSignerErrorDoesNotAdviseTrust` catches it. Fix commit e1b5b318 (2026-10-09) is untagged.
+- pkg/sftp >= 1.13.6: `Server.Serve` returns nil on EOF, not io.EOF. The fake sshd in `ssh_backend_test.go` must `channel.Close()` after Serve, or the client's `Close` waits forever.
+- compose `--abort-on-container-exit` stops all on ANY exit: a one-shot setup service (`mc`) needs `--no-attach mc` in `integration-docker`. `pgsty/mc` has `/bin/sh` but no grep.
+- Only `TestIntegrationS3Large` sends objects over s3manager's 5 MiB multipart threshold (every other test: `--volsize 1`, 3 MiB). It proves multipart by the ETag `<md5>-<parts>`; 1 GiB takes 15 s on the VM. The pool file is 8 GiB (`integration/entrypoint.sh`).
+- A test of `io.Copy(vol, buf)` from a `bytes.Buffer` skips the volume's bufio (WriterTo, one big Write). Copy as production does: `io.LimitReader(buf, n+1)` gives 32 KiB writes.
+- `files.MaxManifestBytes` is a var: set it small with `setManifestLimit`. `writeTestManifest` uses compression level 0; set `CompressionLevel: 6` when the object must be smaller than its JSON.
+- Fault injection: upload failure on `file://` = a regular FILE at `<dest>/tank`. ENOSPC = `make test-enospc`. S3 without network = `httptest.Server` + `AWS_S3_CUSTOM_ENDPOINT`, `AWS_REGION`, keys (fake in `clean_s3_test.go`).
+- `fmt.Sprintf(w)` with no verb appends `%!(EXTRA ...)`. `fmt.Sprint("a", 1)` is `a1` (space only between two non-strings).
+- `--resume` on real ZFS accepts the volumes of the cut attempt: `zfs send` of one snapshot gives the same bytes each run (checked 2026-10-11, zfs 2.4.4).
+- Smart send, last backup's snapshot destroyed with no bookmark, no newer `_monthly`: a NOOP (`source-pruned`), not a full.
+- Explicit `receive` of an incremental needs `-i <source>`, else it looks for a full set; since 2026-10-12 the error lists the backups of that snapshot and the flags for each.
+- `receive --origin` of an incremental and the `--properties` mount-over-source trap are fixed (2026-10-12); `TestIntegrationS3ReceiveSafety` is green on both. The fake's `zfs get mountpoint` source comes from `FAKEZFS_MOUNTPOINTS`.
+- zfs sync tasks in flight together share one txg sync: `snapshotTie` takes its snapshots in goroutines (one `zfs snapshot` per kind), which cuts a 3-snapshot tie from ~1.5 s to ~0.5 s on the VM.
+- clean's `--force leaves it alone, --cleanLocal deletes it` Notice fires only when a volume the cached partial LISTS is gone; a fresh cut send gets only `There are N local manifests ... use --cleanLocal`. A denied S3 delete (403) is retried for 10 min; test it under a ctx deadline (backoff v2 returns the last op error).
+- `setupS3Bucket` cleanup pages `ListObjectVersions` and deletes every version and delete marker (fixed 2026-10-12): >1000 objects and versioned buckets are fine.
+- Smart send to out-of-sync destinations errors before it looks for anything newer (never a noop).
+- MinIO `ListMultipartUploads` lists the uploads of ONE object name (Prefix = the exact key), not of a prefix: a bare listing is empty and proves nothing. `multipartUploads` in `integration_s3_review_test.go` does it right.
+- zfs 2.4.4 refuses a BOOKMARK source with `-R` and `-I` but accepts `-p` and `-D` (the 2026-10-12 review claimed all four; reading OpenZFS source was wrong). Check zfs facts on the VM before you build a rule on them.
+- `zfs receive -F` DOES destroy a same-second other-named snapshot taken after the source (txg order); `refuseDestroy` counts ties.
+- Same name and second on two datasets with other guids: ONE `zfs snapshot a@n b@n` call (`snapshotAcross`); zfs takes them in one txg.
+- An ENCRYPTED volume at `--volsize 1` holds 1 to 1.5 MiB of stream: go-crypto's packet writer holds data back, so the counter ends the volume one 512 KiB copy step late. Never assume N MiB of stream = N encrypted volumes; leave a whole volume of slack. `files.TestEncryptedVolumeStreamBytes` pins it (exactly 1.5 MiB today).
+- `setupS3Bucket` cleanup: S3/MinIO reject a `DeleteObjects` with 0 keys (MalformedXML). A test may leave a bucket empty.
+- A long-lived branch that shares cherry-picked history with master (pgp-ed25519, 2026-10-12): `git merge` gave ~40 add/add conflicts; `git cherry HEAD <branch>` + cherry-pick of the `+` commits was clean. Vendor conflicts: reset `vendor go.sum` to HEAD, fix go.mod, `make mod-vendor`.
+- Check a commit stack: `git archive` each commit to /tmp, `go vet ./...` all of them in ONE container (vet also compiles tests). Delete the copies (~30 MB each).
+- ProtonMail go-crypto v1 checks key EXPIRY and revocation at `config.Now()` when it verifies a signature (`checkMessageSignatureDetails`); x/crypto did not. A volume signed before the key expired fails restore with "openpgp: key expired" (proved 2026-10-13). Decryption does not check expiry. So keys with an expiry are refused unless `--allowKeyExpiry` (`checkKeyExpiry`, 128c218).
+- Fixed 2026-10-12 (review findings 1-20): explicit `-i` checks the source's GUID; smart send refuses a broken chain (`broken-chain`) and drops snapshots/backups > 1 day in the future; `--auto` links by Unix time; `--origin` on step 1 only; receive checks GUID, `-R` children's and the recorded `SourceMountpoint`; `-F` needs `--allowDestroy` to destroy; `send -n` runs the read-only refusals and connects to destinations.
+- `err = vol.Close()` after a failed copy loses the copy error (it hid a never-retried download). Keep the first error.
+- s3manager aborts with the upload's own ctx: on cancel we abort with a fresh 30 s ctx (`abortCanceledUpload`).
+- `validSendJob` in `files/jobinfo_validate_test.go` must keep `VolumeSize > 0`; `--volsize` over 9900 x chunk is refused for s3://.
+- The lock's boot id is `kern.boottime` where `/proc/sys/kernel/random/boot_id` is missing (`bootid_bsd.go`). Lock tests set `platformBootID`: on the macOS host it is real.
+- `docs/specs/2026-10-12--adversarial-review-plan-send-restore/`: 20 findings FIXED 2026-10-13 (ce9e20f); `TestIntegrationS3Review*` (findings 7, 8, 9, 10, 12, 14) GREEN on the VM 2026-10-13.
+- `docs/specs/2026-10-12--integration-test-clean/`: EXECUTED 2026-10-12 (e432d5f..); four TestIntegrationS3Clean* tests; findings F1-F3 (in `integration/README.md`) fixed the same day; notes at the end of its plan.md.
+- `docs/specs/2026-10-11--integration-test-more/`: EXECUTED 2026-10-11 (01e927f..); thirteen TestIntegrationS3* tests; `ReceiveSafety/Mounted` and `/Origin` were red on purpose; green since ce9e20f (full suite 23/23 on the VM 2026-10-13); notes at the end of its plan.md.
+- A chain keeps one stream kind: send (smart and `-i`), plan and `receive --auto` refuse an incremental whose `--raw` differs from its source's backup (`MixedChainError`, 0c038d2). A full starts a new chain.
+- `docs/specs/2026-10-11--integration-test-inc/`: EXECUTED 2026-10-11; five more TestIntegrationS3* tests; notes at the end of its plan.md.
+- `docs/specs/2026-10-11--deps-upgrade/`: EXECUTED 2026-10-11 (0671ffd..), Go 1.26; notes at the end of its plan.md.
+- `docs/specs/2026-10-11--integration-test-env/`: EXECUTED 2026-10-11 (d426bec..); NixOS VM instead of Ubuntu; notes at the end of its plan.md.
+- `docs/specs/2026-10-11--sigterm-handling/`: EXECUTED 2026-10-11 (a2c0636..069eeba); notes at the end of its plan.md.
+- `docs/specs/2026-10-11--third-pass-fixes/`: EXECUTED 2026-10-11 (caed77d..525b133); notes at the end of its plan.md.
+- `docs/specs/2026-10-12--pgp-integration-tests/`: EXECUTED; whole suite and the three proofs done 2026-10-14.
+- `docs/specs/2026-09-29--pgp-ed25519/`: EXECUTED 2026-10-02 on branch pgp-ed25519, replayed onto master 2026-10-12 by cherry-pick (11 commits, 2 superseded); notes at the end of its plan.md.
+- Fault injection with real zfs: a bash wrapper as `--zfsPath` cuts one `zfs send` (`flakyZFS` in `integration_s3_resume_test.go`); `zfs send -n -P` must pass through. It must STALL before it fails: a failed stream cancels uploads in flight, and on S3 a stream that dies at once leaves 0 volumes to resume.
+- clean refuses a destination with objects but 0 manifests even when the cache holds a partial. To test that the partial protects its volumes, put a complete backup there first.
+- Fake `zfs send -R` streams differ from non-`-R` ones; their receive also makes the children's snapshots (2026-10-13). A `-R` test that needs children on the target gets them from the stream now.
+- `refuseDestroy` takes the whole chain: `AutoRestore` checks before step 1, steps call `receive(..., false)`. A new `-F` rule goes in `refuseDestroy`, never only per step.
+- No `git add -p` here. To split a staged change: save `git diff --cached`, reset, rebuild each step's file from HEAD + line ranges; the final diff must be byte-identical to the saved patch.
+- Receive pipe mode: ONE VolumeInfo has a writer (processSequence) and a reader (Extract). The writer's Close must not touch reader layers (`rw`, `cmd`); `extracted` marks them (fix 5cfb96d).
+- `Receive` reassigns `ctx` to the errgroup's: anything that runs zfs after `wg.Wait()` must use `pctx`, or `exec.CommandContext` fails at once and silently (bitten 2026-10-12, mountpoint Notice).
