@@ -112,7 +112,12 @@ type VolumeInfo struct {
 	// signers are the keys one of which must have signed the volume, when one was asked for.
 	signers []*openpgp.Entity
 	// Detail Objects
-	counter   *datacounter.WriterCounter
+	counter *datacounter.WriterCounter
+	// onRead, when set, is called with the byte count of every Read that returned bytes. The
+	// upload progress wrapper sets it for one Upload call and clears it after. One destination
+	// reads a volume at a time (the upload chain hands it on after the upload returns), so the
+	// field needs no lock.
+	onRead    func(n int)
 	usingPipe bool
 	// extracted marks a pipe volume that Extract reads: rw and cmd are then the reader's, and
 	// the writer's Close leaves them to the reader's. Set under lock, by WillExtract or Extract.
@@ -190,6 +195,9 @@ func (v *VolumeInfo) Read(p []byte) (int, error) {
 		return 0, fmt.Errorf("nothing to read from")
 	}
 	i, err := v.r.Read(p)
+	if v.onRead != nil && i > 0 {
+		v.onRead(i)
+	}
 	if err == io.EOF && v.pgpr != nil {
 		if v.cmd != nil {
 			if werr := v.waitDecompressor(); werr != nil {
@@ -201,6 +209,11 @@ func (v *VolumeInfo) Read(p []byte) (int, error) {
 		}
 	}
 	return i, err
+}
+
+// SetReadHook makes every later Read that returns bytes call fn with their count. nil clears it.
+func (v *VolumeInfo) SetReadHook(fn func(n int)) {
+	v.onRead = fn
 }
 
 // signatureError is the state of the volume's signature once it has been read to EOF: the
