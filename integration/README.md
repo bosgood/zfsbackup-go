@@ -1,4 +1,4 @@
-# ZFS + S3 integration test
+# ZFS integration tests: S3, file and ssh
 
 `TestIntegrationS3` (`integration_s3_test.go`, build tag `integration`) runs
 the real `zfs` against the real `s3://` backend:
@@ -51,6 +51,22 @@ The other `TestIntegrationS3*` tests run in the same environment:
 | `TestIntegrationS3Names` | a dataset named `na me:1` (a space and a colon, both legal): send, `list`, `receive --auto` into `re stored:1`, `clean --dry-run` with nothing unrecognized |
 | `TestIntegrationS3KeyExpiry` | a key that expires in 45 s: refused without `--allowKeyExpiry`, sent with it, restored before the expiry, refused after it with `key expired` (the reason for the rule). About a minute |
 
+The `file://` and `ssh://` tests (`docs/specs/2026-10-14--integration-file-ssh/`)
+need no MinIO. Each destination is a dataset of the test pool, so the test can
+read, truncate and delete the objects as files, and set `refquota` or
+`readonly=on` on it. The ssh tests use the sshd described below.
+
+| `RUN=` | Covers |
+|---|---|
+| `TestIntegrationFile` | the steps of `TestIntegrationS3` into a `file://` dataset: volumes and manifest as files of the manifest's sizes; `list`; `clean` (an orphan goes, `notes.txt` stays); subtests `Pipe` and `Spelling` (a trailing slash and no cache: a noop) |
+| `TestIntegrationFileResume` | a cut `zfs send`, volume 2 truncated by hand: `--resume` finds it short (`Sizer`) and re-sends from it; subtest `SIGTERM` during an upload (`--maxUploadSpeed`), then `--resume` |
+| `TestIntegrationFileFull` | `refquota` reached in the middle of volume 2: the cut file is removed, volume 1 stays; `--resume` once the quota is lifted; subtest `ReadOnly` (`readonly=on`): `send` fails and writes nothing, `list`, `receive --auto`, `clean --dry-run` work, a real `clean` fails and the orphan stays |
+| `TestIntegrationSSH` | the steps of `TestIntegrationS3` over sftp with the default key and `known_hosts` (no `SSH_*` set): 24+ volumes on `--maxParallelUploads 4`, `list`, `clean`; subtests `Pipe`, `Names` (`na me:1`), `Default` (256 MiB, gzip, two volumes) |
+| `TestIntegrationSSHAuth` | subtests `DefaultKey`, `KeyFile` (`SSH_KEY_FILE`), `Agent` (`SSH_AUTH_SOCK`, a test-owned `ssh-agent`), `Password` (`SSH_PASSWORD`, `user:pass@`, a wrong one), `Username` (`SSH_USERNAME`; the URI user wins), `Port` (no port: `:22`, refused at once), `HostKey` (another key: refused before auth; a missing file; `ignore`), `Redaction` (no password in any log or file of the working directory), `BadURI` (no path, a file, a missing directory). Each login is checked in `sshd.log` too |
+| `TestIntegrationSSHResume` | `TestIntegrationFileResume` over sftp, then a lost remote volume and manifest (all re-sent), then a lost manifest (a smart send makes a full again) |
+| `TestIntegrationSSHFull` | `refquota` on the remote, as user `jailed` (chrooted): the cut volume 2 must not stay. Red until 8294d0e: `Upload` removed the LOCAL path |
+| `TestIntegrationSSHTwoDestinations` | one send to `file://` and `ssh://`; volume 1 truncated and the manifest lost at the ssh one: `--resume` refuses to complete the set there ("is not the one the manifest ... describes"); with the volume back it copies the manifest; each restores alone |
+
 Every restore of a whole chain runs with an empty working directory, so the
 manifests come from S3, and every restored snapshot must keep the sender's
 `guid`.
@@ -97,6 +113,33 @@ The S3 server is MinIO in a second container. Each test makes its own bucket
 and deletes it. All tests together take a few minutes (`TestIntegrationS3Large` moves gigabytes); the test binary runs
 with `-test.timeout 45m`.
 
+## sshd in the test container
+
+`integration/sshd.sh`, sourced by `entrypoint.sh` once the pool exists, starts
+OpenSSH's `sshd` on `127.0.0.1:2222` (`integration/sshd_config`) in the `zfs`
+container. No port is published. It fails the run if sshd does not answer in
+30 s, so inside the container the ssh tests never skip.
+
+| User | Logs in with |
+|---|---|
+| `root` | `/root/.ssh/id_ed25519`, the key the backend finds by itself |
+| `keyonly` | `/root/ssh-keys/keyonly_ed25519` only (`SSH_KEY_FILE`) |
+| `agentonly` | `/root/ssh-keys/agentonly_ed25519` only; the `Agent` subtest adds it to its own `ssh-agent` |
+| `pwonly` | the password `zfsbackup-pw` only |
+| `jailed` | root's default key; sftp only, chrooted to `/srv/sshjail` |
+
+`ssh-keyscan` writes `/root/.ssh/known_hosts` (`[127.0.0.1]:2222` entries).
+sshd logs to `/var/tmp/sshd.log` at `LogLevel VERBOSE` (the key of each login).
+No `ssh-agent` runs by default: with `SSH_AUTH_SOCK` set, the backend tries
+the agent first.
+
+sshd shares the container's file system: for every user but `jailed`, a
+remote path is also a local path of the test, and a backend that removes a
+local file by mistake still seems to work. That hid the `Upload` defect that
+`TestIntegrationSSHFull` shows; the test uses `jailed`.
+
+Outside the container (`ZFSBACKUP_IT_SSH_PORT` unset) the ssh tests skip.
+
 ## The host needs the zfs kernel module
 
 A container cannot load a kernel module. The `zfs` container uses `/dev/zfs`
@@ -121,8 +164,10 @@ container. Docker makes the directory when it is missing.
 | Linux host with the zfs module and Docker | `make integration-docker` |
 | CI (`ubuntu-24.04` runner) | `sudo apt-get install zfsutils-linux`, then `make integration-docker` |
 
-`RUN` selects tests (a `go test -run` pattern; the default runs all
-`TestIntegrationS3*`): `make integration-vm RUN=TestIntegrationS3Resume`, or
+`RUN` selects tests (a `go test -run` pattern; the default
+`TestIntegration(S3|File|SSH)` runs all `TestIntegrationS3*`,
+`TestIntegrationFile*` and `TestIntegrationSSH*`, not the old
+`TestIntegration`): `make integration-vm RUN=TestIntegrationS3Resume`, or
 `RUN=TestIntegrationS3/Pipe` for one subtest, or
 `RUN=TestIntegrationS3PGP` for the four OpenPGP tests
 (`RUN=TestIntegrationS3CleanLayout/Separator` runs the parent's steps, then
@@ -198,13 +243,17 @@ compose -f ... down -v` stops it.
 
 | Variable | Default | Use |
 |---|---|---|
-| `RUN` | `TestIntegrationS3` | `-test.run` pattern |
+| `RUN` | `TestIntegration(S3\|File\|SSH)` | `-test.run` pattern (a Go regexp) |
 | `ZFSBACKUP_TEST_POOL` | `zbtest` (`tank` outside the container) | pool the test uses |
 | `ZFS_USERLAND` | unset | bin directory of a zfs userland to put first on `PATH` |
 | `AWS_S3_CUSTOM_ENDPOINT` | `http://minio:9000` | S3 endpoint; empty with `INTEGRATION_AWS=1` |
 | `ZFSBACKUP_IT_BUCKET` | unset | use this existing bucket, under a prefix per run, not a new bucket |
 | `INTEGRATION_AWS` (make) | unset | `1`: real AWS S3, see above |
 | `LIMA_VM` (make) | `zfsbackup` | Lima instance name |
+| `ZFSBACKUP_IT_SSH_HOST`, `ZFSBACKUP_IT_SSH_PORT` | `127.0.0.1`, `2222` (set by `sshd.sh`) | the test sshd; `PORT` unset, the ssh tests skip |
+| `ZFSBACKUP_IT_SSH_KEYS` | `/root/ssh-keys` (set by `sshd.sh`) | the keys of `keyonly` and `agentonly` |
+| `ZFSBACKUP_IT_SSH_PASSWORD` | `zfsbackup-pw` (set by `sshd.sh`) | `pwonly`'s password |
+| `ZFSBACKUP_IT_SSH_JAIL` | `/srv/sshjail` (set by `sshd.sh`) | `jailed`'s chroot |
 | `ZFSBACKUP_IT_NODELETE_KEY`, `ZFSBACKUP_IT_NODELETE_SECRET` | `nodelete`, `nodelete-secret`; empty with `INTEGRATION_AWS=1` | keys of a user without `s3:DeleteObject`; unset, `TestIntegrationS3CleanLocal/Denied` skips |
 
 The `mc` service of `compose.yaml` (`pgsty/mc`, pinned) runs once before the

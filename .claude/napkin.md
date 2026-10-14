@@ -18,7 +18,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/` (`napkin-before-2026-10-11
 - Host load varies a lot (e2e 7 s -> 43 s, no code change). Compare against the old tree in the same minute.
 - Docker here is OrbStack (arm64). Its kernel has NO zfs module and no `/lib/modules`; the maintainer will not ship one. Real `zfs` runs in the NixOS Lima VM: `make integration-vm` (see `integration/README.md`).
 - A privileged container sees the HOST's zpools. A test entrypoint must refuse an existing pool name and destroy only the pool it made.
-- Two sessions share ONE compose project in the VM (`zfsbackup-integration`): a second `make integration-vm` recreates the running zfs container (exit 143), both logs interleave, and `down -v` kills the other run. Check `limactl shell zfsbackup -- docker ps` first (bitten 2026-10-12). `docker ps` empty is not enough: a run is invisible while its image builds. Ask the busy zfsbackup sessions first (ListAgents, SendMessage) and wait for their "done" (worked 2026-10-12).
+- Two sessions share ONE compose project in the VM: a second `make integration-vm` kills the first (exit 143). `docker ps` empty is not enough (a building image is invisible): ListAgents, ask busy zfsbackup sessions, wait for "done".
 - The Lima VM sees only `~`, read-only. Scratch copies for VM runs go under `~/.cache/`, then `make -C <copy> integration-vm`.
 - A VM run can stall when the Mac sleeps (compile 12 s -> 34 min) and DNS can fail right after. Rerun before you debug.
 
@@ -31,13 +31,12 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/` (`napkin-before-2026-10-11
 - Keep the Dockerfile `GO_VERSION` default in sync with go.mod's `go` line (images set `GOTOOLCHAIN=local`).
 - Module work: `make mod-update`, `mod-get MOD=p@v`, `mod-vendor`, `vulncheck` (pinned image, cache in /tmp/zfsb-modcache).
 - `go test` without `-v` hides stdout of passing tests.
-- Break proofs in `~/.cache` copies fill the VM disk with build cache (18 GB after 15); MinIO then fails with `XMinioStorageFull`. Run `limactl shell zfsbackup -- docker builder prune -f` after them. Ordinary runs fill it too (15 GB after one day, 2026-10-13): check `limactl shell zfsbackup -- df -h /` before a FULL suite; a cascade of 0.00 s FAILs after one test = this.
+- VM disk fills with build cache (break copies: 18 GB after 15; a day of runs: 15 GB); MinIO then fails `XMinioStorageFull`, a cascade of 0.00 s FAILs. `limactl shell zfsbackup -- df -h /` before a full suite; `docker builder prune -f` after break proofs.
 - `make ... RUN='X$/^$'` breaks: make eats `$/`. To run a parent test without its subtests: `RUN=X/NONE`.
 - After a flag help change, check with `make help CMD=<cmd>`. It also proves the vendor dir is consistent (`go run .` uses `-mod=vendor`); a cheap build check on the host.
 
 ## Writing tests
 - A test that passes the first time proves nothing. Break the code in a scratch copy (`git archive HEAD | tar -x -C /tmp/x`) and see it fail. Bitten 4 times (lock pid, cached-manifest protection, `filepath.Base` name, dry-run globals).
-- `postRunCleanup` wipes the run temp dir after EVERY run: "temp empty after send" never proves `delete://` ran. Check `config.BackupTempdir` in `TestHookBeforeFinalManifest` (2026-10-14).
 - `postRunCleanup` wipes the run temp dir after EVERY run: "temp empty after send" never proves `delete://` ran. Check `config.BackupTempdir` in `TestHookBeforeFinalManifest` (2026-10-14).
 - In-process cobra runs leak: flag values are package globals (`cleanDryRun`, `cleanLocal`, `workingDirectory`, `zfs.ZFSPath`, `jobInfo`) and `RootCmd.SetArgs` persists. Pass bool flags explicitly (`--dry-run=false`); after each run `RootCmd.SetArgs(nil); cmd.ResetSendJobInfo()`. Run the whole package (`PKG=.`) before you trust green: a leak can `os.Exit(255)` the binary silently.
 - Helpers that create volumes outside a cobra run set `config.BackupTempdir = t.TempDir()` and restore it.
@@ -76,6 +75,10 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/` (`napkin-before-2026-10-11
 - `--maxUploadSpeed` sets `config.BackupUploadBucket` and nothing resets it: an in-process run with it must restore the old value in `t.Cleanup`.
 - `VolumeInfo.Counter()` panics after `Close` (the counter is nil). Read it first.
 - `make fmt-check` fails in a git worktree (the `.git` link does not resolve in the container). Use `make fmt-write FILES=...` and check `git diff`, or rsync to /tmp, `git init && git add -A`, then `make fmt-check` there.
+- Test sshd shares the container FS: a backend that touches the LOCAL path passes. Use chrooted `jailed` (`newSSHJailDest`). No chroot under `/var/tmp` (1777).
+- `send --full` takes a DATASET (`--full ds@snap`: `invalid input`).
+- Failed parallel uploads leave a gap in the cached partial; to assert "no re-send" use `--maxParallelUploads 1`.
+- In-process SIGTERM never leaves a short file/ssh volume (io.Copy ignores ctx). Truncate by hand to test `Sizer`.
 - `PGP_PASSPHRASE` is read in `init()` AND `resetRootFlags()`: `t.Setenv` + a `Reset*JobInfo` run sees it. Unset with an encrypted key and no TTY panics the test binary.
 
 ## Git and a shared tree
@@ -113,7 +116,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/` (`napkin-before-2026-10-11
 - A test that guards against a double action passes on base by design; prove it with a break copy.
 
 ## Open plans
-- `docs/specs/2026-10-14--integration-file-ssh/`: PLANNED 2026-10-14, not started. `file://` and `ssh://` on real zfs, sshd in the test container; expected defect `ssh_backend.go:239`.
+- `docs/specs/2026-10-14--integration-file-ssh/`: EXECUTED 2026-10-14; 8 tests (41 total), ssh Upload fix 8294d0e. Open: agent blocks SSH_KEY_FILE (Notes 8), misleading "Volume ... missing" Notice on a cache gap (Notes 4).
 - `docs/specs/2026-10-13--integration-test-sweep/`: EXECUTED 2026-10-14; six new tests (33 total), all green. Open: per-test break proofs; Azure/gs/b2/ssh, SIGTERM in receive, flaky-S3 retry (see intent.md).
 - `send --dry-run` audit (2026-09-07), items 1-5, 7, 8: status unknown, see the archive.
 - Prune spec gap: deleting a destination manifest leaves a cached copy that `clean` treats as live. Prune must delete the cached copy too.

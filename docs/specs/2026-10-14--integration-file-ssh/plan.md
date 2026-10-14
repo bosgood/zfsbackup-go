@@ -357,4 +357,66 @@ copies fill the VM disk).
 
 ## Notes
 
-(Filled in as the tasks run: first-run error texts, red tests, fixes.)
+Executed 2026-10-14. Eight tests, not seven (the task table has eight). All
+run on the VM (zfs 2.4.4, OpenSSH of Ubuntu 24.04).
+
+1. **Task 10 was NOT red at HEAD as planned.** sshd runs in the test's own
+   container, so the remote path is also a local path: the buggy
+   `os.Remove(destinationPath)` deleted the "remote" file through the local
+   file system, and no Warning showed. Fix of the test: a chrooted sftp-only
+   user `jailed` (`ChrootDirectory /srv/sshjail`, `newSSHJailDest`): remote
+   `/sfulldest` is local `/srv/sshjail/sfulldest`. Then red at e60e43e: vol2
+   stayed at 1998848 bytes, and the log had
+   `ssh backend: Error deleting failed upload file /sfulldest/...vol2 - remove /sfulldest/...vol2: no such file or directory`.
+   Green after the fix (8294d0e). The other ssh tests still log in as root
+   with shared paths; a backend bug of the same kind would pass them.
+2. The chroot must not be under `/var/tmp` (mode 1777): sshd refuses it at
+   the session, and the client sees only `ssh: unexpected packet in response
+   to channel open: <nil>`.
+3. Error texts. `refquota`, `file://`: `write <path>: disk quota exceeded` in
+   the middle of a volume, `open <path>: disk quota exceeded` for a volume
+   started after the quota is reached. `refquota`, `ssh://`:
+   `sftp: "Failure" (SSH_FX_FAILURE)`: OpenSSH's sftp-server sends no
+   errno. `readonly=on`, `file://`: `open <path>: read-only file system`;
+   clean: `remove <path>: read-only file system`.
+4. Task 6 as planned (`refquota=8M`, `--volsize 1`, four parallel uploads)
+   is timing-dependent: most failed uploads failed at `open`, so a volume cut
+   in the middle of its write was not always made, and parallel failures
+   left a gap in the cached partial manifest (vol9 cached, vol7 and vol8 not).
+   `--resume` then re-sent from vol7 with the Notice "Volume ...vol9 missing
+   at ...": it names the first volume out of sequence, which IS there, not
+   the missing vol7. A misleading Notice; not fixed here. Tasks 6 and 10 now
+   use `--volsize 4 --maxParallelUploads 1` and `refquota=6M`: volume 1
+   fits, volume 2 is always cut in the middle of its write.
+5. `send --full` takes a dataset; `--full ds@snap` fails with `invalid input`.
+6. SIGTERM (tasks 5 and 9): no backend left a SHORT volume. The upload in
+   flight ran to its end (neither backend's `io.Copy` watches the context)
+   and stayed under its final name, whole (1048576 bytes) and uncached.
+   `--resume` re-sent it from the cache's count, with no size Notice. The
+   plan's "shorter than its eventual size" did not hold for an in-process
+   SIGTERM; a SIGKILL would be needed. The truncation by hand covers `Sizer`.
+7. `clean` on a read-only `file://` retries the `EROFS` delete for 10
+   minutes, as for `AccessDenied` on S3. The test stops it with a 20 s
+   deadline. A read-only `send` fails in 11 to 15 s (`--maxRetryTime 10s`).
+8. Found, not tested, open: x/crypto's ssh client tries the `publickey`
+   method once (`tried` in `client_auth.go`). With `SSH_AUTH_SOCK` set and
+   an agent whose keys the server refuses, `SSH_KEY_FILE` and the default
+   keys are never offered. A user with a running agent that lacks the backup
+   key cannot log in with `SSH_KEY_FILE`. Fix: one `PublicKeysCallback` that
+   returns the agent's signers and the files' signers together.
+9. `Port`: the dial to `:22` is refused at once (connection refused), not
+   after the 30 s timeout.
+10. Break proofs (task 14), two `git archive` copies, all red for the
+    intended reason. Copy A: `verifiedVolumes` with no `Sizer` (`FileResume`,
+    `SSHResume`: no size Notice, the restore fails its check);
+    `verifyVolumesAt` skips the check when a `Sizer` exists
+    (`SSHTwoDestinations`: no error); `knownhosts.New` replaced by
+    `InsecureIgnoreHostKey` (`SSHAuth/HostKey`); `prepareBackend` logs the
+    URI unredacted (`SSHAuth/Redaction`); `FileBackend.Upload` keeps a cut
+    file (`FileFull`). Copy B: `FileBackend.List` drops manifests
+    (`TestIntegrationFile`); `SSHBackend.Upload` with `filepath.Base`
+    (`TestIntegrationSSH`). `SSHFull`: e60e43e itself.
+11. Whole suite with the new default `RUN`: 40 of 41 green.
+    `TestIntegrationS3ReviewBookmarkReplication` failed once ("nothing new
+    to sync" for a daily one second after the monthly) and passed alone:
+    the VM clock-step flake of the napkin; not touched here.
