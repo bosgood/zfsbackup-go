@@ -30,8 +30,8 @@ Close() error
 | `gs://` | `gcs_backend.go` | |
 | `azure://` | `azure_backend.go` | |
 | `b2://` | `backblaze_b2_backend.go` | |
-| `ssh://` | `ssh_backend.go` | |
-| `file://` | `file_backend.go` | used by all e2e and clean tests |
+| `ssh://` | `ssh_backend.go` | sftp. Auth order: agent (`SSH_AUTH_SOCK`), then `SSH_KEY_FILE` or the default `~/.ssh/id_*` keys, then the password. x/crypto tries the `publickey` method once: if the agent's keys fail, the key files are never offered. A failed upload removes the cut remote file with `sftpClient.Remove` (it used `os.Remove`, the local path, until 2026-10-14: `TestIntegrationSSHFull`). Real-sshd tests: `integration_ssh*_test.go` |
+| `file://` | `file_backend.go` | used by all e2e and clean tests; a failed copy removes the cut file. Real-zfs tests: `integration_file*_test.go` (a dataset destination, `refquota`, `readonly=on`) |
 | `delete://` | `delete_backend.go` | last link of the send chain; removes temp files (`e2e_delete_backend_test.go`) |
 
 ## Rules for a backend

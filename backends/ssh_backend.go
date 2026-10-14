@@ -236,7 +236,8 @@ func (s *SSHBackend) Upload(ctx context.Context, vol *files.VolumeInfo) error {
 		if closeErr := w.Close(); closeErr != nil {
 			log.AppLogger.Warningf("ssh backend: Error closing volume %s - %v", vol.ObjectName, closeErr)
 		}
-		if deleteErr := os.Remove(destinationPath); deleteErr != nil {
+		// The remote file, not a local one: the cut volume must not stay under its final name.
+		if deleteErr := s.sftpClient.Remove(destinationPath); deleteErr != nil {
 			log.AppLogger.Warningf("ssh backend: Error deleting failed upload file %s - %v", destinationPath, deleteErr)
 		}
 		log.AppLogger.Debugf("ssh backend: Error while copying volume %s - %v", vol.ObjectName, err)
