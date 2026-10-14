@@ -119,6 +119,12 @@ func TestIntegrationSSHAuth(t *testing.T) {
 		accepted(t, offset, "publickey", "agentonly", agentonly)
 		t.Setenv("SSH_AUTH_SOCK", "")
 		refused(t, target)
+		// The agent's key is refused for keyonly: SSH_KEY_FILE must still be offered after it.
+		t.Setenv("SSH_AUTH_SOCK", sock)
+		t.Setenv("SSH_KEY_FILE", keyonly)
+		offset = sshdLogSize(t)
+		ok(t, "ssh://keyonly@"+hostPort+newDir(t, "keyonly"))
+		accepted(t, offset, "publickey", "keyonly", keyonly)
 	})
 
 	t.Run("Password", func(t *testing.T) {

@@ -1,6 +1,7 @@
 package backends
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -11,10 +12,12 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 )
 
 func generateSSHPrivateKey() (ssh.Signer, error) {
@@ -38,7 +41,8 @@ func generateSSHPrivateKey() (ssh.Signer, error) {
 
 // startSftpServer starts a very hacky sftp server based on
 // https://github.com/pkg/sftp/blob/v1.13.5/examples/go-sftp-server/main.go
-func startSftpServer(t testing.TB, user string, password string) net.Listener {
+// It accepts user with password, or with one of the authorized keys.
+func startSftpServer(t testing.TB, user string, password string, authorized ...ssh.PublicKey) net.Listener {
 	t.Helper()
 
 	config := &ssh.ServerConfig{
@@ -47,6 +51,14 @@ func startSftpServer(t testing.TB, user string, password string) net.Listener {
 				return nil, nil
 			}
 			return nil, fmt.Errorf("password rejected for %q", c.User())
+		},
+		PublicKeyCallback: func(c ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			for _, k := range authorized {
+				if c.User() == user && bytes.Equal(k.Marshal(), key.Marshal()) {
+					return nil, nil
+				}
+			}
+			return nil, fmt.Errorf("key rejected for %q", c.User())
 		},
 	}
 	signer, err := generateSSHPrivateKey()
@@ -163,4 +175,78 @@ func TestSSHBackend(t *testing.T) {
 	defer cancel()
 
 	BackendTest(ctx, SSHBackendPrefix, backendUriEnd, true, b)(t)
+}
+
+// TestSSHBackendAgentThenKeyFile: an ssh-agent whose key the server refuses must not stop
+// SSH_KEY_FILE. The ssh client tries each method name once; with the agent and the key file as
+// two publickey methods, the key file was never offered.
+func TestSSHBackendAgentThenKeyFile(t *testing.T) {
+	_, agentKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filePub, fileKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorized, err := ssh.NewPublicKey(filePub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := startSftpServer(t, "test", "", authorized)
+	defer func() {
+		_ = listener.Close()
+	}()
+
+	// Not t.TempDir(): a unix socket path must stay short.
+	dir, err := os.MkdirTemp("", "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	keyring := agent.NewKeyring()
+	if err = keyring.Add(agent.AddedKey{PrivateKey: agentKey}); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(dir, "sock")
+	agentListener, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = agentListener.Close()
+	}()
+	go func() {
+		for {
+			conn, aerr := agentListener.Accept()
+			if aerr != nil {
+				return
+			}
+			go func() { _ = agent.ServeAgent(keyring, conn) }()
+		}
+	}()
+
+	block, err := ssh.MarshalPrivateKey(fileKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyFile := filepath.Join(dir, "id_ed25519")
+	if err = os.WriteFile(keyFile, pem.EncodeToMemory(block), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSH_AUTH_SOCK", sock)
+	t.Setenv("SSH_KEY_FILE", keyFile)
+	t.Setenv("SSH_KNOWN_HOSTS", "ignore")
+	t.Setenv("SSH_PASSWORD", "")
+	t.Setenv("SSH_USERNAME", "")
+
+	uri := SSHBackendPrefix + "://test@" + listener.Addr().String() + t.TempDir()
+	b, err := GetBackendForURI(uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = b.Init(context.Background(), &BackendConfig{TargetURI: uri}); err != nil {
+		t.Fatalf("Init with an agent key the server refuses and an authorized SSH_KEY_FILE: %v", err)
+	}
+	_ = b.Close()
 }

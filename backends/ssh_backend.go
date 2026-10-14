@@ -52,26 +52,30 @@ func buildSshSigner(privateKeyPath string, password string) (ssh.Signer, error) 
 // buildAuthMethods builds ssh auth methods based on the provided password and private keys in the the users home directory.
 // To use a specific key instead of the default files set the env variable SSH_KEY_FILE.
 // buildAuthMethods also adds ssh-agent auth if the env variable SSH_AUTH_SOCK exists.
+//
+// The agent's keys and the key files go into ONE publickey method, agent first: the ssh client
+// tries each method name once, so with two publickey methods the files were never offered once
+// the server had refused the agent's keys.
 func buildAuthMethods(userHomeDir string, password string) (sshAuths []ssh.AuthMethod, err error) {
+	var agentSigners func() ([]ssh.Signer, error)
 	sshAuthSock := os.Getenv("SSH_AUTH_SOCK")
 	if sshAuthSock != "" {
 		sshAgent, err := net.Dial("unix", sshAuthSock)
 		if err != nil {
 			return nil, err
 		}
-		sshAuths = append(sshAuths, ssh.PublicKeysCallback(agent.NewClient(sshAgent).Signers))
+		agentSigners = agent.NewClient(sshAgent).Signers
 	}
 
+	var fileSigners []ssh.Signer
 	sshKeyFile := os.Getenv("SSH_KEY_FILE")
 	if sshKeyFile != "" {
 		signer, err := buildSshSigner(sshKeyFile, password)
 		if err != nil {
 			return nil, err
 		}
-		sshAuths = append(sshAuths, ssh.PublicKeys(signer))
+		fileSigners = append(fileSigners, signer)
 	} else {
-		signers := make([]ssh.Signer, 0)
-
 		defaultKeys := []string{
 			filepath.Join(userHomeDir, ".ssh/id_rsa"),
 			filepath.Join(userHomeDir, ".ssh/id_ecdsa"),
@@ -89,11 +93,23 @@ func buildAuthMethods(userHomeDir string, password string) (sshAuths []ssh.AuthM
 				}
 				continue
 			}
-			signers = append(signers, signer)
+			fileSigners = append(fileSigners, signer)
 		}
-		if len(signers) > 0 {
-			sshAuths = append(sshAuths, ssh.PublicKeys(signers...))
-		}
+	}
+
+	if agentSigners != nil || len(fileSigners) > 0 {
+		sshAuths = append(sshAuths, ssh.PublicKeysCallback(func() ([]ssh.Signer, error) {
+			var signers []ssh.Signer
+			if agentSigners != nil {
+				fromAgent, err := agentSigners()
+				if err != nil {
+					// The key files may still work: do not give up on publickey.
+					log.AppLogger.Warningf("ssh backend: Could not read the keys of the ssh-agent at %s - %v", sshAuthSock, err)
+				}
+				signers = append(signers, fromAgent...)
+			}
+			return append(signers, fileSigners...), nil
+		}))
 	}
 
 	if password != "" {
