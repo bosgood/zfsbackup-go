@@ -32,7 +32,7 @@ Close() error
 | `b2://` | `backblaze_b2_backend.go` | |
 | `ssh://` | `ssh_backend.go` | |
 | `file://` | `file_backend.go` | used by all e2e and clean tests |
-| `delete://` | `delete_backend.go` | last link of the send chain; removes temp files |
+| `delete://` | `delete_backend.go` | last link of the send chain; removes temp files (`e2e_delete_backend_test.go`) |
 
 ## Rules for a backend
 

@@ -5,9 +5,9 @@ Project history, review facts and defect lists go in `docs/specs/`, not here.
 Old entries: `docs/specs/2026-10-11--napkin-archive/` (`napkin-before-2026-10-11.md`, `napkin-trimmed-2026-10-14.md`).
 
 ## Bash tool and host
-- Call #1 of a session is `cat .claude/napkin.md` ALONE. No chain, no separator. (Broken 12 times by chaining, last 2026-10-12.)
+- Call #1 of a session is `cat .claude/napkin.md` ALONE. No chain, no separator. (Broken 13 times by chaining, last 2026-10-14.)
 - zsh does NOT word-split `$var`: `for t in "test-one X=1" vet; do make $t` passed one bad arg and ran HOST tests (2026-10-13). Write each make call out.
-- zsh expands a leading `=word`: `echo ======` aborts the whole chain (again 2026-10-12). Use `echo '-----'`. Quote globs too: `--include='*.go'`.
+- zsh expands a leading `=word`: `echo ======` aborts the whole chain (again 2026-10-14, 3rd time). Use `echo '-----'`. Quote globs too: `--include='*.go'`.
 - `grep` here is ugrep: it ignores `--` as end of options. Use `/usr/bin/grep` or `-e PATTERN` when it matters.
 - macOS has no `timeout`. Put it inside the container command.
 - `cd dir && ...` persists across calls; parallel calls interleave. Use absolute paths or `(cd dir && ...)`.
@@ -37,6 +37,8 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/` (`napkin-before-2026-10-11
 
 ## Writing tests
 - A test that passes the first time proves nothing. Break the code in a scratch copy (`git archive HEAD | tar -x -C /tmp/x`) and see it fail. Bitten 4 times (lock pid, cached-manifest protection, `filepath.Base` name, dry-run globals).
+- `postRunCleanup` wipes the run temp dir after EVERY run: "temp empty after send" never proves `delete://` ran. Check `config.BackupTempdir` in `TestHookBeforeFinalManifest` (2026-10-14).
+- `postRunCleanup` wipes the run temp dir after EVERY run: "temp empty after send" never proves `delete://` ran. Check `config.BackupTempdir` in `TestHookBeforeFinalManifest` (2026-10-14).
 - In-process cobra runs leak: flag values are package globals (`cleanDryRun`, `cleanLocal`, `workingDirectory`, `zfs.ZFSPath`, `jobInfo`) and `RootCmd.SetArgs` persists. Pass bool flags explicitly (`--dry-run=false`); after each run `RootCmd.SetArgs(nil); cmd.ResetSendJobInfo()`. Run the whole package (`PKG=.`) before you trust green: a leak can `os.Exit(255)` the binary silently.
 - Helpers that create volumes outside a cobra run set `config.BackupTempdir = t.TempDir()` and restore it.
 - Two sends that must give identical volumes: `--compressor ""` (pgzip boundaries are timing-dependent).
@@ -111,6 +113,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/` (`napkin-before-2026-10-11
 - A test that guards against a double action passes on base by design; prove it with a break copy.
 
 ## Open plans
+- `docs/specs/2026-10-14--integration-file-ssh/`: PLANNED 2026-10-14, not started. `file://` and `ssh://` on real zfs, sshd in the test container; expected defect `ssh_backend.go:239`.
 - `docs/specs/2026-10-13--integration-test-sweep/`: EXECUTED 2026-10-14; six new tests (33 total), all green. Open: per-test break proofs; Azure/gs/b2/ssh, SIGTERM in receive, flaky-S3 retry (see intent.md).
 - `send --dry-run` audit (2026-09-07), items 1-5, 7, 8: status unknown, see the archive.
 - Prune spec gap: deleting a destination manifest leaves a cached copy that `clean` treats as live. Prune must delete the cached copy too.

@@ -59,5 +59,5 @@ All stages are goroutines in one `errgroup`. Any failure cancels `ctx`. No final
 ## Tests
 
 - Pure planner: `backup/plan_test.go`, golden scenarios in `backup/testdata/scenarios/` (`make scenarios`).
-- Pipeline end to end: root `e2e_test.go`, `e2e_failure_test.go`, `e2e_resume*_test.go` with `internal/fakezfs` and a `file://` destination. See [testing.md](testing.md).
+- Pipeline end to end: root `e2e_test.go`, `e2e_failure_test.go`, `e2e_resume*_test.go`, `e2e_delete_backend_test.go` (the `delete://` link frees temp files) with `internal/fakezfs` and a `file://` destination. See [testing.md](testing.md).
 - Log assertions: `captureLogs(t)` in `backup/backup_test.go`.
