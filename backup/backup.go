@@ -32,6 +32,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -710,6 +711,13 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 		}
 	}()
 
+	// The volumes a --resume kept seed the progress lines. Copied before sendStream starts: it
+	// cuts jobInfo.Volumes to the in-order ones (TotalBytesStreamedAndVols), so cut them here too.
+	manifestmutex.Lock()
+	jobInfo.TotalBytesStreamedAndVols()
+	resumed := slices.Clone(jobInfo.Volumes)
+	manifestmutex.Unlock()
+
 	// Start the ZFS send stream
 	group.Go(func() error {
 		return sendStream(ctx, jobInfo, startCh, fileBuffer)
@@ -732,12 +740,12 @@ func Backup(pctx context.Context, jobInfo *files.JobInfo, dryRun bool) error {
 
 	// Setup plumbing. Each real destination's chainer uploads through a progress wrapper; dests
 	// keeps the raw backend, as the wrapper hides backends.Sizer and the other optional
-	// interfaces. jobInfo.Volumes holds the resumed volumes here, or nothing.
+	// interfaces.
 	for _, d := range dests {
 		b := d.backend
 		if d.uri != deleteURI {
 			label := fmt.Sprintf("Uploading %s@%s to %s", jobInfo.VolumeName, jobInfo.BaseSnapshot.Name, backends.RedactURI(d.uri))
-			b = backends.WithUploadProgress(b, backends.NewUploadProgress(label, streamEstimate, jobInfo.Volumes))
+			b = backends.WithUploadProgress(b, backends.NewUploadProgress(label, streamEstimate, resumed))
 		}
 		out, waitgroup := retryUploadChainer(ctx, channels[len(channels)-1], b, jobInfo, d.uri)
 		channels = append(channels, out)

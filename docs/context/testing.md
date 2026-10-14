@@ -9,6 +9,7 @@ Read this before you run anything. All repeatable work goes through the Makefile
 | `make test-docker` | the supported path: build the `test` image and run `go build ./...` + `go test ./...` inside it |
 | `make test-one RUN=TestName PKG=./backup/` | one test in the pinned Go image, no image rebuild |
 | `make test-run RUN='TestPlan' PKG=./backup/` | one test on the host |
+| `make test-race-run RUN='TestE2EProgress' PKG=.` | a subset under `-race` on the host |
 | `make e2e` | root-package end-to-end tests with `internal/fakezfs` |
 | `make scenarios` / `make scenarios-update` | golden plan scenarios, see [plan.md](plan.md) |
 | `make test-enospc` | full-disk tests on a 40 KiB tmpfs |

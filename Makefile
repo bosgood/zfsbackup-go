@@ -197,6 +197,10 @@ RUN ?= .
 test-run:
 	go test -count=1 -run '$(RUN)' -v $(PKG)
 
+# test-run under the race detector, for a subset that test-race (~20 min) is too slow for.
+test-race-run:
+	go test -race -count=1 -run '$(RUN)' -v $(PKG)
+
 # Compile every package and its tests on the host, integration files included.
 vet:
 	go vet -tags integration ./...
