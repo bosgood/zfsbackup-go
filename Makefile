@@ -49,7 +49,7 @@ INTEGRATION_AWS_COMPOSE = $(if $(INTEGRATION_AWS),-f integration/compose.aws.yam
 INTEGRATION_COMPOSE ?= -f integration/compose.yaml $(INTEGRATION_AWS_COMPOSE)
 INTEGRATION_RUN = $(if $(filter .,$(RUN)),TestIntegration(S3|File|SSH),$(RUN))
 integration-docker:
-	GO_VERSION=$(GO_VERSION) RUN='$(INTEGRATION_RUN)' docker compose $(INTEGRATION_COMPOSE) up \
+	GO_VERSION=$(GO_VERSION) RUN='$(INTEGRATION_RUN)' COVER='$(COVER)' docker compose $(INTEGRATION_COMPOSE) up \
 		--build --abort-on-container-exit --exit-code-from zfs --no-attach mc; \
 	status=$$?; docker compose $(INTEGRATION_COMPOSE) down -v; exit $$status
 
@@ -63,7 +63,7 @@ integration-vm-up:
 
 # With INTEGRATION_AWS=1 the shell gets this environment (--preserve-env), for the AWS variables.
 integration-vm: integration-vm-up
-	limactl shell $(if $(INTEGRATION_AWS),--preserve-env) '$(LIMA_VM)' -- bash -c 'cd "$(CURDIR)" && make integration-docker RUN="$(RUN)" \
+	limactl shell $(if $(INTEGRATION_AWS),--preserve-env) '$(LIMA_VM)' -- bash -c 'cd "$(CURDIR)" && make integration-docker RUN="$(RUN)" COVER="$(COVER)" \
 		INTEGRATION_COMPOSE="-f integration/compose.yaml -f integration/compose.nixos.yaml $(INTEGRATION_AWS_COMPOSE)" \
 		ZFS_USERLAND="$$(dirname "$$(readlink -f "$$(command -v zfs)")")"'
 
@@ -229,3 +229,32 @@ help:
 # shipped in the Go image (see testdata/pgp/generate.sh).
 pgp-fixtures:
 	docker run --rm -v "$(CURDIR)":/src -w /src $(GO_IMAGE) bash testdata/pgp/generate.sh
+
+# Statement coverage by package, two profiles, in the pinned image (UTC, like test-one):
+# unit = the package tests outside the root package; e2e = the root package's tests
+# (the cobra commands against internal/fakezfs and file:// or in-memory s3://). The
+# integration tests (build tag) are not included. Writes $(COVERAGE_DIR)/{unit,e2e}.out
+# and prints the table of coverage-report.sh (the README's "Test Coverage" section) to
+# $(COVERAGE_DIR)/report.md. A failing test does not stop the report: check the output.
+COVERAGE_DIR?=tmp/coverage
+coverage:
+	mkdir -p "$(GOCACHE_DIR)" "$(COVERAGE_DIR)"
+	docker run --rm -v "$(CURDIR)":/src -v "$(GOCACHE_DIR)":/root/.cache/go-build -w /src $(GO_IMAGE) sh -c '\
+		unit=$$(go list ./... | grep -v "/zfsbackup-go$$"); \
+		go test -count=1 -coverpkg=./... -coverprofile=$(COVERAGE_DIR)/unit.out $$unit; \
+		go test -count=1 -coverpkg=./... -coverprofile=$(COVERAGE_DIR)/e2e.out .'
+	sh coverage-report.sh $(COVERAGE_DIR)/unit.out $(COVERAGE_DIR)/e2e.out | tee $(COVERAGE_DIR)/report.md
+
+# The integration tests (integration-vm, real zfs, MinIO, sshd) as a third profile,
+# $(COVERAGE_DIR)/integration.out: COVER=1 builds the test binary with
+# -cover -coverpkg=./... and the entrypoint writes the profile in the VM's
+# /var/tmp/zfsbackup-it. A failing test does not stop the report; a run that
+# writes no profile (a build error, a timeout, an os.Exit) does. Run make coverage
+# first: the report has all three columns. Takes the VM for the whole run.
+coverage-integration: integration-vm-up
+	limactl shell '$(LIMA_VM)' -- sudo rm -f /var/tmp/zfsbackup-it/integration.out
+	-$(MAKE) integration-vm COVER=1
+	mkdir -p "$(COVERAGE_DIR)"
+	limactl shell '$(LIMA_VM)' -- cat /var/tmp/zfsbackup-it/integration.out > $(COVERAGE_DIR)/integration.out.tmp
+	mv $(COVERAGE_DIR)/integration.out.tmp $(COVERAGE_DIR)/integration.out
+	sh coverage-report.sh $(COVERAGE_DIR)/unit.out $(COVERAGE_DIR)/e2e.out $(COVERAGE_DIR)/integration.out | tee $(COVERAGE_DIR)/report.md

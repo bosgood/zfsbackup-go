@@ -12,6 +12,8 @@ Read this before you run anything. All repeatable work goes through the Makefile
 | `make e2e` | root-package end-to-end tests with `internal/fakezfs` |
 | `make scenarios` / `make scenarios-update` | golden plan scenarios, see [plan.md](plan.md) |
 | `make test-enospc` | full-disk tests on a 40 KiB tmpfs |
+| `make coverage` | statement coverage by package, two profiles in the pinned image: `unit` (package tests outside the root package) and `e2e` (the root package). Writes `tmp/coverage/{unit,e2e}.out` and `report.md`; `sh coverage-report.sh -f tmp/coverage/*.out` groups by file. Source of the README's "Test Coverage" table |
+| `make coverage-integration` | the integration tests (`integration-vm`, all of `TestIntegration(S3\|File\|SSH)`) as a third profile, `tmp/coverage/integration.out`: the test binary is built with `COVER=1` (`-cover -coverpkg=./...`). Run `make coverage` first; the report then has three columns. Holds the VM for the whole run |
 | `make lint` | golangci-lint v2, pinned image |
 | `make fmt-check` | `gofmt -s -l` in the pinned image. `make fmt` rewrites every tracked file with the host's gofmt. |
 | `make fmt-write FILES="a.go b.go"` | `gofmt -s -w` on those files in the pinned image. `fmt-check` sees tracked files only: check a new file after `git add`. |

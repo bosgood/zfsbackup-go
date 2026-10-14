@@ -51,6 +51,7 @@ services:
       target: integration
       args:
         GO_VERSION: "${GO_VERSION:-1.26}"
+        COVER: "${COVER:-}"
     privileged: true
     devices: ["/dev/zfs:/dev/zfs"]
     # The pool's file: the zfs module opens it by this path on the host.
@@ -70,3 +71,4 @@ services:
       ZFSBACKUP_IT_NODELETE_KEY: nodelete
       ZFSBACKUP_IT_NODELETE_SECRET: nodelete-secret
       RUN: "${RUN:-TestIntegration(S3|File|SSH)}"
+      COVER: "${COVER:-}"

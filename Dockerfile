@@ -166,9 +166,12 @@ ENV PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local GOFLAGS=-mod=vendor
 WORKDIR /src
 COPY . .
 # A compile error fails the image build, not the run. The source stays: the
-# test runs from /src.
+# test runs from /src. COVER=1 (make coverage-integration) instruments every
+# package of the module; the entrypoint then writes a cover profile.
+ARG COVER=
 RUN go vet -tags integration . \
-    && go test -c -tags integration -o /usr/local/bin/zfsbackup-integration.test .
+    && go test -c -tags integration $([ -n "$COVER" ] && echo -cover -coverpkg=./...) \
+        -o /usr/local/bin/zfsbackup-integration.test .
 # The ssh tests need these at run time; a missing one fails the build here.
 RUN command -v useradd chpasswd usermod ssh-keygen ssh-keyscan ssh-agent ssh-add /usr/sbin/sshd \
         /usr/lib/openssh/sftp-server

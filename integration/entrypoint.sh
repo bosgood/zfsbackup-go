@@ -51,8 +51,17 @@ fi
 # shellcheck source=integration/sshd.sh
 source /src/integration/sshd.sh
 
+# With COVER set the binary is instrumented (Dockerfile): the profile goes to
+# the bind-mounted directory, where make coverage-integration reads it. An old
+# profile is removed first, so a run that writes none leaves none.
+cover=()
+if [ -n "${COVER:-}" ]; then
+	rm -f /var/tmp/zfsbackup-it/integration.out
+	cover=(-test.coverprofile /var/tmp/zfsbackup-it/integration.out)
+fi
+
 # No exec: the trap must run.
 cd /src
 status=0
-zfsbackup-integration.test -test.v -test.count=1 -test.timeout 45m -test.run "${RUN:-TestIntegration(S3|File|SSH)}" || status=$?
+zfsbackup-integration.test -test.v -test.count=1 -test.timeout 45m "${cover[@]}" -test.run "${RUN:-TestIntegration(S3|File|SSH)}" || status=$?
 exit "$status"

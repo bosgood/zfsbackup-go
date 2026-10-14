@@ -2,12 +2,12 @@
 
 Rules learned the hard way. Keep this file under 15 KB, one or two lines per entry.
 Project history, review facts and defect lists go in `docs/specs/`, not here.
-Old entries: `docs/specs/2026-10-11--napkin-archive/` (`napkin-before-2026-10-11.md`, `napkin-trimmed-2026-10-14.md`).
+Old entries: `docs/specs/2026-10-11--napkin-archive/`.
 
 ## Bash tool and host
-- Call #1 of a session is `cat .claude/napkin.md` ALONE. No chain, no separator. (Broken 13 times by chaining, last 2026-10-14.)
+- Call #1 of a session is `cat .claude/napkin.md` ALONE. No chain, no separator. (Broken 14 times by chaining, last 2026-10-14.)
 - zsh does NOT word-split `$var`: `for t in "test-one X=1" vet; do make $t` passed one bad arg and ran HOST tests (2026-10-13). Write each make call out.
-- zsh expands a leading `=word`: `echo ======` aborts the whole chain (again 2026-10-14, 3rd time). Use `echo '-----'`. Quote globs too: `--include='*.go'`.
+- zsh expands a leading `=word`: `echo ======` aborts the whole chain (again 2026-10-14, 4th time). Use `echo '-----'`. Quote globs too: `--include='*.go'`.
 - `grep` here is ugrep: it ignores `--` as end of options. Use `/usr/bin/grep` or `-e PATTERN` when it matters.
 - macOS has no `timeout`. Put it inside the container command.
 - `cd dir && ...` persists across calls; parallel calls interleave. Use absolute paths or `(cd dir && ...)`.
@@ -25,6 +25,9 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/` (`napkin-before-2026-10-11
 ## Build, test, lint
 - Makefile only, also for VERIFICATION. No target? Add one. Targets: `docs/context/testing.md`. (Broke it with an ad-hoc `go vet -tags integration` 2026-10-12, and again with `go test` in a /tmp scratch copy the same day; `make vet`, `make -C /tmp/copy test-run`.)
 - `make test-run` = fast host loop. `make test-one` = Docker, ~10 s (mounts `/tmp/zfsb-gocache`). `make test-race` needs ~20 min (timeout 45m).
+- `make coverage-integration` = integration coverage (VM, `COVER=1`); the profile is root-owned in the VM's `/var/tmp/zfsbackup-it`, read back with `limactl shell ... cat`.
+- Count passed integration tests with `TestIntegration[A-Za-z0-9]+ `: without `0-9` the S3 tests do not match (I read 8 of 41 as "only 8 ran", 2026-10-14).
+- `make coverage` ~4 min; `sh coverage-report.sh tmp/coverage/*.out` alone is instant. BSD awk: no `asorti`. A `|` in a perl `s|a|b|` replacement breaks it: use python3.
 - `make fmt-check` sees TRACKED files only: a new file is not checked until `git add`. Fix with `make fmt-write FILES=...` (pinned image). Trust fmt-check, not a list.
 - `make lint` runs a pinned golangci-lint v2 image. Bump the tag on purpose; a new version adds issues.
 - `make test-docker` copies the build context in the first ~5 s; after that you can edit the tree.

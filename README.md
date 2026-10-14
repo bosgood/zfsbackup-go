@@ -6,9 +6,7 @@ DISCLAIMER: Backups are a high-sensitivity area. Never trust any backup tool wit
 
 `zfsbackup` stores ZFS snapshots on remote storage for the long term. It splits a `zfs send` stream into volumes, then optionally compresses, encrypts and signs each volume before it uploads it to one or more destinations. The ZFS stream format is committed and a future version of ZFS can receive it, as per the [man page](<https://www.freebsd.org/cgi/man.cgi?zfs(8)>). Each volume is checked with SHA256 and CRC32C checksums, on top of the integrity checks built into the compression formats, TLS, and the ZFS stream itself. Backup jobs survive network failures and can be stopped and resumed.
 
-This project was inspired by the [duplicity project](http://duplicity.nongnu.org/).
-
-This particular repo is a fork of the original at [someone1/zfsbackup-go](https://github.com/someone1/zfsbackup-go).
+This particular repo is a fork of the original at [someone1/zfsbackup-go](https://github.com/someone1/zfsbackup-go). That project was inspired by the [duplicity project](http://duplicity.nongnu.org/).
 
 ### Highlights
 
@@ -31,9 +29,6 @@ This particular repo is a fork of the original at [someone1/zfsbackup-go](https:
 
 ### Supported Backends
 
-- Google Cloud Storage (gs://)
-  - Auth details: <https://developers.google.com/identity/protocols/application-default-credentials>
-  - [99.999999999% durability](https://cloud.google.com/storage/docs/storage-classes) - Using erasure encodings
 - Amazon AWS S3 (s3://) (Glacier supported indirectly via lifecycle rules)
   - Auth details: <https://pkg.go.dev/github.com/aws/aws-sdk-go/aws/session#hdr-Environment_Variables>
   - [99.999999999% durability](https://aws.amazon.com/s3/faqs/#data-protection) - Using replication and checksums on the data for integrity validation and repair
@@ -44,13 +39,6 @@ This particular repo is a fork of the original at [someone1/zfsbackup-go](https:
   - `AWS_S3_ENABLE_DEBUG`: set to `true` to log every request and retry of the AWS SDK. The dump includes the request's `Authorization` header and any `X-Amz-Security-Token`; do not share that log.
 - Any S3 Compatible Storage Provider (e.g. Minio, StorageMadeEasy, Ceph, etc.)
   - Set the `AWS_S3_CUSTOM_ENDPOINT` environment variable to the compatible target API URI
-- Azure Blob Storage (azure://)
-  - Auth: Set the `AZURE_ACCOUNT_NAME` and `AZURE_ACCOUNT_KEY` environment variables to the appropriate values or if using SAS set `AZURE_SAS_URI` to a container authorized SAS URI
-  - Point to a custom endpoint by setting the `AZURE_CUSTOM_ENDPOINT` environment variable
-  - Although no durability target is provided, there is an in-depth explanation of their architecture [here](http://sigops.org/sosp/sosp11/current/2011-Cascais/printable/11-calder.pdf) - Using the Reed-Solomon erasure encoding and user-configurable redundancy settings
-- BackBlaze B2 (b2://)
-  - Auth: Set the `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY` environment variables to the appropriate values
-  - [99.999999999% durability](https://help.backblaze.com/hc/en-us/articles/218485257-B2-Resiliency-Durability-and-Availability) - Using the Reed-Solomon erasure encoding
 - Local file path (file://[relative|/absolute]/local/path)
 - SSH/SFTP (ssh://)
   - Auth: username & password, public key or ssh-agent.
@@ -58,6 +46,19 @@ This particular repo is a fork of the original at [someone1/zfsbackup-go](https:
   - For public key auth set the `SSH_KEY_FILE` environment variable. By default zfsbackup tries `id_rsa`, `id_ecdsa`, `id_ecdsa_sk`, `id_ed25519`, `id_ed25519_sk` and `id_dsa` in the user's `~/.ssh` directory.
   - ssh-agent auth is activated when `SSH_AUTH_SOCK` exists.
   - By default zfsbackup also uses the known hosts file from the user's home directory. To disable host key checking set `SSH_KNOWN_HOSTS` to `ignore`. You can also specify the path to your own known hosts file.
+
+#### Backends with less thorough testing
+
+- Google Cloud Storage (gs://) (_poor test coverage_)
+  - Auth details: <https://developers.google.com/identity/protocols/application-default-credentials>
+  - [99.999999999% durability](https://cloud.google.com/storage/docs/storage-classes) - Using erasure encodings
+- Azure Blob Storage (azure://) (_poor test coverage_)
+  - Auth: Set the `AZURE_ACCOUNT_NAME` and `AZURE_ACCOUNT_KEY` environment variables to the appropriate values or if using SAS set `AZURE_SAS_URI` to a container authorized SAS URI
+  - Point to a custom endpoint by setting the `AZURE_CUSTOM_ENDPOINT` environment variable
+  - Although no durability target is provided, there is an in-depth explanation of their architecture [here](http://sigops.org/sosp/sosp11/current/2011-Cascais/printable/11-calder.pdf) - Using the Reed-Solomon erasure encoding and user-configurable redundancy settings
+- BackBlaze B2 (b2://) (_poor test coverage_)
+  - Auth: Set the `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY` environment variables to the appropriate values
+  - [99.999999999% durability](https://help.backblaze.com/hc/en-us/articles/218485257-B2-Resiliency-Durability-and-Availability) - Using the Reed-Solomon erasure encoding
 
 ### Compression
 
@@ -208,8 +209,8 @@ Incremental restore example:
 `clean` deletes backup volumes at a destination that no manifest there lists, such as the volumes of a `send` that was interrupted and never resumed. It never deletes manifests or objects it cannot parse as a backup volume, refuses a destination that has objects but no manifests under `--manifestPrefix`, and leaves alone any dataset a `send` on this host is working on. Run it with `-n`/`--dry-run` first to see what it would delete:
 
 ```bash
-./zfsbackup clean --dry-run gs://backup-bucket-target
-./zfsbackup clean gs://backup-bucket-target
+./zfsbackup clean --dry-run s3://backup-bucket-target
+./zfsbackup clean s3://backup-bucket-target
 ```
 
 - `--force` also deletes broken backup sets at the destination, manifest included, when volumes the manifest lists are missing.
@@ -217,13 +218,13 @@ Incremental restore example:
 
 ### Exit codes
 
-| Code | Meaning |
-|---|---|
-| `0` | success, or a smart `send` or `plan` found nothing new to back up |
-| `2` | `plan` checks failed, or the last backup at the destination is newer than the pool |
-| `1` | any other `plan` error |
-| `130`, `143` | stopped by SIGINT or SIGTERM |
-| `255` | any other error |
+| Code         | Meaning                                                                            |
+| ------------ | ---------------------------------------------------------------------------------- |
+| `0`          | success, or a smart `send` or `plan` found nothing new to back up                  |
+| `2`          | `plan` checks failed, or the last backup at the destination is newer than the pool |
+| `1`          | any other `plan` error                                                             |
+| `130`, `143` | stopped by SIGINT or SIGTERM                                                       |
+| `255`        | any other error                                                                    |
 
 ### Stopping a run
 
@@ -520,3 +521,44 @@ Global Flags:
       --workingDirectory string    the working directory path for zfsbackup. (default "~/.zfsbackup")
       --zfsPath string             the path to the zfs executable. (default "zfs")
 ```
+
+## Test Coverage
+
+Statement coverage by package, from `make coverage` and `make coverage-integration` on 2026-10-14 (branch `clean-dry-run`). The targets run `go test -coverpkg=./...` three times and print this table with `coverage-report.sh`; rerun them to refresh the numbers.
+
+- **Unit** is the package tests outside the root package: no real `zfs`, no network, `file://` where a destination is needed.
+- **End to end** is the root package's tests (`e2e_*_test.go` and friends): every command runs through cobra with `internal/fakezfs` standing in for `zfs` and a `file://` or in-memory `s3://` destination.
+- **Integration** is the 41 `TestIntegration(S3|File|SSH)` tests (build tag `integration`) in the Lima VM: real `zfs`, MinIO for `s3://`, an sshd for `ssh://`, a ZFS dataset for `file://`. See [docs/context/testing.md](docs/context/testing.md).
+
+Each column counts one set of tests alone. A statement that any set runs is tested; the columns do not add up.
+
+| Domain                                            | Package            | Statements |      Unit | End to end | Integration |
+| ------------------------------------------------- | ------------------ | ---------: | --------: | ---------: | ----------: |
+| Commands, flags, exit codes                       | `cmd`              |        652 |     45.4% |      72.2% |       68.1% |
+| Orchestration of send, receive, list, clean, plan | `backup`           |       3128 |     60.9% |      80.6% |       70.9% |
+| Data model: manifests, volume writer layers       | `files`            |        516 |     82.0% |      80.2% |       80.6% |
+| Storage backends (see below)                      | `backends`         |        839 |     61.9% |      36.4% |       47.7% |
+| Running the `zfs` binary                          | `zfs`              |        268 |     63.4% |      85.1% |       63.4% |
+| PGP keyrings                                      | `pgp`              |         68 |     72.1% |      77.9% |       77.9% |
+| Globals                                           | `config`           |          8 |      0.0% |      75.0% |        0.0% |
+| Logger                                            | `log`              |          0 |       n/a |        n/a |         n/a |
+| Fake `zfs` for the e2e tests                      | `internal/fakezfs` |        394 |     66.0% |      80.7% |        0.5% |
+| `main`                                            | root               |          3 |      0.0% |     100.0% |        0.0% |
+| **All**                                           |                    |   **5876** | **61.6%** |  **73.5%** |   **63.0%** |
+
+The `log` package only declares the logger, so it has no statements to count. The integration tests use the real `zfs`, so they barely touch `internal/fakezfs`.
+
+Backends by file (`sh coverage-report.sh -f tmp/coverage/unit.out tmp/coverage/e2e.out tmp/coverage/integration.out`):
+
+| Backend                         | File                      | Statements |   Unit | End to end | Integration |
+| ------------------------------- | ------------------------- | ---------: | -----: | ---------: | ----------: |
+| Interface, URI parsing, retries | `backends.go`             |         98 |  94.9% |      76.5% |       78.6% |
+| `s3://`                         | `aws_s3_backend.go`       |        288 |  87.2% |      62.8% |       52.4% |
+| `ssh://`                        | `ssh_backend.go`          |        147 |  80.3% |       0.0% |       84.4% |
+| `file://`                       | `file_backend.go`         |         55 |  81.8% |      78.2% |       76.4% |
+| `delete://`                     | `delete_backend.go`       |         12 | 100.0% |      50.0% |       50.0% |
+| `gs://`                         | `gcs_backend.go`          |         61 |   0.0% |       0.0% |        0.0% |
+| `azure://`                      | `azure_backend.go`        |        109 |   0.0% |       0.0% |        0.0% |
+| `b2://`                         | `backblaze_b2_backend.go` |         69 |   0.0% |       0.0% |        0.0% |
+
+The ssh backend's end-to-end number is zero because no end-to-end test has an sshd; the integration tests reach a real one. The `gs://`, `azure://` and `b2://` backends have no automated test outside `TestIntegration` (Azure, needs Azurite and `tank/data@c`, not in the run above).
