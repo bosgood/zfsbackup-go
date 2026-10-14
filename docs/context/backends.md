@@ -34,6 +34,15 @@ Close() error
 | `file://` | `file_backend.go` | used by all e2e and clean tests; a failed copy removes the cut file. Real-zfs tests: `integration_file*_test.go` (a dataset destination, `refquota`, `readonly=on`) |
 | `delete://` | `delete_backend.go` | last link of the send chain; removes temp files (`e2e_delete_backend_test.go`) |
 
+## Progress wrapper (`backends/progress.go`)
+
+A `Progress` counts the bytes of one transfer and logs each whole percent once, at Notice (`<label>: 37% (12 GiB of an estimated 32 GiB), 48 MiB/s, about 7m left`). 0% never prints; a retry that lowers the count never prints a lower line.
+
+- `NewUploadProgress(label, estimate, resumed)`: raw zfs stream bytes against the `zfs send -n -P` estimate. A volume in flight counts `read / Size × ZFSStreamBytes` (through `VolumeInfo.SetReadHook`); a pipe volume counts nothing until its upload returns. Resumed volumes count as done from the start. It caps at 99 until the final manifest's upload returns (`Complete`), which prints 100. Estimate 0: no lines, one Debug line.
+- `NewDownloadProgress(label, volumes)`: stored bytes against the sum of the manifest's volume `Size`s. Only those names count (not manifests). A volume in flight counts `min(read, Size)`. 100 falls out when the last volume is read whole.
+- Rate: stored bytes on the wire this run, divided by the time since the tracker started (a cumulative average). Time left: the remaining progress units divided by this run's progress-unit rate (raw bytes for send, so compression and resumed volumes do not skew it). Both only from 2 s on; the 100% line has the rate and `took`.
+- `WithUploadProgress` and `WithDownloadProgress` hide `Sizer`, `Archiver` and `LegacyVolumeFinder`; hand them to the data path only (`retryUploadChainer`, `downloadSequenceVolume`).
+
 ## Rules for a backend
 
 - Upload must be retry-safe. The send pipeline retries with exponential backoff.

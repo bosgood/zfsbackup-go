@@ -33,6 +33,8 @@ bytes → compressor (gzip internal | external cmd | none)
 
 The manifest always uses internal gzip. Hashes are of the stored bytes, after compress and pgp.
 
+`SetReadHook(fn)`: every later `Read` that returns bytes calls `fn(n)` (after the rate limiter, so it counts what left the process). The upload progress wrapper (`backends/progress.go`) sets it for one `Upload` call and clears it with `nil`. No lock: one destination reads a volume at a time.
+
 ## Object names
 
 ```

@@ -51,6 +51,7 @@ All stages are goroutines in one `errgroup`. Any failure cancels `ctx`. No final
 
 - `zfs send` stdout → `sendStream`: SHA-256 of the whole stream (for resume), cut at `volsize − 50 KiB` with `CreateBackupVolume`. Stderr of a `zfs send` that exits 0 is logged at Warning (`-R -s` reports skipped children there); on a non-zero exit it is in the error.
 - Forwarder → `retryUploadChainer` per destination. **Chain, not fan-out**: dest 2 gets a volume after dest 1 uploads it. `MaxParallelUploads` workers, exponential backoff.
+- Each real destination's chainer uploads through `backends.WithUploadProgress` (see [backends.md](backends.md)); the estimate comes from `checkManifestFits`. `dests` keeps the raw backend. Not the `delete://` link.
 - `delete://` backend is the last link. It removes the temp file when every real destination has the volume. Only when `--maxFileBuffer > 0`.
 - Finisher appends to `jobInfo.Volumes`, saves a partial manifest to the local cache, releases a `fileBuffer` token. Each save encodes the WHOLE manifest, so the cost per volume grows with the volume count.
 - The final manifest goes through the same chain last. A set is complete only when its manifest is at the destination.
