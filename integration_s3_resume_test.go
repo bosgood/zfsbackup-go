@@ -13,7 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/service/s3"
 
-	"github.com/someone1/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/cmd"
 )
 
 // flakyZFS writes a zfs wrapper for --zfsPath and returns its path and a func

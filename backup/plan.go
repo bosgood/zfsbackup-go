@@ -27,8 +27,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/log"
 )
 
 // PlanAction is what a smart backup run does.

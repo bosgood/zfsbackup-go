@@ -36,14 +36,14 @@ import (
 
 	"github.com/op/go-logging"
 
-	"github.com/someone1/zfsbackup-go/backup"
-	"github.com/someone1/zfsbackup-go/cmd"
-	"github.com/someone1/zfsbackup-go/config"
-	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/internal/fakezfs"
-	"github.com/someone1/zfsbackup-go/log"
-	"github.com/someone1/zfsbackup-go/pgp"
-	"github.com/someone1/zfsbackup-go/zfs"
+	"github.com/bosgood/zfsbackup-go/backup"
+	"github.com/bosgood/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/internal/fakezfs"
+	"github.com/bosgood/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/pgp"
+	"github.com/bosgood/zfsbackup-go/zfs"
 )
 
 // The end-to-end tests run the real send pipeline against a file://

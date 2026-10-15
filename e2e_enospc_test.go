@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // enospcWork is a working directory whose temp/ is a tiny tmpfs; `make test-enospc` provides it.

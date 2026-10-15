@@ -29,7 +29,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/someone1/zfsbackup-go/backup"
+	"github.com/bosgood/zfsbackup-go/backup"
 )
 
 func TestExitCode(t *testing.T) {

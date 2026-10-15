@@ -35,8 +35,8 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 
-	"github.com/someone1/zfsbackup-go/config"
-	"github.com/someone1/zfsbackup-go/pgp"
+	"github.com/bosgood/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/pgp"
 )
 
 // failingWriter accepts n bytes, then fails every write.

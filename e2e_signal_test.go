@@ -30,8 +30,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/cmd"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // TestE2ESendSIGTERMStopsCleanly: a SIGTERM mid-send stops the pipeline, releases the lock,

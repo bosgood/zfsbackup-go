@@ -29,12 +29,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/someone1/zfsbackup-go/backends"
-	"github.com/someone1/zfsbackup-go/backup"
-	"github.com/someone1/zfsbackup-go/config"
-	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/log"
-	"github.com/someone1/zfsbackup-go/zfs"
+	"github.com/bosgood/zfsbackup-go/backends"
+	"github.com/bosgood/zfsbackup-go/backup"
+	"github.com/bosgood/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/zfs"
 )
 
 var (

@@ -37,8 +37,8 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 
-	"github.com/someone1/zfsbackup-go/config"
-	"github.com/someone1/zfsbackup-go/pgp"
+	"github.com/bosgood/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/pgp"
 )
 
 // newTestKey returns a new RSA key for email. Keys from NewEntity need SHA256 as their preferred

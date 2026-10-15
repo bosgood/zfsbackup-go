@@ -30,7 +30,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 	humanize "github.com/dustin/go-humanize"
 
-	"github.com/someone1/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/log"
 )
 
 // disallowedSeps matches a separator that is built only from characters ZFS

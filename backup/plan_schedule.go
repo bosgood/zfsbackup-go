@@ -28,8 +28,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/zfs"
+	"github.com/bosgood/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/zfs"
 )
 
 // sanoidPeriods lists the periods sanoid snapshots, longest first, with the

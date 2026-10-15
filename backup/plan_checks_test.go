@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // simulate builds a Simulation from hand-written steps, recording their

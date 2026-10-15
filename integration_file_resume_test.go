@@ -9,8 +9,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/cmd"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // localDest is a file:// or ssh:// destination whose files the test can see:

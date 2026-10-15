@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // Regression tests for the findings 3, 4, 14 and 20 of the 2026-10-12 adversarial review

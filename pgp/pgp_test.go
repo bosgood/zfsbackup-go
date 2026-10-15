@@ -3,7 +3,7 @@ package pgp_test
 import (
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/pgp"
+	"github.com/bosgood/zfsbackup-go/pgp"
 )
 
 const (

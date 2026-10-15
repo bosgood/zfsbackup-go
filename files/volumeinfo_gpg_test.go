@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/config"
 )
 
 // gpgFixtures are the testdata/pgp prefixes the gpg tests run over; neither

@@ -47,9 +47,9 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/someone1/zfsbackup-go/backup"
-	"github.com/someone1/zfsbackup-go/cmd"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/backup"
+	"github.com/bosgood/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // TestIntegrationS3 runs real zfs against the real s3:// backend: sanoid-style

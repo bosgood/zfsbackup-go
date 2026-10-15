@@ -47,8 +47,8 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3manager/s3manageriface"
 	"github.com/dustin/go-humanize"
 
-	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/log"
 )
 
 const (

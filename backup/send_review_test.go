@@ -15,8 +15,8 @@ import (
 
 	"github.com/nightlyone/lockfile"
 
-	"github.com/someone1/zfsbackup-go/config"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // lockHeldBy writes the lock of tank/data as held by pid, with a boot file that names bootPid and

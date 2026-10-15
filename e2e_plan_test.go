@@ -29,8 +29,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/backup"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/backup"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // A capture without creation times (the JSON form the runbook promotes) dates

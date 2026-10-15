@@ -39,11 +39,11 @@ import (
 
 	"github.com/op/go-logging"
 
-	"github.com/someone1/zfsbackup-go/backup"
-	"github.com/someone1/zfsbackup-go/cmd"
-	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/internal/fakezfs"
-	"github.com/someone1/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/backup"
+	"github.com/bosgood/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/internal/fakezfs"
+	"github.com/bosgood/zfsbackup-go/log"
 )
 
 // The failure-path tests: a send whose uploads or zfs stream fail must exit, and a

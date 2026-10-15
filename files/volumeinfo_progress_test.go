@@ -26,7 +26,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/config"
 )
 
 // The read hook sees every byte a reader takes from the volume, and nil clears it.

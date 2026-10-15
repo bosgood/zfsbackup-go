@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/cmd"
 )
 
 // TestIntegrationS3CleanMany runs clean on 1100 orphans: more than one listing

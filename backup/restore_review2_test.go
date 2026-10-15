@@ -31,8 +31,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/zfs"
+	"github.com/bosgood/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/zfs"
 )
 
 // pipeSequence returns a sequence of one 4 MiB volume, larger than the volume's write buffer:

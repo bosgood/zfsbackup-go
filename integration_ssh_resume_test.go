@@ -8,7 +8,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/cmd"
 )
 
 // TestIntegrationSSHResume is TestIntegrationFileResume over sftp, where

@@ -27,7 +27,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/someone1/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/log"
 )
 
 var (

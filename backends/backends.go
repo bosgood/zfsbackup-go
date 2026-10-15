@@ -29,8 +29,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/log"
 )
 
 // Backend is an interface type that defines the functions and functionality required for different backend implementations.

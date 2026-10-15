@@ -31,7 +31,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/op/go-logging"
 
-	"github.com/someone1/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/log"
 )
 
 func TestRestoreDays(t *testing.T) {

@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // receive --auto matches a local snapshot by name and creation time. When only the name matches

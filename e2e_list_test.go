@@ -25,8 +25,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/cmd"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // list runs `zfsbackup list` in-process and returns what it printed and logged.

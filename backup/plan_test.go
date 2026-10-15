@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 var update = flag.Bool("update", false, "rewrite expected.txt for every scenario")

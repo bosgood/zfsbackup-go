@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/backup"
+	"github.com/bosgood/zfsbackup-go/backup"
 )
 
 // newSSHDest makes a destination on a new dataset <pool>/<name>, reached as

@@ -29,7 +29,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // A manifest download stops past files.MaxManifestBytes and leaves nothing behind: whoever can

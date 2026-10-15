@@ -30,11 +30,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/backends"
-	"github.com/someone1/zfsbackup-go/config"
-	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/log"
-	"github.com/someone1/zfsbackup-go/zfs"
+	"github.com/bosgood/zfsbackup-go/backends"
+	"github.com/bosgood/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/zfs"
 )
 
 // joinURI appends an object name to a destination URI for display purposes, and

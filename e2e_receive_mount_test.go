@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // A stream sent with --properties carries the source's mountpoint. A receive of it into

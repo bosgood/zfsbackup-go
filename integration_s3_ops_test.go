@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // TestIntegrationS3ListClean runs list with its filters, and clean against a

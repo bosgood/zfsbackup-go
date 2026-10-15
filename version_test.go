@@ -28,7 +28,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/config"
 )
 
 func TestVersion(t *testing.T) {

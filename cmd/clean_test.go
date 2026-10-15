@@ -28,7 +28,7 @@ import (
 
 	"github.com/op/go-logging"
 
-	"github.com/someone1/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/log"
 )
 
 // clean takes one destination: a comma-separated list used to parse as several

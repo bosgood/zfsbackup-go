@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // Completing a partial set downloads its manifest from a destination that has it. A lifecycle

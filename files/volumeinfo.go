@@ -48,9 +48,9 @@ import (
 	gzip "github.com/klauspost/pgzip"
 	"github.com/miolini/datacounter"
 
-	"github.com/someone1/zfsbackup-go/config"
-	"github.com/someone1/zfsbackup-go/log"
-	"github.com/someone1/zfsbackup-go/pgp"
+	"github.com/bosgood/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/pgp"
 )
 
 var (

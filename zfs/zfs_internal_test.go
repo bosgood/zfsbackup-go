@@ -25,7 +25,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 func TestParseSendSizeEstimate(t *testing.T) {

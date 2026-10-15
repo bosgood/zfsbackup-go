@@ -38,8 +38,8 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 
-	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/internal/fakezfs"
+	"github.com/bosgood/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/internal/fakezfs"
 )
 
 // newKey returns a new RSA key for backup@example.com. Keys from NewEntity need SHA256 as their

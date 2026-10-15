@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // stderrZFS writes a bash wrapper for --zfsPath: a real `zfs send` (not -n) first prints a

@@ -33,9 +33,9 @@ import (
 	"github.com/cenkalti/backoff"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/someone1/zfsbackup-go/backends"
-	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/backends"
+	"github.com/bosgood/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/log"
 )
 
 // parseBackupVolume returns the dataset of a backup volume object name written with any of

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // multipartFake is a path-style S3 that starts a multipart upload and counts the aborts.

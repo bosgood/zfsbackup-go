@@ -30,8 +30,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/backup"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/backup"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // Re-sending a backup set that already exists must never overwrite it: volume boundaries

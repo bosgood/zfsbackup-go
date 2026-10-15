@@ -25,8 +25,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/config"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // discardPartialManifests syncs the cache dir after removing a manifest: a crash before that

@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // A --resume to dest1,dest2 must not trust dest2's volumes on dest1's word. Attempt A sends the

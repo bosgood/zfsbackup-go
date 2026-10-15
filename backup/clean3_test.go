@@ -26,7 +26,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // cleanTestSet stores a one-volume backup set of dataset@snapshot under manifestPrefix at the

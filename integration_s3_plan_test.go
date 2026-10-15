@@ -29,7 +29,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/cmd"
 )
 
 // TestIntegrationS3Plan runs plan against the real pool and S3 before each

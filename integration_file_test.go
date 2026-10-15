@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/backup"
+	"github.com/bosgood/zfsbackup-go/backup"
 )
 
 // TestIntegrationFile runs real zfs against the file:// backend, into a

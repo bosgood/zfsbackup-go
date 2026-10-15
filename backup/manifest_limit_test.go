@@ -32,8 +32,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/config"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // setManifestLimit lowers files.MaxManifestBytes for the test and restores it after. The limit is a package

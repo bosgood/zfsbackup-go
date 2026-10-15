@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // An explicit receive names a backup set with its flags: -i <source> for an incremental, none

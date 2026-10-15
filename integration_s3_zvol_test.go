@@ -35,7 +35,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/cmd"
 )
 
 // zvolDevice returns a block device node for the zvol made by create: the

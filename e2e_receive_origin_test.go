@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // An explicit receive of an incremental with --origin clones the origin snapshot of another

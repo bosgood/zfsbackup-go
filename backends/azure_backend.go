@@ -37,8 +37,8 @@ import (
 	"github.com/Azure/azure-storage-blob-go/azblob"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/log"
 )
 
 // AzureBackendPrefix is the URI prefix used for the AzureBackend.

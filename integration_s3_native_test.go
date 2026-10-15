@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/cmd"
 )
 
 // TestIntegrationS3NativeEncryption backs up a dataset under a ZFS native

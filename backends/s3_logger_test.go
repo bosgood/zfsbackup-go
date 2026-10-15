@@ -28,7 +28,7 @@ import (
 
 	"github.com/op/go-logging"
 
-	"github.com/someone1/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/log"
 )
 
 // The AWS_S3_ENABLE_DEBUG logger prints the SDK's arguments, with no "%!(EXTRA ...)" suffix.

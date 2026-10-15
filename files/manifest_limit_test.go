@@ -33,7 +33,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/config"
 )
 
 // realisticJob is a JobInfo of a full send of tank/data with n volumes of realistic field values:

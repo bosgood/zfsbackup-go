@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/backup"
-	"github.com/someone1/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/backup"
+	"github.com/bosgood/zfsbackup-go/cmd"
 )
 
 // TestIntegrationS3Rollover lets the --fullIfOlderThan window elapse for real:

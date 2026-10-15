@@ -26,7 +26,7 @@ import (
 	"os/exec"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // TestReceiveStreamReportsExtractError makes sure a volume that cannot be

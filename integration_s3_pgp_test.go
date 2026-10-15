@@ -18,8 +18,8 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"github.com/aws/aws-sdk-go/service/s3"
 
-	"github.com/someone1/zfsbackup-go/cmd"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // pgpFixture is one keyring pair in testdata/pgp, as GnuPG exported it. Its

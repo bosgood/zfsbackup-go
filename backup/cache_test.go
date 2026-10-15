@@ -29,9 +29,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/backends"
-	"github.com/someone1/zfsbackup-go/config"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/backends"
+	"github.com/bosgood/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // cacheBackend serves objects for download; the first failures downloads of each break off

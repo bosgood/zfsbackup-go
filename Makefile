@@ -185,10 +185,10 @@ fixture-old: build-rev
 		sh testdata/manifests/make-fixture.sh 'tmp/zfsbackup-$(REV_NAME)' "testdata/manifests/$(REV_NAME)-$$(git rev-parse --short '$(REV)')"
 
 build:
-	${GOPATH}/bin/gox -ldflags="-w -s -X github.com/someone1/zfsbackup-go/config.GitCommit=${COMMIT_HASH}" -osarch=${TARGETS}
+	${GOPATH}/bin/gox -ldflags="-w -s -X github.com/bosgood/zfsbackup-go/config.GitCommit=${COMMIT_HASH}" -osarch=${TARGETS}
 
 build-dev:
-	${GOPATH}/bin/gox -ldflags="-X github.com/someone1/zfsbackup-go/config.GitCommit=${COMMIT_HASH}" -osarch=${TARGETS} -output="{{.Dir}}_{{.OS}}_{{.Arch}}-${COMMIT_HASH}"
+	${GOPATH}/bin/gox -ldflags="-X github.com/bosgood/zfsbackup-go/config.GitCommit=${COMMIT_HASH}" -osarch=${TARGETS} -output="{{.Dir}}_{{.OS}}_{{.Arch}}-${COMMIT_HASH}"
 
 # Run a subset of the tests on the host, e.g.
 #   make test-run PKG=./backup/ RUN='TestPlan|TestSchedule'

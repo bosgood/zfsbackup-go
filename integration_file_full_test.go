@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/cmd"
 )
 
 // TestIntegrationFileFull sends to a file:// dataset that fills up (refquota)

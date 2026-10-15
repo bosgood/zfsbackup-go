@@ -29,8 +29,8 @@ import (
 
 	"github.com/dustin/go-humanize"
 
-	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/log"
 )
 
 // paceAfter is how long a tracker runs before its lines carry a rate and the time left: a rate

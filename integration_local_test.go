@@ -20,9 +20,9 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/someone1/zfsbackup-go/cmd"
-	"github.com/someone1/zfsbackup-go/config"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // Helpers of the file:// and ssh:// integration tests. integration/sshd.sh

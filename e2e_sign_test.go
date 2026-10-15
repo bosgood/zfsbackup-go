@@ -30,8 +30,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/config"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // With --encryptTo and --signFrom, a manifest encrypted to the public key but not signed must be

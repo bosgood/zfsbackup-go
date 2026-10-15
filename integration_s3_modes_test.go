@@ -32,7 +32,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/backup"
+	"github.com/bosgood/zfsbackup-go/backup"
 )
 
 // plainSend are the send flags of these tests: several 1 MiB volumes of

@@ -94,7 +94,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/someone1/zfsbackup-go
+        - github.com/bosgood/zfsbackup-go
   exclusions:
     generated: lax
     paths:

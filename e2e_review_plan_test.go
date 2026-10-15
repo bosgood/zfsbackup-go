@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/backup"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/backup"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // End-to-end regression tests for the findings 3, 4 and 14 of the 2026-10-12 adversarial

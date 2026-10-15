@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // TestVerifiedVolumesCacheGap: parallel uploads that failed leave a gap in the cached partial

@@ -8,7 +8,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 
-	"github.com/someone1/zfsbackup-go/pgp"
+	"github.com/bosgood/zfsbackup-go/pgp"
 )
 
 func TestExpiriesNoneForFixtures(t *testing.T) {

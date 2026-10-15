@@ -31,9 +31,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/internal/fakezfs"
-	"github.com/someone1/zfsbackup-go/zfs"
+	"github.com/bosgood/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/internal/fakezfs"
+	"github.com/bosgood/zfsbackup-go/zfs"
 )
 
 // TestMain lets the test binary stand in for zfs: with FAKEZFS=1 it runs the

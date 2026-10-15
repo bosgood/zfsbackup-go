@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/backup"
+	"github.com/bosgood/zfsbackup-go/backup"
 )
 
 // TestIntegrationS3ProdShape runs the production flags on a dataset named

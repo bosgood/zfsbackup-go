@@ -27,7 +27,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // A manifest encrypted to a key this run lacks is most likely a backup of the user's written with

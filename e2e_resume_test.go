@@ -31,8 +31,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/backup"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/backup"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // dropVolumesFrom deletes the volumes numbered from and up at dir, as if the interrupted attempt

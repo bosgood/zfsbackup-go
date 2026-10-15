@@ -49,7 +49,7 @@
   ldflags = [
     "-w"
     "-s"
-    "-X github.com/someone1/zfsbackup-go/config.GitCommit=${rev}"
+    "-X github.com/bosgood/zfsbackup-go/config.GitCommit=${rev}"
   ];
 
   # Integration tests need a real ZFS pool and root.

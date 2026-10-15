@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/cmd"
 )
 
 // TestIntegrationS3ManifestPrefix runs two jobs with their own --manifestPrefix

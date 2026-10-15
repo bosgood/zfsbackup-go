@@ -8,8 +8,8 @@ import (
 
 	"github.com/dustin/go-humanize"
 
-	"github.com/someone1/zfsbackup-go/cmd"
-	"github.com/someone1/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/cmd"
+	"github.com/bosgood/zfsbackup-go/config"
 )
 
 // TestIntegrationFileProgress checks the progress lines against real zfs, whose `zfs send -n -P`

@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // A send whose manifest would be longer than files.MaxManifestBytes fails, says to use a larger

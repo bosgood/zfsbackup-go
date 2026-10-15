@@ -35,8 +35,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
-	"github.com/someone1/zfsbackup-go/internal/fakezfs"
+	"github.com/bosgood/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/internal/fakezfs"
 )
 
 // A volume object replaced by one far larger than its signed manifest records is rejected once

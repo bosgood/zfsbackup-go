@@ -29,7 +29,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // r2Tree puts tank/data and tank/data/home, each with the snapshots a, b and c, on the pool, and

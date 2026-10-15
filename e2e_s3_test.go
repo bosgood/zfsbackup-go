@@ -29,7 +29,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // coldS3Set sends a 3-volume set to env.dest and mirrors it into a fake S3

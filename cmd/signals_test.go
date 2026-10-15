@@ -32,7 +32,7 @@ import (
 
 	"github.com/op/go-logging"
 
-	"github.com/someone1/zfsbackup-go/log"
+	"github.com/bosgood/zfsbackup-go/log"
 )
 
 // These tests send real signals to the test process. It survives only because SignalContext

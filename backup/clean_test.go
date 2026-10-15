@@ -31,8 +31,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/config"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // writeTestManifest stores a manifest for j at the file:// destination dir, as send would.

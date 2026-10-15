@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // receiveTargets are the ways to name restored/data as the target of a receive of tank/data:

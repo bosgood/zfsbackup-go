@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // autosnap returns the snapshot sanoid takes for period at t (UTC names).

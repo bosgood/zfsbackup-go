@@ -33,7 +33,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // R1: with -F, a target whose snapshots could not be listed for a reason other than "does not

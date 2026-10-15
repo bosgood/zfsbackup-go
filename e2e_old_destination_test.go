@@ -28,7 +28,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/someone1/zfsbackup-go/backup"
+	"github.com/bosgood/zfsbackup-go/backup"
 )
 
 // oldDestination is a destination written by master (b733e96): a full of tank/data@a and an

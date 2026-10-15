@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/backup"
+	"github.com/bosgood/zfsbackup-go/backup"
 )
 
 // TestIntegrationS3CleanLocal runs clean against the cached partial manifest

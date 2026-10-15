@@ -33,7 +33,7 @@ const (
 )
 
 // GitCommit is the git SHA the binary was built from. It may be set at build
-// time via -ldflags "-X github.com/someone1/zfsbackup-go/config.GitCommit=...".
+// time via -ldflags "-X github.com/bosgood/zfsbackup-go/config.GitCommit=...".
 // When unset, GitCommitSHA falls back to the VCS info embedded by `go build`.
 var GitCommit string
 

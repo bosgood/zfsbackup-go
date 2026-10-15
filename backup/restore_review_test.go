@@ -26,8 +26,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/someone1/zfsbackup-go/config"
-	"github.com/someone1/zfsbackup-go/files"
+	"github.com/bosgood/zfsbackup-go/config"
+	"github.com/bosgood/zfsbackup-go/files"
 )
 
 // Finding 19: a local temp-file failure (full disk, no temp dir) is permanent. It was retried
