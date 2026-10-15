@@ -15,14 +15,18 @@ import (
 	"github.com/bosgood/zfsbackup-go/files"
 )
 
-// stderrZFS writes a bash wrapper for --zfsPath: a real `zfs send` (not -n) first prints a
+// stderrZFS writes a sh wrapper for --zfsPath: a real `zfs send` (not -n) first prints a
 // warning on stderr, as -R -s does for a child without the snapshot, then runs the fake, which
-// exits 0. Every other call goes to the fake.
+// exits 0. Every other call goes to the fake. It is POSIX sh, not bash: the Nix build sandbox
+// has /bin/sh but no /bin/bash.
 func stderrZFS(t *testing.T, env *e2eEnv) string {
 	t.Helper()
-	script := fmt.Sprintf(`#!/bin/bash
-if [ "$1" = send ] && [[ " $* " != *" -n "* ]]; then
-    echo "WARNING: could not send tank/data/child@a: does not exist" >&2
+	script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = send ]; then
+    case " $* " in
+    *" -n "*) ;;
+    *) echo "WARNING: could not send tank/data/child@a: does not exist" >&2 ;;
+    esac
 fi
 exec %q "$@"
 `, env.self)
