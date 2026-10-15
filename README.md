@@ -20,6 +20,16 @@ This particular repo is a fork of the original at [someone1/zfsbackup-go](https:
 - Uses familiar ZFS send/receive options
 - `plan` and `send --dry-run` show what a run would do before it writes anything
 
+#### Changes from [someone1/zfsbackup-go](https://github.com/someone1/zfsbackup-go)
+
+- `plan` subcommand - basically a `send --dry-run` but used internally for better unit testing
+- `clean --dry-run` flag
+- Docker unit test environment
+- Integration test environment (using limactl)
+- Devcontainer support
+- Agentic dev support - Claude skills for code maintenance and review
+- GPG Ed25519 support
+
 ### Documentation
 
 - [Runbook: the first monthly-only offsite backup](docs/runbook-first-backup.md) - keys, planning, the first run, scheduling, and signing-key rotation
@@ -84,7 +94,7 @@ cd zfsbackup-go
 go build -o zfsbackup .
 ```
 
-The module path is still the upstream `github.com/someone1/zfsbackup-go`, so `go install github.com/bosgood/zfsbackup-go@latest` does not work. `make build` cross-compiles for several platforms with [gox](https://github.com/mitchellh/gox), which must be in `$GOPATH/bin`.
+Or install it with `go install github.com/bosgood/zfsbackup-go@latest`. `make build` cross-compiles for several platforms with [gox](https://github.com/mitchellh/gox), which must be in `$GOPATH/bin`.
 
 ## Usage
 

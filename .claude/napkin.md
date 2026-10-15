@@ -5,7 +5,7 @@ Project history, review facts and defect lists go in `docs/specs/`, not here.
 Old entries: `docs/specs/2026-10-11--napkin-archive/`.
 
 ## Bash tool and host
-- Call #1 of a session is `cat .claude/napkin.md` ALONE. No chain, no separator. (Broken 14 times by chaining, last 2026-10-14.)
+- Call #1 of a session is `cat .claude/napkin.md` ALONE. No chain, no separator. (Broken 15 times, last 2026-10-14.)
 - zsh does NOT word-split `$var`: `for t in "test-one X=1" vet; do make $t` passed one bad arg and ran HOST tests (2026-10-13). Write each make call out.
 - zsh expands a leading `=word`: `echo ======` aborts the whole chain (again 2026-10-14, 4th time). Use `echo '-----'`. Quote globs too: `--include='*.go'`.
 - `grep` here is ugrep: it ignores `--` as end of options. Use `/usr/bin/grep` or `-e PATTERN` when it matters.
@@ -23,22 +23,23 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/`.
 - A VM run can stall when the Mac sleeps (compile 12 s -> 34 min) and DNS can fail right after. Rerun before you debug.
 
 ## Build, test, lint
-- Makefile only, also for VERIFICATION. No target? Add one. Targets: `docs/context/testing.md`. (Broke it with an ad-hoc `go vet -tags integration` 2026-10-12, and again with `go test` in a /tmp scratch copy the same day; `make vet`, `make -C /tmp/copy test-run`.)
+- Makefile only, also for VERIFICATION. No target? Add one. Targets: `docs/context/testing.md`. (Broken twice 2026-10-12; `make vet`, `make -C /tmp/copy test-run`.)
 - `make test-run` = fast host loop. `make test-one` = Docker, ~10 s (mounts `/tmp/zfsb-gocache`). `make test-race` needs ~20 min (timeout 45m).
 - `make coverage-integration` = integration coverage (VM, `COVER=1`); the profile is root-owned in the VM's `/var/tmp/zfsbackup-it`, read back with `limactl shell ... cat`.
-- Count passed integration tests with `TestIntegration[A-Za-z0-9]+ `: without `0-9` the S3 tests do not match (I read 8 of 41 as "only 8 ran", 2026-10-14).
+- Count passed integration tests with `TestIntegration[A-Za-z0-9]+ `: without `0-9` the S3 tests do not match.
 - `make coverage` ~4 min; `sh coverage-report.sh tmp/coverage/*.out` alone is instant. BSD awk: no `asorti`. A `|` in a perl `s|a|b|` replacement breaks it: use python3.
-- `make fmt-check` sees TRACKED files only: a new file is not checked until `git add`. Fix with `make fmt-write FILES=...` (pinned image). Trust fmt-check, not a list.
+- `make fmt-check` sees TRACKED files only (`git add` new files first) and fails in a git worktree (the `.git` link does not resolve in the container): there, `make fmt-write FILES=...` and check `git diff`, or rsync to /tmp, `git init && git add -A`, `make fmt-check`.
 - `make lint` runs a pinned golangci-lint v2 image. Bump the tag on purpose; a new version adds issues.
 - `make test-docker` copies the build context in the first ~5 s; after that you can edit the tree.
 - Keep the Dockerfile `GO_VERSION` default in sync with go.mod's `go` line (images set `GOTOOLCHAIN=local`).
 - Module work: `make mod-update`, `mod-get MOD=p@v`, `mod-vendor`, `vulncheck` (pinned image, cache in /tmp/zfsb-modcache).
 - `go test` without `-v` hides stdout of passing tests.
-- VM disk fills with build cache (break copies: 18 GB after 15; a day of runs: 15 GB); MinIO then fails `XMinioStorageFull`, a cascade of 0.00 s FAILs. `limactl shell zfsbackup -- df -h /` before a full suite; `docker builder prune -f` after break proofs.
+- VM disk fills with build cache; MinIO then fails `XMinioStorageFull` (a cascade of 0.00 s FAILs). `limactl shell zfsbackup -- df -h /` before a full suite; `docker builder prune -f` after break proofs.
 - `make ... RUN='X$/^$'` breaks: make eats `$/`. To run a parent test without its subtests: `RUN=X/NONE`.
 - After a flag help change, check with `make help CMD=<cmd>`. It also proves the vendor dir is consistent (`go run .` uses `-mod=vendor`); a cheap build check on the host.
 
 ## Writing tests
+- go-logging prints no level by default: to tell Notice from Debug in a unit test, wrap the backend in `NewBackendFormatter(..., "%{level} %{message}")` (`backends/progress_test.go`).
 - A test that passes the first time proves nothing. Break the code in a scratch copy (`git archive HEAD | tar -x -C /tmp/x`) and see it fail. Bitten 4 times (lock pid, cached-manifest protection, `filepath.Base` name, dry-run globals).
 - `postRunCleanup` wipes the run temp dir after EVERY run: "temp empty after send" never proves `delete://` ran. Check `config.BackupTempdir` in `TestHookBeforeFinalManifest` (2026-10-14).
 - In-process cobra runs leak: flag values are package globals (`cleanDryRun`, `cleanLocal`, `workingDirectory`, `zfs.ZFSPath`, `jobInfo`) and `RootCmd.SetArgs` persists. Pass bool flags explicitly (`--dry-run=false`); after each run `RootCmd.SetArgs(nil); cmd.ResetSendJobInfo()`. Run the whole package (`PKG=.`) before you trust green: a leak can `os.Exit(255)` the binary silently.
@@ -59,7 +60,7 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/`.
 - gpg in tests on macOS: GNUPGHOME under `t.TempDir()` is too long for gpg-agent's socket ("File name too long"); use `os.MkdirTemp("", "gpg")` and `gpgconf --kill gpg-agent` on cleanup. `gpg --verify` rejects encrypted messages; check `GOODSIG` in `--decrypt --status-file`.
 - Never put backticks in a cobra/pflag usage string: pflag shows the span as the flag TYPE.
 - In-process cobra runs: a subcommand keeps the context of its FIRST run (cobra sets it only when nil). `cmd.Run` resets it; use it, not `RootCmd.ExecuteContext`.
-- `runInProcess(ctx, reset, args...)` in `e2e_test.go` is THE in-process runner (e2e `run`/`sendCtx`, integration `itRunCtx` call it). Do not copy its body again (three copies drifted, 2026-10-12).
+- `runInProcess(ctx, reset, args...)` in `e2e_test.go` is THE in-process runner (e2e `run`/`sendCtx`, integration `itRunCtx` call it). Do not copy its body again.
 - `setupS3Bucket` refuses an existing bucket (also `BucketAlreadyOwnedByYou`): its cleanup wipes every version and deletes the bucket, so it must own it.
 - A test goroutine that runs a cobra command must be stopped and waited for in `t.Cleanup` (`stop(); <-finished`): its deferred flag reset lands in the next test otherwise.
 - A test that sends a real signal: `cmd.SignalContext` BEFORE `syscall.Kill`, never two signals outside `exitFunc` tests.
@@ -77,7 +78,6 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/`.
 - `t.Cleanup` is LIFO: a cleanup that must run BEFORE `destroyAfter` is registered AFTER it.
 - `--maxUploadSpeed` sets `config.BackupUploadBucket` and nothing resets it: an in-process run with it must restore the old value in `t.Cleanup`.
 - `VolumeInfo.Counter()` panics after `Close` (the counter is nil). Read it first.
-- `make fmt-check` fails in a git worktree (the `.git` link does not resolve in the container). Use `make fmt-write FILES=...` and check `git diff`, or rsync to /tmp, `git init && git add -A`, then `make fmt-check` there.
 - Test sshd shares the container FS: a backend that touches the LOCAL path passes. Use chrooted `jailed` (`newSSHJailDest`). No chroot under `/var/tmp` (1777).
 - `send --full` takes a DATASET (`--full ds@snap`: `invalid input`).
 - Failed parallel uploads leave a gap in the cached partial; to assert "no re-send" use `--maxParallelUploads 1`.
@@ -103,6 +103,8 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/`.
 - `files.SnapshotInfo.Equal` = name + creation time (to the second), never GUID. `zfs list` has no GUID.
 - cobra `PersistentPostRun` does not run when PreRunE/RunE fail; `Execute` cleans the temp dir on error.
 - Pipe mode (`--maxFileBuffer 0`): either side that fails must `vol.Abort(err)`. An errgroup ctx is also canceled when `Wait` succeeds, so do not abort on it. Do not `Close` a pipe volume after a failed upload.
+- `sendStream` WRITES `jobInfo.Volumes` (`TotalBytesStreamedAndVols` cuts it) once it starts: read it in `Backup` only before `group.Go(sendStream)`, under `manifestmutex`. `make test-race-run PKG=. RUN=...` finds it in minutes.
+- A `backends.Backend` wrapper hides `Sizer`/`Archiver`/`LegacyVolumeFinder` from type assertions: wrap at the data path only (`backends/progress.go`).
 - `sortBackupsNewestFirst` is THE manifest order. `backends.RedactURI` is THE redaction helper.
 - `send` locks `<workingDirectory>/locks/<md5(dataset)>.lck`. Same host only; invisible across users and working dirs.
 - On the 1st, sanoid takes monthly, daily, hourly in that order, same second. Selection must not depend on tie order.
@@ -119,7 +121,8 @@ Old entries: `docs/specs/2026-10-11--napkin-archive/`.
 - A test that guards against a double action passes on base by design; prove it with a break copy.
 
 ## Open plans
-- `docs/specs/2026-10-14--integration-file-ssh/`: EXECUTED 2026-10-14; 8 tests (41 total), ssh Upload fix 8294d0e. Notes 4 and 8 (cache-gap Notice, agent blocking SSH_KEY_FILE) fixed after.
-- `docs/specs/2026-10-13--integration-test-sweep/`: EXECUTED 2026-10-14; six new tests (33 total), all green. Open: per-test break proofs; Azure/gs/b2/ssh, SIGTERM in receive, flaky-S3 retry (see intent.md).
+- `docs/specs/2026-10-14--integration-file-ssh/`: EXECUTED 2026-10-14, all notes fixed.
+- `docs/specs/2026-10-13--integration-test-sweep/`: EXECUTED 2026-10-14. Open: break proofs; Azure/gs/b2, SIGTERM in receive, flaky-S3 retry (intent.md).
 - `send --dry-run` audit (2026-09-07), items 1-5, 7, 8: status unknown, see the archive.
 - Prune spec gap: deleting a destination manifest leaves a cached copy that `clean` treats as live. Prune must delete the cached copy too.
+- `docs/specs/2026-10-14--progress-logger/`: EXECUTED 2026-10-14. Whole-percent Notice lines with rate and time left for send and receive.

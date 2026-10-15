@@ -6,7 +6,7 @@ Read this file only. Open a file in `docs/context/` when a task touches that com
 
 ## What this program is
 
-`zfsbackup` sends ZFS snapshots to cloud or file storage and restores them. Go CLI, cobra commands. Module path is `github.com/someone1/zfsbackup-go` (an upstream fork; the working dir is the bosgood fork).
+`zfsbackup` sends ZFS snapshots to cloud or file storage and restores them. Go CLI, cobra commands. Module path is `github.com/bosgood/zfsbackup-go`, a fork of `github.com/someone1/zfsbackup-go`.
 
 - `send` cuts a `zfs send` stream into volumes, compresses, encrypts, uploads them to one or more destinations, then uploads a manifest.
 - `receive` downloads the volumes of one manifest and pipes them into `zfs receive`. `receive --auto` walks the incremental chain.
